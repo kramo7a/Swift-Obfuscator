@@ -59,7 +59,7 @@ public struct RenamePlanner {
             if let existing = mappingStore.entry(for: group.usr) {
                 newName = existing.obfuscatedName
             } else {
-                newName = generator.nextName(avoiding: reservedNames)
+                newName = nextName(for: group.symbol.kind, avoiding: reservedNames)
                 reservedNames.insert(newName)
                 mappingStore.record(
                     usr: group.usr,
@@ -138,6 +138,37 @@ public struct RenamePlanner {
             denied: denied.sorted { ($0.symbolName, $0.usr) < ($1.symbolName, $1.usr) },
             conflicts: conflicts
         )
+    }
+
+    private mutating func nextName(for symbolKind: String, avoiding reservedNames: Set<String>) -> String {
+        while true {
+            let generatedName = generator.nextName(avoiding: [])
+            let candidate = Self.nameWithConventionalInitialCase(generatedName, for: symbolKind)
+            if !reservedNames.contains(candidate), isPlainSwiftIdentifier(candidate) {
+                return candidate
+            }
+        }
+    }
+
+    private static func nameWithConventionalInitialCase(_ name: String, for symbolKind: String) -> String {
+        let lowerCamelCaseKinds: Set<String> = [
+            "function",
+            "instanceMethod",
+            "staticMethod",
+            "classMethod",
+            "instanceProperty",
+            "staticProperty",
+            "classProperty",
+            "variable"
+        ]
+        guard lowerCamelCaseKinds.contains(symbolKind),
+              let letterIndex = name.firstIndex(where: \.isLetter) else {
+            return name
+        }
+
+        var result = name
+        result.replaceSubrange(letterIndex...letterIndex, with: String(name[letterIndex]).lowercased())
+        return result
     }
 
     private static func localNominalTypeNames(snapshot: IndexSnapshot) -> Set<String> {

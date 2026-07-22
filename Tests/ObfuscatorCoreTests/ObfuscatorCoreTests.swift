@@ -630,7 +630,9 @@ import Testing
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = directory.appendingPathComponent("PublicAPI.swift")
     let lines = [
-        "public struct PublicModel {}",
+        "public struct PublicModel {",
+        "    public var displayName: String { \"name\" }",
+        "}",
         "public func makeModel() -> PublicModel {",
         "    PublicModel()",
         "}"
@@ -650,6 +652,14 @@ import Testing
         usr: "s:6Sample9makeModelAA06PublicD0VyF",
         name: "makeModel()",
         kind: "function",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let propertySymbol = SymbolRecord(
+        usr: "s:6Sample11PublicModelV11displayNameSSvp",
+        name: "displayName",
+        kind: "instanceProperty",
         language: "swift",
         propertiesRaw: 0,
         properties: "[]"
@@ -677,12 +687,13 @@ import Testing
 
     let snapshot = IndexSnapshot(
         sourceFiles: [file.path],
-        symbols: [typeSymbol, functionSymbol],
+        symbols: [typeSymbol, functionSymbol, propertySymbol],
         occurrences: [
             occurrence(symbol: typeSymbol, tokenName: "PublicModel", line: 1, roles: ["declaration"]),
-            occurrence(symbol: functionSymbol, tokenName: "makeModel", line: 2, roles: ["declaration"]),
-            occurrence(symbol: typeSymbol, tokenName: "PublicModel", line: 2, roles: ["reference"]),
-            occurrence(symbol: typeSymbol, tokenName: "PublicModel", line: 3, roles: ["reference"])
+            occurrence(symbol: propertySymbol, tokenName: "displayName", line: 2, roles: ["declaration"]),
+            occurrence(symbol: functionSymbol, tokenName: "makeModel", line: 4, roles: ["declaration"]),
+            occurrence(symbol: typeSymbol, tokenName: "PublicModel", line: 4, roles: ["reference"]),
+            occurrence(symbol: typeSymbol, tokenName: "PublicModel", line: 5, roles: ["reference"])
         ]
     )
     var planner = RenamePlanner(
@@ -693,15 +704,21 @@ import Testing
 
     #expect(plan.denied.isEmpty)
     #expect(plan.conflicts.isEmpty)
-    #expect(plan.entries.count == 2)
-    #expect(Set(plan.entries.map(\.oldName)) == ["PublicModel", "makeModel"])
+    #expect(plan.entries.count == 3)
+    #expect(Set(plan.entries.map(\.oldName)) == ["PublicModel", "displayName", "makeModel"])
 
     try SourcePatcher().apply(plan.replacements)
     let patched = try String(contentsOf: file, encoding: .utf8)
     let typeName = try #require(plan.entries.first { $0.oldName == "PublicModel" }?.newName)
+    let propertyName = try #require(plan.entries.first { $0.oldName == "displayName" }?.newName)
     let functionName = try #require(plan.entries.first { $0.oldName == "makeModel" }?.newName)
+    #expect(typeName.first?.isUppercase == true)
+    #expect(propertyName.first?.isLowercase == true)
+    #expect(functionName.first?.isLowercase == true)
     #expect(patched == [
-        "public struct \(typeName) {}",
+        "public struct \(typeName) {",
+        "    public var \(propertyName): String { \"name\" }",
+        "}",
         "public func \(functionName)() -> \(typeName) {",
         "    \(typeName)()",
         "}",
