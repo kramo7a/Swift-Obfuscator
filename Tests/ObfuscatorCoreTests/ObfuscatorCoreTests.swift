@@ -173,6 +173,46 @@ import Testing
     #expect(loaded.occurrences == snapshot.occurrences)
 }
 
+@Test func renamePlanCacheRequiresMatchingToolAndInputs() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let tool = directory.appendingPathComponent("tool")
+    let source = directory.appendingPathComponent("Sample.swift")
+    let cacheURL = directory.appendingPathComponent("plan.plist")
+    try "tool-v1".write(to: tool, atomically: true, encoding: .utf8)
+    try "let value = 1\n".write(to: source, atomically: true, encoding: .utf8)
+    let sourceCache = try SourceFileCache(paths: [source.path])
+    let manifest = try IndexSourceManifest.capture(sourceCache: sourceCache)
+    let mappingStore = MappingStore()
+    let key = try RenamePlanCacheKey.make(
+        toolURL: tool,
+        sourceManifest: manifest,
+        obfuscationRoots: [directory],
+        mappingStore: mappingStore
+    )
+    let value = CachedRenamePlan(
+        plan: RenamePlan(entries: [], denied: [], conflicts: []),
+        outputMappingEntries: [],
+        sourceFiles: [source.path],
+        indexedSymbolCount: 2,
+        indexedOccurrenceCount: 3
+    )
+    try RenamePlanCache.save(value, key: key, to: cacheURL)
+
+    let hit = try RenamePlanCache.load(from: cacheURL, matching: key)
+    #expect(hit?.indexedSymbolCount == 2)
+    #expect(hit?.indexedOccurrenceCount == 3)
+
+    try "tool-v2".write(to: tool, atomically: true, encoding: .utf8)
+    let changedToolKey = try RenamePlanCacheKey.make(
+        toolURL: tool,
+        sourceManifest: manifest,
+        obfuscationRoots: [directory],
+        mappingStore: mappingStore
+    )
+    #expect(try RenamePlanCache.load(from: cacheURL, matching: changedToolKey) == nil)
+}
+
 @Test func sourcePatcherAppliesDescendingReplacements() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

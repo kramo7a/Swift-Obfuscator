@@ -1,6 +1,6 @@
 import Foundation
 
-public struct SafetyDecision: Sendable {
+public struct SafetyDecision: Codable, Sendable {
     public let usr: String
     public let symbolName: String
     public let kind: String

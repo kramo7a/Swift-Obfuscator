@@ -91,6 +91,7 @@ struct RunArtifacts: Codable {
     var mapping: String?
     var indexSourceManifest: String?
     var indexSnapshotCache: String?
+    var renamePlanCache: String?
 }
 
 struct RunErrorSummary: Codable {
@@ -133,6 +134,7 @@ struct SwiftObfuscatorCLI {
             let mappingPath = (options.mappingPath ?? outputDirectory.appendingPathComponent("mapping.json")).standardizedFileURL
             let indexSourceManifestPath = outputDirectory.appendingPathComponent("index-source-manifest.json").standardizedFileURL
             let indexSnapshotCachePath = databasePath.appendingPathExtension("snapshot.plist")
+            let renamePlanCachePath = databasePath.appendingPathExtension("rename-plan.plist")
             let projectSourceRoots = try resolveSourceRoots(
                 options.sourceRootPaths,
                 projectRoot: options.projectRoot,
@@ -234,94 +236,150 @@ struct SwiftObfuscatorCLI {
                 output.write("Index source manifest validated: \(currentSourceFiles.count) files", visibility: .quiet)
             }
 
-            let snapshot: IndexSnapshot
-            if options.reuseIndex, fileManager.fileExists(atPath: indexSnapshotCachePath.path) {
-                guard let sourceManifest else {
-                    throw CLIError.invalidArguments("Failed to validate indexed Swift sources.")
-                }
-                summary.phase = "load-index-snapshot"
-                snapshot = try IndexSnapshotCache.load(
-                    from: indexSnapshotCachePath,
-                    sourceManifest: sourceManifest
-                )
-                summary.artifacts.indexSnapshotCache = indexSnapshotCachePath.path
-                output.write("Index snapshot cache loaded: \(indexSnapshotCachePath.path)", visibility: .quiet)
-            } else {
-                let reader = IndexReader(runner: runner)
-                summary.phase = "read-index"
-                snapshot = try reader.read(
-                    storePath: indexStorePath,
-                    databasePath: databasePath,
-                    sourceRoot: options.projectRoot,
-                    excludedSourceRoots: excludedRoots,
-                    reuseExistingDatabase: options.reuseIndex
-                )
-            }
-            summary.counters.indexedSymbols = snapshot.symbols.count
-            summary.counters.indexedOccurrences = snapshot.occurrences.count
-            output.write("Indexed symbols=\(snapshot.symbols.count), occurrences=\(snapshot.occurrences.count)", visibility: .quiet)
-            let selectedSourceFiles = selectedSourceFiles(from: snapshot.sourceFiles, under: projectSourceRoots)
-            summary.counters.selectedSourceFiles = selectedSourceFiles.count
-            output.write("Selected source files=\(selectedSourceFiles.count)", visibility: .quiet)
-
-            if let sourceCache {
-                guard sourceCache.allPaths == snapshot.sourceFiles.map(SourcePathNormalizer.canonicalPath).sorted() else {
-                    throw CLIError.invalidArguments("Index database source paths do not match the validated source manifest. Run again without --reuse-index.")
-                }
-            } else {
-                let currentSourceCache = try SourceFileCache(paths: snapshot.sourceFiles)
-                let manifest = try IndexSourceManifest.capture(sourceCache: currentSourceCache)
-                try manifest.save(to: indexSourceManifestPath)
-                sourceCache = currentSourceCache
-                sourceManifest = manifest
-                summary.artifacts.indexSourceManifest = indexSourceManifestPath.path
-                output.write("Index source manifest saved: \(indexSourceManifestPath.path)")
-            }
-
-            if !fileManager.fileExists(atPath: indexSnapshotCachePath.path) || !options.reuseIndex {
-                guard let sourceManifest else {
-                    throw CLIError.invalidArguments("Failed to capture indexed Swift source manifest.")
-                }
-                summary.phase = "save-index-snapshot"
-                try IndexSnapshotCache.save(
-                    snapshot: snapshot,
+            let inputMappingStore = try MappingStore.load(from: mappingPath)
+            let executableURL = URL(
+                fileURLWithPath: CommandLine.arguments[0],
+                relativeTo: URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+            ).standardizedFileURL
+            var cachedPlan: CachedRenamePlan?
+            if options.reuseIndex,
+               options.command != .dump,
+               !options.dumpIndex,
+               let sourceManifest {
+                let key = try RenamePlanCacheKey.make(
+                    toolURL: executableURL,
                     sourceManifest: sourceManifest,
-                    to: indexSnapshotCachePath,
+                    obfuscationRoots: projectSourceRoots,
+                    mappingStore: inputMappingStore
+                )
+                cachedPlan = try RenamePlanCache.load(from: renamePlanCachePath, matching: key)
+            }
+
+            let plan: RenamePlan
+            let outputMappingStore: MappingStore
+            let selectedSourceFiles: [String]
+            if let cachedPlan {
+                summary.phase = "load-rename-plan"
+                plan = cachedPlan.plan
+                outputMappingStore = MappingStore(entries: cachedPlan.outputMappingEntries)
+                selectedSourceFiles = SwiftObfuscatorCLI.selectedSourceFiles(from: cachedPlan.sourceFiles, under: projectSourceRoots)
+                summary.counters.indexedSymbols = cachedPlan.indexedSymbolCount
+                summary.counters.indexedOccurrences = cachedPlan.indexedOccurrenceCount
+                summary.artifacts.renamePlanCache = renamePlanCachePath.path
+                output.write("Rename plan cache loaded: \(renamePlanCachePath.path)", visibility: .quiet)
+            } else {
+                let snapshot: IndexSnapshot
+                if options.reuseIndex, fileManager.fileExists(atPath: indexSnapshotCachePath.path) {
+                    guard let sourceManifest else {
+                        throw CLIError.invalidArguments("Failed to validate indexed Swift sources.")
+                    }
+                    summary.phase = "load-index-snapshot"
+                    snapshot = try IndexSnapshotCache.load(
+                        from: indexSnapshotCachePath,
+                        sourceManifest: sourceManifest
+                    )
+                    summary.artifacts.indexSnapshotCache = indexSnapshotCachePath.path
+                    output.write("Index snapshot cache loaded: \(indexSnapshotCachePath.path)", visibility: .quiet)
+                } else {
+                    let reader = IndexReader(runner: runner)
+                    summary.phase = "read-index"
+                    snapshot = try reader.read(
+                        storePath: indexStorePath,
+                        databasePath: databasePath,
+                        sourceRoot: options.projectRoot,
+                        excludedSourceRoots: excludedRoots,
+                        reuseExistingDatabase: options.reuseIndex
+                    )
+                }
+
+                if let sourceCache {
+                    guard sourceCache.allPaths == snapshot.sourceFiles.map(SourcePathNormalizer.canonicalPath).sorted() else {
+                        throw CLIError.invalidArguments("Index database source paths do not match the validated source manifest. Run again without --reuse-index.")
+                    }
+                } else {
+                    let currentSourceCache = try SourceFileCache(paths: snapshot.sourceFiles)
+                    let manifest = try IndexSourceManifest.capture(sourceCache: currentSourceCache)
+                    try manifest.save(to: indexSourceManifestPath)
+                    sourceCache = currentSourceCache
+                    sourceManifest = manifest
+                    summary.artifacts.indexSourceManifest = indexSourceManifestPath.path
+                    output.write("Index source manifest saved: \(indexSourceManifestPath.path)")
+                }
+
+                if !fileManager.fileExists(atPath: indexSnapshotCachePath.path) || !options.reuseIndex {
+                    guard let sourceManifest else {
+                        throw CLIError.invalidArguments("Failed to capture indexed Swift source manifest.")
+                    }
+                    summary.phase = "save-index-snapshot"
+                    try IndexSnapshotCache.save(
+                        snapshot: snapshot,
+                        sourceManifest: sourceManifest,
+                        to: indexSnapshotCachePath,
+                        fileManager: fileManager
+                    )
+                    summary.artifacts.indexSnapshotCache = indexSnapshotCachePath.path
+                    output.write("Index snapshot cache saved: \(indexSnapshotCachePath.path)")
+                }
+
+                summary.counters.indexedSymbols = snapshot.symbols.count
+                summary.counters.indexedOccurrences = snapshot.occurrences.count
+                output.write("Indexed symbols=\(snapshot.symbols.count), occurrences=\(snapshot.occurrences.count)", visibility: .quiet)
+
+                if options.command == .dump || options.dumpIndex {
+                    summary.phase = "dump-index"
+                    let dump = ReportRenderer.renderDump(snapshot: snapshot)
+                    let dumpPath = try output.writeArtifact(named: "index-dump.txt", contents: dump)
+                    summary.artifacts.indexDump = dumpPath.path
+                    let dumpVisibility: ConsoleVisibility = options.verbosity == .quiet ? .verbose : .normal
+                    output.write(dump, visibility: dumpVisibility)
+                    output.write("Index dump saved: \(dumpPath.path)", visibility: .quiet)
+                    if options.command == .dump {
+                        summary.status = "success"
+                        summary.phase = "completed"
+                        finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
+                        return
+                    }
+                }
+
+                summary.phase = "plan-renames"
+                guard let sourceCache, let sourceManifest else {
+                    throw CLIError.invalidArguments("Failed to load indexed Swift sources.")
+                }
+                var planner = RenamePlanner(
+                    analyzer: SafetyAnalyzer(
+                        sourceRoot: options.projectRoot,
+                        obfuscationRoots: projectSourceRoots
+                    ),
+                    mappingStore: inputMappingStore
+                )
+                plan = planner.makePlan(snapshot: snapshot, sourceCache: sourceCache)
+                outputMappingStore = planner.mappingStore
+                selectedSourceFiles = SwiftObfuscatorCLI.selectedSourceFiles(from: snapshot.sourceFiles, under: projectSourceRoots)
+
+                let planCacheKey = try RenamePlanCacheKey.make(
+                    toolURL: executableURL,
+                    sourceManifest: sourceManifest,
+                    obfuscationRoots: projectSourceRoots,
+                    mappingStore: inputMappingStore
+                )
+                try RenamePlanCache.save(
+                    CachedRenamePlan(
+                        plan: plan,
+                        outputMappingEntries: outputMappingStore.allEntries(),
+                        sourceFiles: snapshot.sourceFiles,
+                        indexedSymbolCount: snapshot.symbols.count,
+                        indexedOccurrenceCount: snapshot.occurrences.count
+                    ),
+                    key: planCacheKey,
+                    to: renamePlanCachePath,
                     fileManager: fileManager
                 )
-                summary.artifacts.indexSnapshotCache = indexSnapshotCachePath.path
-                output.write("Index snapshot cache saved: \(indexSnapshotCachePath.path)")
+                summary.artifacts.renamePlanCache = renamePlanCachePath.path
+                output.write("Rename plan cache saved: \(renamePlanCachePath.path)")
             }
 
-            if options.command == .dump || options.dumpIndex {
-                summary.phase = "dump-index"
-                let dump = ReportRenderer.renderDump(snapshot: snapshot)
-                let dumpPath = try output.writeArtifact(named: "index-dump.txt", contents: dump)
-                summary.artifacts.indexDump = dumpPath.path
-                let dumpVisibility: ConsoleVisibility = options.verbosity == .quiet ? .verbose : .normal
-                output.write(dump, visibility: dumpVisibility)
-                output.write("Index dump saved: \(dumpPath.path)", visibility: .quiet)
-                if options.command == .dump {
-                    summary.status = "success"
-                    summary.phase = "completed"
-                    finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
-                    return
-                }
-            }
-
-            summary.phase = "plan-renames"
-            guard let sourceCache else {
-                throw CLIError.invalidArguments("Failed to load indexed Swift sources.")
-            }
-            let mappingStore = try MappingStore.load(from: mappingPath)
-            var planner = RenamePlanner(
-                analyzer: SafetyAnalyzer(
-                    sourceRoot: options.projectRoot,
-                    obfuscationRoots: projectSourceRoots
-                ),
-                mappingStore: mappingStore
-            )
-            let plan = planner.makePlan(snapshot: snapshot, sourceCache: sourceCache)
+            summary.counters.selectedSourceFiles = selectedSourceFiles.count
+            output.write("Selected source files=\(selectedSourceFiles.count)", visibility: .quiet)
             try SourcePatcher().validate(plan.replacements)
             summary.counters.plannedSymbols = plan.entries.count
             summary.counters.plannedReplacements = plan.replacements.count
@@ -360,7 +418,7 @@ struct SwiftObfuscatorCLI {
                     output.write("Applied replacements to project source files: \(plan.replacements.count)", visibility: .quiet)
                 }
                 if !plan.replacements.isEmpty {
-                    try planner.mappingStore.save(to: mappingPath)
+                    try outputMappingStore.save(to: mappingPath)
                     summary.artifacts.mapping = mappingPath.path
                     output.write("Mapping saved: \(mappingPath.path)")
                 }

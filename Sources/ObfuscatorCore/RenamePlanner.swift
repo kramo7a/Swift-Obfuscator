@@ -1,6 +1,6 @@
 import Foundation
 
-public struct RenamePlanEntry: Sendable {
+public struct RenamePlanEntry: Codable, Sendable {
     public let usr: String
     public let kind: String
     public let oldName: String
@@ -8,7 +8,7 @@ public struct RenamePlanEntry: Sendable {
     public let replacements: [SourceReplacement]
 }
 
-public struct RenamePlan: Sendable {
+public struct RenamePlan: Codable, Sendable {
     public let entries: [RenamePlanEntry]
     public let denied: [SafetyDecision]
     public let conflicts: [String]
