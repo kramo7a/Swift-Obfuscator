@@ -128,6 +128,51 @@ import Testing
     #expect(loaded.entries.allSatisfy { $0.sha256.count == 64 })
 }
 
+@Test func indexSnapshotCacheRoundTripsNormalizedRecords() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Sample.swift")
+    let cacheURL = directory.appendingPathComponent("snapshot.plist")
+    try "struct Sample {}\n".write(to: file, atomically: true, encoding: .utf8)
+    let sourceCache = try SourceFileCache(paths: [file.path])
+    let manifest = try IndexSourceManifest.capture(sourceCache: sourceCache)
+    let symbol = SymbolRecord(
+        usr: "usr-sample",
+        name: "Sample",
+        kind: "struct",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let occurrence = OccurrenceRecord(
+        symbol: symbol,
+        path: file.path,
+        line: 1,
+        utf8Column: utf8Column(of: "Sample", in: "struct Sample {}"),
+        moduleName: "SampleModule",
+        isSystem: false,
+        rolesRaw: 1,
+        roles: ["declaration"],
+        rolesDescription: "declaration",
+        symbolProvider: "swift",
+        relations: [
+            RelationRecord(usr: "usr-owner", name: "Owner", rolesRaw: 2, roles: ["childOf"])
+        ]
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [symbol],
+        occurrences: [occurrence]
+    )
+
+    try IndexSnapshotCache.save(snapshot: snapshot, sourceManifest: manifest, to: cacheURL)
+    let loaded = try IndexSnapshotCache.load(from: cacheURL, sourceManifest: manifest)
+
+    #expect(loaded.sourceFiles == snapshot.sourceFiles)
+    #expect(loaded.symbols == snapshot.symbols)
+    #expect(loaded.occurrences == snapshot.occurrences)
+}
+
 @Test func sourcePatcherAppliesDescendingReplacements() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

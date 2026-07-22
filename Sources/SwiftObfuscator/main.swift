@@ -90,6 +90,7 @@ struct RunArtifacts: Codable {
     var dryRunReport: String?
     var mapping: String?
     var indexSourceManifest: String?
+    var indexSnapshotCache: String?
 }
 
 struct RunErrorSummary: Codable {
@@ -131,6 +132,7 @@ struct SwiftObfuscatorCLI {
             let databasePath = (options.databasePath ?? outputDirectory.appendingPathComponent("IndexDatabase", isDirectory: true)).standardizedFileURL
             let mappingPath = (options.mappingPath ?? outputDirectory.appendingPathComponent("mapping.json")).standardizedFileURL
             let indexSourceManifestPath = outputDirectory.appendingPathComponent("index-source-manifest.json").standardizedFileURL
+            let indexSnapshotCachePath = databasePath.appendingPathExtension("snapshot.plist")
             let projectSourceRoots = try resolveSourceRoots(
                 options.sourceRootPaths,
                 projectRoot: options.projectRoot,
@@ -216,6 +218,7 @@ struct SwiftObfuscatorCLI {
             output.write("Index store: \(indexStorePath.path)")
 
             var sourceCache: SourceFileCache?
+            var sourceManifest: IndexSourceManifest?
             if options.reuseIndex {
                 let currentSourceFiles = try SourceFileFinder.swiftFiles(
                     in: options.projectRoot,
@@ -226,19 +229,34 @@ struct SwiftObfuscatorCLI {
                 let manifest = try IndexSourceManifest.load(from: indexSourceManifestPath)
                 try manifest.validate(sourceCache: currentSourceCache)
                 sourceCache = currentSourceCache
+                sourceManifest = manifest
                 summary.artifacts.indexSourceManifest = indexSourceManifestPath.path
                 output.write("Index source manifest validated: \(currentSourceFiles.count) files", visibility: .quiet)
             }
 
-            let reader = IndexReader(runner: runner)
-            summary.phase = "read-index"
-            let snapshot = try reader.read(
-                storePath: indexStorePath,
-                databasePath: databasePath,
-                sourceRoot: options.projectRoot,
-                excludedSourceRoots: excludedRoots,
-                reuseExistingDatabase: options.reuseIndex
-            )
+            let snapshot: IndexSnapshot
+            if options.reuseIndex, fileManager.fileExists(atPath: indexSnapshotCachePath.path) {
+                guard let sourceManifest else {
+                    throw CLIError.invalidArguments("Failed to validate indexed Swift sources.")
+                }
+                summary.phase = "load-index-snapshot"
+                snapshot = try IndexSnapshotCache.load(
+                    from: indexSnapshotCachePath,
+                    sourceManifest: sourceManifest
+                )
+                summary.artifacts.indexSnapshotCache = indexSnapshotCachePath.path
+                output.write("Index snapshot cache loaded: \(indexSnapshotCachePath.path)", visibility: .quiet)
+            } else {
+                let reader = IndexReader(runner: runner)
+                summary.phase = "read-index"
+                snapshot = try reader.read(
+                    storePath: indexStorePath,
+                    databasePath: databasePath,
+                    sourceRoot: options.projectRoot,
+                    excludedSourceRoots: excludedRoots,
+                    reuseExistingDatabase: options.reuseIndex
+                )
+            }
             summary.counters.indexedSymbols = snapshot.symbols.count
             summary.counters.indexedOccurrences = snapshot.occurrences.count
             output.write("Indexed symbols=\(snapshot.symbols.count), occurrences=\(snapshot.occurrences.count)", visibility: .quiet)
@@ -255,8 +273,24 @@ struct SwiftObfuscatorCLI {
                 let manifest = try IndexSourceManifest.capture(sourceCache: currentSourceCache)
                 try manifest.save(to: indexSourceManifestPath)
                 sourceCache = currentSourceCache
+                sourceManifest = manifest
                 summary.artifacts.indexSourceManifest = indexSourceManifestPath.path
                 output.write("Index source manifest saved: \(indexSourceManifestPath.path)")
+            }
+
+            if !fileManager.fileExists(atPath: indexSnapshotCachePath.path) || !options.reuseIndex {
+                guard let sourceManifest else {
+                    throw CLIError.invalidArguments("Failed to capture indexed Swift source manifest.")
+                }
+                summary.phase = "save-index-snapshot"
+                try IndexSnapshotCache.save(
+                    snapshot: snapshot,
+                    sourceManifest: sourceManifest,
+                    to: indexSnapshotCachePath,
+                    fileManager: fileManager
+                )
+                summary.artifacts.indexSnapshotCache = indexSnapshotCachePath.path
+                output.write("Index snapshot cache saved: \(indexSnapshotCachePath.path)")
             }
 
             if options.command == .dump || options.dumpIndex {

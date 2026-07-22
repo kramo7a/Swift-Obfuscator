@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-public struct IndexSourceManifest: Codable, Sendable {
+public struct IndexSourceManifest: Codable, Equatable, Sendable {
     public struct Entry: Codable, Equatable, Sendable {
         public let path: String
         public let sha256: String
