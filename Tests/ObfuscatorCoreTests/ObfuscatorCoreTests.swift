@@ -213,6 +213,48 @@ import Testing
     #expect(try RenamePlanCache.load(from: cacheURL, matching: changedToolKey) == nil)
 }
 
+@Test func compactDryRunReportKeepsPlanWithoutVerboseDetails() {
+    let replacement = SourceReplacement(
+        path: "/tmp/Sample.swift",
+        byteOffset: 4,
+        length: 5,
+        line: 1,
+        utf8Column: 5,
+        oldName: "value",
+        newName: "Oa",
+        usr: "usr-value"
+    )
+    let plan = RenamePlan(
+        entries: [
+            RenamePlanEntry(
+                usr: "usr-value",
+                kind: "variable",
+                oldName: "value",
+                newName: "Oa",
+                replacements: [replacement]
+            )
+        ],
+        denied: [
+            SafetyDecision(
+                usr: "usr-public",
+                symbolName: "publicValue",
+                kind: "variable",
+                allowed: false,
+                oldName: "publicValue",
+                reasons: ["externally visible"]
+            )
+        ],
+        conflicts: []
+    )
+
+    let report = ReportRenderer.renderDryRun(plan: plan, compact: true)
+
+    #expect(report.contains("value -> Oa"))
+    #expect(report.contains("per-symbol denial details omitted"))
+    #expect(!report.contains("/tmp/Sample.swift:1:5"))
+    #expect(!report.contains("publicValue"))
+}
+
 @Test func sourcePatcherAppliesDescendingReplacements() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

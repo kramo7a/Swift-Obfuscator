@@ -39,6 +39,7 @@ struct CLIOptions {
     var dumpIndex = false
     var verifyBuild = false
     var reuseIndex = false
+    var compactReport = false
     var extraXcodebuildArguments: [String] = []
     var verbosity: OutputVerbosity = .normal
     var printSummaryJSON = false
@@ -385,7 +386,7 @@ struct SwiftObfuscatorCLI {
             summary.counters.plannedReplacements = plan.replacements.count
             summary.counters.deniedSymbols = plan.denied.count
             summary.counters.conflicts = plan.conflicts.count
-            let dryRunReport = ReportRenderer.renderDryRun(plan: plan)
+            let dryRunReport = ReportRenderer.renderDryRun(plan: plan, compact: options.compactReport)
             let dryRunReportPath = try output.writeArtifact(named: "dry-run-report.txt", contents: dryRunReport)
             summary.artifacts.dryRunReport = dryRunReportPath.path
             output.write(dryRunReport, visibility: .verbose)
@@ -586,6 +587,8 @@ struct SwiftObfuscatorCLI {
                 options.verifyBuild = true
             case "--reuse-index":
                 options.reuseIndex = true
+            case "--compact-report":
+                options.compactReport = true
             case "--quiet":
                 options.verbosity = .quiet
             case "--verbose":
@@ -854,6 +857,7 @@ Options:
   --dump                     Print full symbol/USR/occurrence dump before planning.
   --verify-build             After in-place apply, run xcodebuild again. For external code output, report the initial indexed build status.
   --reuse-index              Skip the initial build/import and reuse the existing IndexStoreDB only after every Swift source matches the saved SHA-256 manifest.
+  --compact-report           Omit per-occurrence and per-symbol denial details from dry-run-report.txt while preserving counters and planned rename entries.
   --quiet                    Print only phase-level progress, counters, and artifact paths.
   --verbose                  Print full dry-run and dump reports to stdout. Reports are always saved as artifacts.
   --summary-json, --json     Print only run-summary JSON to stdout. Human output still goes to logs.

@@ -26,7 +26,7 @@ public enum ReportRenderer {
         return lines.joined(separator: "\n")
     }
 
-    public static func renderDryRun(plan: RenamePlan) -> String {
+    public static func renderDryRun(plan: RenamePlan, compact: Bool = false) -> String {
         var lines: [String] = []
         lines.append("DRY-RUN REPORT")
         lines.append("planned symbols: \(plan.entries.count)")
@@ -39,8 +39,10 @@ public enum ReportRenderer {
             lines.append("PLANNED RENAMES")
             for entry in plan.entries {
                 lines.append("- \(entry.oldName) -> \(entry.newName) | kind=\(entry.kind) | usr=\(entry.usr) | replacements=\(entry.replacements.count)")
-                for replacement in entry.replacements {
-                    lines.append("  \(replacement.path):\(replacement.line):\(replacement.utf8Column)")
+                if !compact {
+                    for replacement in entry.replacements {
+                        lines.append("  \(replacement.path):\(replacement.line):\(replacement.utf8Column)")
+                    }
                 }
             }
             lines.append("")
@@ -48,9 +50,13 @@ public enum ReportRenderer {
 
         if !plan.denied.isEmpty {
             lines.append("DENIED")
-            for decision in plan.denied {
-                lines.append("- \(decision.symbolName) | kind=\(decision.kind) | usr=\(decision.usr)")
-                lines.append("  reasons: \(decision.reasons.joined(separator: "; "))")
+            if compact {
+                lines.append("- per-symbol denial details omitted by --compact-report")
+            } else {
+                for decision in plan.denied {
+                    lines.append("- \(decision.symbolName) | kind=\(decision.kind) | usr=\(decision.usr)")
+                    lines.append("  reasons: \(decision.reasons.joined(separator: "; "))")
+                }
             }
             lines.append("")
         }
