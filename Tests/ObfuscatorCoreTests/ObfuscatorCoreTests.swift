@@ -65,16 +65,22 @@ import Testing
     let derivedSources = project
         .appendingPathComponent("Derived", isDirectory: true)
         .appendingPathComponent("Sources", isDirectory: true)
+    let buildBackupSources = project
+        .appendingPathComponent(".build.virtiofs-backup-20260714", isDirectory: true)
+        .appendingPathComponent("checkouts", isDirectory: true)
 
     try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: outputSources, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: derivedSources, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: buildBackupSources, withIntermediateDirectories: true)
     let source = sources.appendingPathComponent("main.swift")
     let copiedSource = outputSources.appendingPathComponent("main.swift")
     let generatedSource = derivedSources.appendingPathComponent("Generated.swift")
+    let cachedSource = buildBackupSources.appendingPathComponent("Dependency.swift")
     try "print(\"source\")\n".write(to: source, atomically: true, encoding: .utf8)
     try "print(\"copied\")\n".write(to: copiedSource, atomically: true, encoding: .utf8)
     try "print(\"generated\")\n".write(to: generatedSource, atomically: true, encoding: .utf8)
+    try "print(\"cached\")\n".write(to: cachedSource, atomically: true, encoding: .utf8)
 
     let files = try SourceFileFinder.swiftFiles(
         in: project,
@@ -254,7 +260,7 @@ import Testing
     #expect(decision.reasons.contains { $0.contains("unsupported symbol kind parameter") })
 }
 
-@Test func safetyAnalyzerAllowsPublicCallablePropertyProtocolAndVariableKindsByDefault() throws {
+@Test func safetyAnalyzerDeniesPublicAndOpenDeclarations() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = directory.appendingPathComponent("Sample.swift")
@@ -292,8 +298,9 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(protocolDecision.allowed == true)
+    #expect(protocolDecision.allowed == false)
     #expect(protocolDecision.oldName == "Analyzer")
+    #expect(protocolDecision.reasons.contains { $0.contains("externally visible") })
 
     let property = SymbolRecord(
         usr: "usr-count",
@@ -321,8 +328,9 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(propertyDecision.allowed == true)
+    #expect(propertyDecision.allowed == false)
     #expect(propertyDecision.oldName == "count")
+    #expect(propertyDecision.reasons.contains { $0.contains("externally visible") })
 
     let function = SymbolRecord(
         usr: "usr-run",
@@ -350,8 +358,9 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(functionDecision.allowed == true)
+    #expect(functionDecision.allowed == false)
     #expect(functionDecision.oldName == "run")
+    #expect(functionDecision.reasons.contains { $0.contains("externally visible") })
 
     let variable = SymbolRecord(
         usr: "usr-globalCount",
@@ -379,8 +388,9 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(variableDecision.allowed == true)
+    #expect(variableDecision.allowed == false)
     #expect(variableDecision.oldName == "globalCount")
+    #expect(variableDecision.reasons.contains { $0.contains("externally visible") })
 }
 
 @Test func safetyAnalyzerDeniesProtocolMembersUntilWitnessesAreRenamedTogether() throws {
@@ -431,7 +441,7 @@ import Testing
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = directory.appendingPathComponent("Sample.swift")
     let lines = [
-        "public protocol Analyzer {}",
+        "protocol Analyzer {}",
         "struct Runner: Analyzer {}"
     ]
     try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)

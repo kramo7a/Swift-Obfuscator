@@ -138,7 +138,9 @@ public enum SourceFileFinder {
     }
 
     private static func shouldSkipDirectory(_ name: String) -> Bool {
-        [".git", ".build", ".swiftpm", ".obfuscator", "Derived", "DerivedData", "Index.noindex"].contains(name)
+        [".git", ".swiftpm", ".obfuscator", "Derived", "DerivedData", "Index.noindex"].contains(name)
+            || name == ".build"
+            || name.hasPrefix(".build.")
     }
 
     private static func isExcludedDirectory(_ url: URL, excludedRoots: [URL]) -> Bool {

@@ -223,19 +223,34 @@ public struct SafetyAnalyzer: Sendable {
         occurrence: OccurrenceRecord,
         token: IdentifierToken
     ) -> Bool {
-        guard let line = source.lineText(line: occurrence.line) else {
+        guard let line = source.lineText(line: occurrence.line),
+              let tokenRange = line.range(of: token.name) else {
             return true
         }
-        let sensitiveMarkers = [
-            "@objc",
-            "@IBAction",
-            "@IBOutlet",
-            "@IBInspectable",
-            "@GKInspectable",
-            " dynamic ",
-            " override "
+
+        let beforeName = line[..<tokenRange.lowerBound]
+        let declarationSegment = beforeName.split(
+            omittingEmptySubsequences: false,
+            whereSeparator: { $0 == ";" || $0 == "{" || $0 == "}" }
+        ).last.map(String.init) ?? String(beforeName)
+        let sensitiveWords = [
+            "public",
+            "open",
+            "dynamic",
+            "override",
+            "objc",
+            "objcMembers",
+            "IBAction",
+            "IBOutlet",
+            "IBInspectable",
+            "IBDesignable",
+            "IBSegueAction",
+            "GKInspectable",
+            "NSManaged",
+            "_cdecl",
+            "_silgen_name"
         ]
-        return sensitiveMarkers.contains { line.contains($0) }
+        return sensitiveWords.contains { containsSwiftWord(declarationSegment, word: $0) }
     }
 
     private enum SourceDeclarationContext: Equatable {
