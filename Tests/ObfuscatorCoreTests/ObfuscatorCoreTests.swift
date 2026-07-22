@@ -90,6 +90,44 @@ import Testing
     #expect(files == [source.standardizedFileURL.path])
 }
 
+@Test func indexSourceManifestRejectsChangedSources() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Sample.swift")
+    try "let value = 1\n".write(to: file, atomically: true, encoding: .utf8)
+
+    let originalCache = try SourceFileCache(paths: [file.path])
+    let manifest = try IndexSourceManifest.capture(sourceCache: originalCache)
+    try "let value = 2\n".write(to: file, atomically: true, encoding: .utf8)
+    let changedCache = try SourceFileCache(paths: [file.path])
+
+    do {
+        try manifest.validate(sourceCache: changedCache)
+        Issue.record("Expected changed source validation to fail")
+    } catch let error as IndexSourceManifestError {
+        #expect(error.localizedDescription.contains("Swift source changed since indexing"))
+    }
+}
+
+@Test func indexSourceManifestRoundTripsAndValidatesExactSources() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let sourceA = directory.appendingPathComponent("A.swift")
+    let sourceB = directory.appendingPathComponent("B.swift")
+    let manifestURL = directory.appendingPathComponent("manifest.json")
+    try "struct A {}\n".write(to: sourceA, atomically: true, encoding: .utf8)
+    try "struct B {}\n".write(to: sourceB, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [sourceB.path, sourceA.path])
+
+    let manifest = try IndexSourceManifest.capture(sourceCache: cache)
+    try manifest.save(to: manifestURL)
+    let loaded = try IndexSourceManifest.load(from: manifestURL)
+    try loaded.validate(sourceCache: cache)
+
+    #expect(loaded.entries.map(\.path) == cache.allPaths)
+    #expect(loaded.entries.allSatisfy { $0.sha256.count == 64 })
+}
+
 @Test func sourcePatcherAppliesDescendingReplacements() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

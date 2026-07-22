@@ -3,12 +3,15 @@ import IndexStoreDB
 
 public enum IndexReaderError: LocalizedError {
     case missingIndexStore(URL)
+    case missingIndexDatabase(URL)
     case missingIndexStoreLibrary
 
     public var errorDescription: String? {
         switch self {
         case .missingIndexStore(let url):
             return "Index store does not exist at \(url.path). Make sure xcodebuild completed with COMPILER_INDEX_STORE_ENABLE=YES."
+        case .missingIndexDatabase(let url):
+            return "Index database does not exist at \(url.path). Run once without --reuse-index."
         case .missingIndexStoreLibrary:
             return "Could not locate libIndexStore.dylib in the active Xcode toolchain."
         }
@@ -28,22 +31,33 @@ public final class IndexReader {
         storePath: URL,
         databasePath: URL,
         sourceRoot: URL,
-        excludedSourceRoots: [URL] = []
+        excludedSourceRoots: [URL] = [],
+        reuseExistingDatabase: Bool = false
     ) throws -> IndexSnapshot {
         guard fileManager.fileExists(atPath: storePath.path) else {
             throw IndexReaderError.missingIndexStore(storePath)
         }
 
-        try fileManager.createDirectory(at: databasePath, withIntermediateDirectories: true)
+        if reuseExistingDatabase {
+            guard fileManager.fileExists(atPath: databasePath.path) else {
+                throw IndexReaderError.missingIndexDatabase(databasePath)
+            }
+        } else {
+            try fileManager.createDirectory(at: databasePath, withIntermediateDirectories: true)
+        }
         let libraryPath = try locateIndexStoreLibrary()
         let library = try IndexStoreLibrary(dylibPath: libraryPath.path)
         let database = try IndexStoreDB(
             storePath: storePath.path,
             databasePath: databasePath.path,
             library: library,
-            waitUntilDoneInitializing: true
+            waitUntilDoneInitializing: !reuseExistingDatabase,
+            readonly: reuseExistingDatabase,
+            listenToUnitEvents: !reuseExistingDatabase
         )
-        database.pollForUnitChangesAndWait(isInitialScan: true)
+        if !reuseExistingDatabase {
+            database.pollForUnitChangesAndWait(isInitialScan: true)
+        }
 
         let swiftFiles = try SourceFileFinder.swiftFiles(
             in: sourceRoot,

@@ -38,6 +38,7 @@ struct CLIOptions {
     var mappingPath: URL?
     var dumpIndex = false
     var verifyBuild = false
+    var reuseIndex = false
     var extraXcodebuildArguments: [String] = []
     var verbosity: OutputVerbosity = .normal
     var printSummaryJSON = false
@@ -88,6 +89,7 @@ struct RunArtifacts: Codable {
     var indexDump: String?
     var dryRunReport: String?
     var mapping: String?
+    var indexSourceManifest: String?
 }
 
 struct RunErrorSummary: Codable {
@@ -128,6 +130,7 @@ struct SwiftObfuscatorCLI {
             let derivedDataPath = (options.derivedDataPath ?? outputDirectory.appendingPathComponent("DerivedData", isDirectory: true)).standardizedFileURL
             let databasePath = (options.databasePath ?? outputDirectory.appendingPathComponent("IndexDatabase", isDirectory: true)).standardizedFileURL
             let mappingPath = (options.mappingPath ?? outputDirectory.appendingPathComponent("mapping.json")).standardizedFileURL
+            let indexSourceManifestPath = outputDirectory.appendingPathComponent("index-source-manifest.json").standardizedFileURL
             let projectSourceRoots = try resolveSourceRoots(
                 options.sourceRootPaths,
                 projectRoot: options.projectRoot,
@@ -181,34 +184,60 @@ struct SwiftObfuscatorCLI {
                     output.write("  \(sourceRoot.path)")
                 }
             }
-            output.write("Building original project with xcodebuild index store...", visibility: .quiet)
-
             let runner = CommandRunner(logDirectory: output.logsDirectory)
             let builder = ProjectBuilder(runner: runner)
-            summary.phase = "build-original"
-            let buildResult = try builder.build(ProjectBuildOptions(
-                projectRoot: options.projectRoot,
-                scheme: options.scheme,
-                configuration: options.configuration,
-                destination: options.destination,
-                derivedDataPath: derivedDataPath,
-                extraXcodebuildArguments: options.extraXcodebuildArguments
-            ))
+            let buildScheme: String
+            let indexStorePath: URL
+            if options.reuseIndex {
+                summary.phase = "validate-index-sources"
+                output.write("Reusing existing index database after validating all Swift sources...", visibility: .quiet)
+                buildScheme = try options.scheme ?? builder.inferScheme(projectRoot: options.projectRoot)
+                indexStorePath = derivedDataPath.appendingPathComponent("Index.noindex/DataStore", isDirectory: true)
+            } else {
+                output.write("Building original project with xcodebuild index store...", visibility: .quiet)
+                summary.phase = "build-original"
+                let buildResult = try builder.build(ProjectBuildOptions(
+                    projectRoot: options.projectRoot,
+                    scheme: options.scheme,
+                    configuration: options.configuration,
+                    destination: options.destination,
+                    derivedDataPath: derivedDataPath,
+                    extraXcodebuildArguments: options.extraXcodebuildArguments
+                ))
+                buildScheme = buildResult.scheme
+                indexStorePath = buildResult.indexStorePath
+                output.write("Build succeeded: scheme=\(buildResult.scheme)", visibility: .quiet)
+            }
             summary.build = BuildSummary(
-                scheme: buildResult.scheme,
-                derivedDataPath: buildResult.derivedDataPath.path,
-                indexStorePath: buildResult.indexStorePath.path
+                scheme: buildScheme,
+                derivedDataPath: derivedDataPath.path,
+                indexStorePath: indexStorePath.path
             )
-            output.write("Build succeeded: scheme=\(buildResult.scheme)", visibility: .quiet)
-            output.write("Index store: \(buildResult.indexStorePath.path)")
+            output.write("Index store: \(indexStorePath.path)")
+
+            var sourceCache: SourceFileCache?
+            if options.reuseIndex {
+                let currentSourceFiles = try SourceFileFinder.swiftFiles(
+                    in: options.projectRoot,
+                    excluding: excludedRoots,
+                    fileManager: fileManager
+                )
+                let currentSourceCache = try SourceFileCache(paths: currentSourceFiles.map(\.path))
+                let manifest = try IndexSourceManifest.load(from: indexSourceManifestPath)
+                try manifest.validate(sourceCache: currentSourceCache)
+                sourceCache = currentSourceCache
+                summary.artifacts.indexSourceManifest = indexSourceManifestPath.path
+                output.write("Index source manifest validated: \(currentSourceFiles.count) files", visibility: .quiet)
+            }
 
             let reader = IndexReader(runner: runner)
             summary.phase = "read-index"
             let snapshot = try reader.read(
-                storePath: buildResult.indexStorePath,
+                storePath: indexStorePath,
                 databasePath: databasePath,
                 sourceRoot: options.projectRoot,
-                excludedSourceRoots: excludedRoots
+                excludedSourceRoots: excludedRoots,
+                reuseExistingDatabase: options.reuseIndex
             )
             summary.counters.indexedSymbols = snapshot.symbols.count
             summary.counters.indexedOccurrences = snapshot.occurrences.count
@@ -216,6 +245,19 @@ struct SwiftObfuscatorCLI {
             let selectedSourceFiles = selectedSourceFiles(from: snapshot.sourceFiles, under: projectSourceRoots)
             summary.counters.selectedSourceFiles = selectedSourceFiles.count
             output.write("Selected source files=\(selectedSourceFiles.count)", visibility: .quiet)
+
+            if let sourceCache {
+                guard sourceCache.allPaths == snapshot.sourceFiles.map(SourcePathNormalizer.canonicalPath).sorted() else {
+                    throw CLIError.invalidArguments("Index database source paths do not match the validated source manifest. Run again without --reuse-index.")
+                }
+            } else {
+                let currentSourceCache = try SourceFileCache(paths: snapshot.sourceFiles)
+                let manifest = try IndexSourceManifest.capture(sourceCache: currentSourceCache)
+                try manifest.save(to: indexSourceManifestPath)
+                sourceCache = currentSourceCache
+                summary.artifacts.indexSourceManifest = indexSourceManifestPath.path
+                output.write("Index source manifest saved: \(indexSourceManifestPath.path)")
+            }
 
             if options.command == .dump || options.dumpIndex {
                 summary.phase = "dump-index"
@@ -234,7 +276,9 @@ struct SwiftObfuscatorCLI {
             }
 
             summary.phase = "plan-renames"
-            let sourceCache = try SourceFileCache(paths: snapshot.sourceFiles)
+            guard let sourceCache else {
+                throw CLIError.invalidArguments("Failed to load indexed Swift sources.")
+            }
             let mappingStore = try MappingStore.load(from: mappingPath)
             var planner = RenamePlanner(
                 analyzer: SafetyAnalyzer(
@@ -293,7 +337,7 @@ struct SwiftObfuscatorCLI {
                         output.write("Verifying patched build...")
                         _ = try builder.build(ProjectBuildOptions(
                             projectRoot: options.projectRoot,
-                            scheme: buildResult.scheme,
+                            scheme: buildScheme,
                             configuration: options.configuration,
                             destination: options.destination,
                             derivedDataPath: derivedDataPath,
@@ -448,6 +492,8 @@ struct SwiftObfuscatorCLI {
                 options.dumpIndex = true
             case "--verify-build":
                 options.verifyBuild = true
+            case "--reuse-index":
+                options.reuseIndex = true
             case "--quiet":
                 options.verbosity = .quiet
             case "--verbose":
@@ -715,6 +761,7 @@ Options:
   --mapping PATH             Mapping JSON path. Default: <output>/mapping.json.
   --dump                     Print full symbol/USR/occurrence dump before planning.
   --verify-build             After in-place apply, run xcodebuild again. For external code output, report the initial indexed build status.
+  --reuse-index              Skip the initial build/import and reuse the existing IndexStoreDB only after every Swift source matches the saved SHA-256 manifest.
   --quiet                    Print only phase-level progress, counters, and artifact paths.
   --verbose                  Print full dry-run and dump reports to stdout. Reports are always saved as artifacts.
   --summary-json, --json     Print only run-summary JSON to stdout. Human output still goes to logs.
