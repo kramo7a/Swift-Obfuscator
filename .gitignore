@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+.obfuscator/
+**/.DS_Store
+DerivedData/
+Package.resolved
