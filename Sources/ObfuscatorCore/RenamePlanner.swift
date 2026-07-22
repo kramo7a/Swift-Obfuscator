@@ -37,13 +37,18 @@ public struct RenamePlanner {
         reservedNames.formUnion(mappingStore.allEntries().map(\.obfuscatedName))
         let localNominalTypeNames = Self.localNominalTypeNames(snapshot: snapshot)
         let overrideRelatedUSRs = Self.overrideRelatedUSRs(snapshot: snapshot)
+        let tupleTypealiasRelatedUSRs = Self.tupleTypealiasRelatedUSRs(
+            snapshot: snapshot,
+            sourceCache: sourceCache
+        )
 
         for group in snapshot.groupsByUSR {
             let decision = analyzer.analyze(
                 group: group,
                 sourceCache: sourceCache,
                 localNominalTypeNames: localNominalTypeNames,
-                overrideRelatedUSRs: overrideRelatedUSRs
+                overrideRelatedUSRs: overrideRelatedUSRs,
+                tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs
             )
             guard decision.allowed, let oldName = decision.oldName else {
                 denied.append(decision)
@@ -157,5 +162,45 @@ public struct RenamePlanner {
             }
         }
         return result
+    }
+
+    private static func tupleTypealiasRelatedUSRs(
+        snapshot: IndexSnapshot,
+        sourceCache: SourceFileCache
+    ) -> Set<String> {
+        var result: Set<String> = []
+        for occurrence in snapshot.occurrences where occurrence.symbol.kind == "typealias" {
+            guard occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"),
+                  let source = sourceCache.file(for: occurrence.path),
+                  let token = source.identifierToken(line: occurrence.line, utf8Column: occurrence.utf8Column),
+                  declarationLooksLikeTupleTypealias(source: source, occurrence: occurrence, token: token) else {
+                continue
+            }
+
+            result.insert(occurrence.usr)
+            for relation in occurrence.relations
+            where relation.roles.contains("childOf") || relation.roles.contains("containedBy") {
+                result.insert(relation.usr)
+            }
+        }
+        return result
+    }
+
+    private static func declarationLooksLikeTupleTypealias(
+        source: SourceFile,
+        occurrence: OccurrenceRecord,
+        token: IdentifierToken
+    ) -> Bool {
+        guard let line = source.lineText(line: occurrence.line),
+              let tokenRange = line.range(of: token.name) else {
+            return true
+        }
+        let afterName = line[tokenRange.upperBound...]
+        guard let equalsIndex = afterName.firstIndex(of: "=") else {
+            return false
+        }
+        let rhsStart = afterName.index(after: equalsIndex)
+        let rhs = afterName[rhsStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return rhs.isEmpty || rhs.first == "("
     }
 }

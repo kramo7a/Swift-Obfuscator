@@ -46,7 +46,8 @@ public struct SafetyAnalyzer: Sendable {
         group: USROccurrenceGroup,
         sourceCache: SourceFileCache,
         localNominalTypeNames: Set<String> = [],
-        overrideRelatedUSRs: Set<String> = []
+        overrideRelatedUSRs: Set<String> = [],
+        tupleTypealiasRelatedUSRs: Set<String> = []
     ) -> SafetyDecision {
         var reasons: [String] = []
         var tokenNames: Set<String> = []
@@ -64,6 +65,9 @@ public struct SafetyAnalyzer: Sendable {
         }
         if overrideRelatedUSRs.contains(group.usr) {
             reasons.append("override relations require coordinated renaming")
+        }
+        if tupleTypealiasRelatedUSRs.contains(group.usr) {
+            reasons.append("tuple typealias constructor occurrences are incomplete")
         }
 
         for occurrence in group.occurrences {
