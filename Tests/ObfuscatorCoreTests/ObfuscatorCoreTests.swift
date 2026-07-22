@@ -1052,6 +1052,85 @@ import Testing
     #expect(plan.denied.isEmpty)
 }
 
+@Test func renamePlannerDeniesBothEndsOfOverrideRelations() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Sample.swift")
+    let lines = [
+        "class Base { func run() {} }",
+        "class Child: Base { override func run() {} }"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [file.path])
+
+    let baseSymbol = SymbolRecord(
+        usr: "usr-base-run",
+        name: "run()",
+        kind: "instanceMethod",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let childSymbol = SymbolRecord(
+        usr: "usr-child-run",
+        name: "run()",
+        kind: "instanceMethod",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let baseOccurrence = OccurrenceRecord(
+        symbol: baseSymbol,
+        path: file.path,
+        line: 1,
+        utf8Column: utf8Column(of: "run", in: lines[0]),
+        moduleName: "Sample",
+        isSystem: false,
+        rolesRaw: 1,
+        roles: ["declaration"],
+        rolesDescription: "decl",
+        symbolProvider: "swift",
+        relations: []
+    )
+    let childOccurrence = OccurrenceRecord(
+        symbol: childSymbol,
+        path: file.path,
+        line: 2,
+        utf8Column: utf8Column(of: "run", in: lines[1]),
+        moduleName: "Sample",
+        isSystem: false,
+        rolesRaw: 1,
+        roles: ["declaration"],
+        rolesDescription: "decl",
+        symbolProvider: "swift",
+        relations: [
+            RelationRecord(
+                usr: baseSymbol.usr,
+                name: baseSymbol.name,
+                rolesRaw: 1,
+                roles: ["overrideOf"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        mappingStore: MappingStore()
+    )
+    let plan = planner.makePlan(
+        snapshot: IndexSnapshot(
+            sourceFiles: [file.path],
+            symbols: [baseSymbol, childSymbol],
+            occurrences: [baseOccurrence, childOccurrence]
+        ),
+        sourceCache: cache
+    )
+
+    #expect(plan.entries.isEmpty)
+    #expect(plan.denied.count == 2)
+    #expect(plan.denied.allSatisfy { $0.reasons.contains("override relations require coordinated renaming") })
+}
+
 @Test func renamePlannerDoesNotSelectSymbolsDeclaredOutsideSelectedSources() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     let selectedDirectory = directory.appendingPathComponent("Selected", isDirectory: true)

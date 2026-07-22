@@ -36,12 +36,14 @@ public struct RenamePlanner {
         var reservedNames = Set(snapshot.symbols.map(\.name)).filter(isPlainSwiftIdentifier)
         reservedNames.formUnion(mappingStore.allEntries().map(\.obfuscatedName))
         let localNominalTypeNames = Self.localNominalTypeNames(snapshot: snapshot)
+        let overrideRelatedUSRs = Self.overrideRelatedUSRs(snapshot: snapshot)
 
         for group in snapshot.groupsByUSR {
             let decision = analyzer.analyze(
                 group: group,
                 sourceCache: sourceCache,
-                localNominalTypeNames: localNominalTypeNames
+                localNominalTypeNames: localNominalTypeNames,
+                overrideRelatedUSRs: overrideRelatedUSRs
             )
             guard decision.allowed, let oldName = decision.oldName else {
                 denied.append(decision)
@@ -144,5 +146,16 @@ public struct RenamePlanner {
             }
             return occurrence.symbol.name
         })
+    }
+
+    private static func overrideRelatedUSRs(snapshot: IndexSnapshot) -> Set<String> {
+        var result: Set<String> = []
+        for occurrence in snapshot.occurrences {
+            for relation in occurrence.relations where relation.roles.contains("overrideOf") {
+                result.insert(occurrence.usr)
+                result.insert(relation.usr)
+            }
+        }
+        return result
     }
 }

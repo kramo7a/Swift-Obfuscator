@@ -45,7 +45,8 @@ public struct SafetyAnalyzer: Sendable {
     public func analyze(
         group: USROccurrenceGroup,
         sourceCache: SourceFileCache,
-        localNominalTypeNames: Set<String> = []
+        localNominalTypeNames: Set<String> = [],
+        overrideRelatedUSRs: Set<String> = []
     ) -> SafetyDecision {
         var reasons: [String] = []
         var tokenNames: Set<String> = []
@@ -60,6 +61,9 @@ public struct SafetyAnalyzer: Sendable {
         }
         if group.occurrences.isEmpty {
             reasons.append("no occurrences")
+        }
+        if overrideRelatedUSRs.contains(group.usr) {
+            reasons.append("override relations require coordinated renaming")
         }
 
         for occurrence in group.occurrences {
