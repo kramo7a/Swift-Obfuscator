@@ -425,7 +425,7 @@ import Testing
     #expect(decision.reasons.contains { $0.contains("unsupported symbol kind parameter") })
 }
 
-@Test func safetyAnalyzerDeniesPublicAndOpenDeclarations() throws {
+@Test func safetyAnalyzerAllowsPublicAndOpenDeclarations() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = directory.appendingPathComponent("Sample.swift")
@@ -463,9 +463,8 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(protocolDecision.allowed == false)
+    #expect(protocolDecision.allowed)
     #expect(protocolDecision.oldName == "Analyzer")
-    #expect(protocolDecision.reasons.contains { $0.contains("externally visible") })
 
     let property = SymbolRecord(
         usr: "usr-count",
@@ -493,9 +492,8 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(propertyDecision.allowed == false)
+    #expect(propertyDecision.allowed)
     #expect(propertyDecision.oldName == "count")
-    #expect(propertyDecision.reasons.contains { $0.contains("externally visible") })
 
     let function = SymbolRecord(
         usr: "usr-run",
@@ -523,9 +521,8 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(functionDecision.allowed == false)
+    #expect(functionDecision.allowed)
     #expect(functionDecision.oldName == "run")
-    #expect(functionDecision.reasons.contains { $0.contains("externally visible") })
 
     let variable = SymbolRecord(
         usr: "usr-globalCount",
@@ -553,9 +550,163 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(variableDecision.allowed == false)
+    #expect(variableDecision.allowed)
     #expect(variableDecision.oldName == "globalCount")
-    #expect(variableDecision.reasons.contains { $0.contains("externally visible") })
+}
+
+@Test func safetyAnalyzerStillDeniesRuntimeExposedPublicDeclarations() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Sample.swift")
+    let lines = [
+        "@objcMembers public class RuntimeModel {",
+        "    public func inheritedExposure() {}",
+        "}",
+        "@objc",
+        "public func explicitlyExposed() {}",
+        "public dynamic func dynamicallyDispatched() {}",
+        "public class RuntimeController {}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func decision(
+        usr: String,
+        name: String,
+        kind: String,
+        line: Int
+    ) -> SafetyDecision {
+        let symbol = SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+        let occurrence = OccurrenceRecord(
+            symbol: symbol,
+            path: file.path,
+            line: line,
+            utf8Column: utf8Column(of: name, in: lines[line - 1]),
+            moduleName: "Sample",
+            isSystem: false,
+            rolesRaw: 1,
+            roles: ["declaration"],
+            rolesDescription: "decl",
+            symbolProvider: "swift",
+            relations: []
+        )
+        return SafetyAnalyzer(sourceRoot: directory).analyze(
+            group: USROccurrenceGroup(usr: usr, symbol: symbol, occurrences: [occurrence]),
+            sourceCache: cache
+        )
+    }
+
+    let objcMembersClass = decision(usr: "usr-runtime-model", name: "RuntimeModel", kind: "class", line: 1)
+    let objcMembersMethod = decision(usr: "usr-inherited-exposure", name: "inheritedExposure", kind: "instanceMethod", line: 2)
+    let explicitObjCMethod = decision(usr: "usr-explicit", name: "explicitlyExposed", kind: "function", line: 5)
+    let dynamicMethod = decision(usr: "usr-dynamic", name: "dynamicallyDispatched", kind: "function", line: 6)
+    let objcUSRClass = decision(
+        usr: "c:@M@Sample@objc(cs)RuntimeController",
+        name: "RuntimeController",
+        kind: "class",
+        line: 7
+    )
+
+    #expect(objcMembersClass.allowed == false)
+    #expect(objcMembersMethod.allowed == false)
+    #expect(explicitObjCMethod.allowed == false)
+    #expect(dynamicMethod.allowed == false)
+    #expect(objcUSRClass.allowed == false)
+    #expect([objcMembersClass, objcMembersMethod, explicitObjCMethod, dynamicMethod].allSatisfy {
+        $0.reasons.contains { $0.contains("runtime-reflected") }
+    })
+    #expect(objcUSRClass.reasons.contains { $0.contains("Objective-C-compatible USR") })
+}
+
+@Test func renamePlannerPlansAndPatchesPublicSymbols() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("PublicAPI.swift")
+    let lines = [
+        "public struct PublicModel {}",
+        "public func makeModel() -> PublicModel {",
+        "    PublicModel()",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [file.path])
+
+    let typeSymbol = SymbolRecord(
+        usr: "s:6Sample11PublicModelV",
+        name: "PublicModel",
+        kind: "struct",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let functionSymbol = SymbolRecord(
+        usr: "s:6Sample9makeModelAA06PublicD0VyF",
+        name: "makeModel()",
+        kind: "function",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    func occurrence(
+        symbol: SymbolRecord,
+        tokenName: String,
+        line: Int,
+        roles: [String]
+    ) -> OccurrenceRecord {
+        OccurrenceRecord(
+            symbol: symbol,
+            path: file.path,
+            line: line,
+            utf8Column: utf8Column(of: tokenName, in: lines[line - 1]),
+            moduleName: "Sample",
+            isSystem: false,
+            rolesRaw: roles.contains("declaration") ? 1 : 2,
+            roles: roles,
+            rolesDescription: roles.joined(separator: ","),
+            symbolProvider: "swift",
+            relations: []
+        )
+    }
+
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [typeSymbol, functionSymbol],
+        occurrences: [
+            occurrence(symbol: typeSymbol, tokenName: "PublicModel", line: 1, roles: ["declaration"]),
+            occurrence(symbol: functionSymbol, tokenName: "makeModel", line: 2, roles: ["declaration"]),
+            occurrence(symbol: typeSymbol, tokenName: "PublicModel", line: 2, roles: ["reference"]),
+            occurrence(symbol: typeSymbol, tokenName: "PublicModel", line: 3, roles: ["reference"])
+        ]
+    )
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        mappingStore: MappingStore()
+    )
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    #expect(plan.denied.isEmpty)
+    #expect(plan.conflicts.isEmpty)
+    #expect(plan.entries.count == 2)
+    #expect(Set(plan.entries.map(\.oldName)) == ["PublicModel", "makeModel"])
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    let typeName = try #require(plan.entries.first { $0.oldName == "PublicModel" }?.newName)
+    let functionName = try #require(plan.entries.first { $0.oldName == "makeModel" }?.newName)
+    #expect(patched == [
+        "public struct \(typeName) {}",
+        "public func \(functionName)() -> \(typeName) {",
+        "    \(typeName)()",
+        "}",
+        ""
+    ].joined(separator: "\n"))
 }
 
 @Test func safetyAnalyzerDeniesProtocolMembersUntilWitnessesAreRenamedTogether() throws {

@@ -57,6 +57,9 @@ public struct SafetyAnalyzer: Sendable {
         if group.usr.isEmpty {
             reasons.append("empty USR")
         }
+        if group.usr.hasPrefix("c:") {
+            reasons.append("Objective-C-compatible USR requires a stable runtime name")
+        }
         if !allowedKinds.contains(group.symbol.kind) {
             reasons.append("unsupported symbol kind \(group.symbol.kind)")
         }
@@ -125,8 +128,9 @@ public struct SafetyAnalyzer: Sendable {
                    declarationLineLooksStoredProperty(source: source, occurrence: occurrence, token: token) {
                     reasons.append("stored property declarations require memberwise initializer label support")
                 }
-                if declarationLineLooksExternallyVisible(source: source, occurrence: occurrence, token: token) {
-                    reasons.append("externally visible or runtime-reflected declaration at \(occurrence.path):\(occurrence.line)")
+                if contexts.contains(.objectiveCRuntimeBody)
+                    || declarationRequiresStableRuntimeName(source: source, occurrence: occurrence, token: token) {
+                    reasons.append("runtime-reflected or externally linked declaration at \(occurrence.path):\(occurrence.line)")
                 }
             }
         }
@@ -226,7 +230,7 @@ public struct SafetyAnalyzer: Sendable {
             && declarationKeywords.contains { containsSwiftWord(String(before), word: $0) }
     }
 
-    private func declarationLineLooksExternallyVisible(
+    private func declarationRequiresStableRuntimeName(
         source: SourceFile,
         occurrence: OccurrenceRecord,
         token: IdentifierToken
@@ -241,9 +245,18 @@ public struct SafetyAnalyzer: Sendable {
             omittingEmptySubsequences: false,
             whereSeparator: { $0 == ";" || $0 == "{" || $0 == "}" }
         ).last.map(String.init) ?? String(beforeName)
+        var declarationSegments = [String(declarationSegment)]
+        var precedingLine = occurrence.line - 1
+        while precedingLine > 0, let line = source.lineText(line: precedingLine) {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmedLine.hasPrefix("@") else {
+                break
+            }
+            declarationSegments.append(trimmedLine)
+            precedingLine -= 1
+        }
+
         let sensitiveWords = [
-            "public",
-            "open",
             "dynamic",
             "override",
             "objc",
@@ -258,12 +271,15 @@ public struct SafetyAnalyzer: Sendable {
             "_cdecl",
             "_silgen_name"
         ]
-        return sensitiveWords.contains { containsSwiftWord(declarationSegment, word: $0) }
+        return declarationSegments.contains { segment in
+            sensitiveWords.contains { containsSwiftWord(segment, word: $0) }
+        }
     }
 
     private enum SourceDeclarationContext: Equatable {
         case protocolBody
         case extensionBody(owner: String)
+        case objectiveCRuntimeBody
         case otherBody
     }
 
@@ -329,6 +345,9 @@ public struct SafetyAnalyzer: Sendable {
         }
         if let owner = extensionOwner(in: header) {
             return .extensionBody(owner: owner)
+        }
+        if containsSwiftWord(header, word: "objcMembers") {
+            return .objectiveCRuntimeBody
         }
         return .otherBody
     }
