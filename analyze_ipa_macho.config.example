@@ -1,0 +1,27 @@
+# Example config for analyze_ipa_macho.sh.
+#
+# Format:
+#   KEY=VALUE
+#
+# Blank lines and full-line comments are allowed. Values are treated literally;
+# this file is parsed, not sourced, so shell substitutions are not executed.
+#
+# Precedence:
+#   CLI flags > config values > environment variables > built-in defaults
+
+# Include matching Mach-O relative paths in the first-party analysis scope.
+# By default the script only treats the main executable and app extensions as
+# first-party. Add your app/framework names here when you want cleaner reports.
+FIRST_PARTY_REGEX=(^|/)(MyApp|MyFeatureKit|MySharedUI)(\.framework|\.appex|\.dylib|$|/)
+
+# Patterns used against demangled symbol names.
+SUSPICIOUS_SYMBOL_REGEX=Authorization|Keychain|Crypto|Secret|Token|JWT|Bearer|Password|Certificate|Pinning|Jailbreak|Frida|Cycript|Objection|Hook|Debug|Staging|Logger
+
+# Patterns used against printable strings extracted from binaries.
+SUSPICIOUS_STRING_REGEX=https?://|wss?://|api\.|/api/|graphql|token|secret|password|apikey|api_key|client_secret|bearer|debug|staging|localhost|127\.0\.0\.1|jailbreak|frida|cycript|certificate|pinning
+
+# Candidate JWT pattern. Real JWTs normally contain three base64url sections.
+JWT_REGEX=[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}
+
+# Anti-instrumentation and jailbreak tooling string pattern.
+FRIDA_REGEX=frida|FridaGadget|FRIDA_SERVER|cycript|libcycript|objection|substrate|cydia|jailbreak|fishhook
