@@ -585,6 +585,10 @@ public_find_swift_demangle() {
   echo ""
 }
 
+public_has_swift_demangle() {
+  [[ -n "$(public_find_swift_demangle)" ]]
+}
+
 public_demangle_file() {
   local input_file="$1"
   local output_file="$2"
@@ -962,7 +966,9 @@ public_write_tool_availability() {
     echo "|---|---|---|"
 
     for tool in file unzip plutil codesign security otool nm strings lipo size xcrun swift-demangle python3 awk grep sort sed; do
-      if public_has_command "$tool"; then
+      if [[ "$tool" == "swift-demangle" ]] && public_has_swift_demangle; then
+        echo "| \`$tool\` | available |  |"
+      elif [[ "$tool" != "swift-demangle" ]] && public_has_command "$tool"; then
         echo "| \`$tool\` | available |  |"
       else
         echo "| \`$tool\` | missing | some reports may be skipped |"
