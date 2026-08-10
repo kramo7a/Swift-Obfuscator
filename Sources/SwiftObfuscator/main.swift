@@ -36,6 +36,10 @@ struct CLIOptions {
     var derivedDataPath: URL?
     var databasePath: URL?
     var mappingPath: URL?
+    var coverageCohortPath: URL?
+    var createCoverageCohortPath: URL?
+    var coverageCohortIdentifier: String?
+    var coverageExpectedCount: Int?
     var dumpIndex = false
     var verifyBuild = false
     var reuseIndex = false
@@ -82,6 +86,12 @@ struct RunCounters: Codable {
     var conflicts: Int?
     var appliedReplacements: Int?
     var writtenSourceFiles: Int?
+    var cohortDenominator: Int?
+    var cohortRenamed: Int?
+    var cohortDenied: Int?
+    var cohortMissingFromIndex: Int?
+    var cohortUnclassified: Int?
+    var cohortCoveragePercent: Double?
 }
 
 struct RunArtifacts: Codable {
@@ -93,6 +103,8 @@ struct RunArtifacts: Codable {
     var indexSourceManifest: String?
     var indexSnapshotCache: String?
     var renamePlanCache: String?
+    var coverageCohort: String?
+    var coverageReport: String?
 }
 
 struct RunErrorSummary: Codable {
@@ -118,6 +130,7 @@ struct SwiftObfuscatorCLI {
         do {
             let fileManager = FileManager.default
             var options = try parse(arguments)
+            try validateCoverageOptions(options)
             printSummaryJSON = options.printSummaryJSON
             summary.command = options.command.rawValue
             summary.phase = "prepare"
@@ -133,6 +146,8 @@ struct SwiftObfuscatorCLI {
             let derivedDataPath = (options.derivedDataPath ?? outputDirectory.appendingPathComponent("DerivedData", isDirectory: true)).standardizedFileURL
             let databasePath = (options.databasePath ?? outputDirectory.appendingPathComponent("IndexDatabase", isDirectory: true)).standardizedFileURL
             let mappingPath = (options.mappingPath ?? outputDirectory.appendingPathComponent("mapping.json")).standardizedFileURL
+            let coverageCohortPath = options.coverageCohortPath?.standardizedFileURL
+            let createCoverageCohortPath = options.createCoverageCohortPath?.standardizedFileURL
             let indexSourceManifestPath = outputDirectory.appendingPathComponent("index-source-manifest.json").standardizedFileURL
             let indexSnapshotCachePath = databasePath.appendingPathExtension("snapshot.plist")
             let renamePlanCachePath = databasePath.appendingPathExtension("rename-plan.plist")
@@ -246,6 +261,8 @@ struct SwiftObfuscatorCLI {
             if options.reuseIndex,
                options.command != .dump,
                !options.dumpIndex,
+               coverageCohortPath == nil,
+               createCoverageCohortPath == nil,
                let sourceManifest {
                 let key = try RenamePlanCacheKey.make(
                     toolURL: executableURL,
@@ -259,6 +276,7 @@ struct SwiftObfuscatorCLI {
             let plan: RenamePlan
             let outputMappingStore: MappingStore
             let selectedSourceFiles: [String]
+            var snapshotForCoverage: IndexSnapshot?
             if let cachedPlan {
                 summary.phase = "load-rename-plan"
                 plan = cachedPlan.plan
@@ -292,6 +310,7 @@ struct SwiftObfuscatorCLI {
                         reuseExistingDatabase: options.reuseIndex
                     )
                 }
+                snapshotForCoverage = snapshot
 
                 if let sourceCache {
                     guard sourceCache.allPaths == snapshot.sourceFiles.map(SourcePathNormalizer.canonicalPath).sorted() else {
@@ -392,6 +411,54 @@ struct SwiftObfuscatorCLI {
             output.write(dryRunReport, visibility: .verbose)
             output.write("Dry-run summary: planned=\(plan.entries.count), replacements=\(plan.replacements.count), denied=\(plan.denied.count), conflicts=\(plan.conflicts.count)", visibility: .quiet)
             output.write("Dry-run report saved: \(dryRunReportPath.path)", visibility: .quiet)
+
+            if let cohortPath = coverageCohortPath ?? createCoverageCohortPath {
+                guard let snapshotForCoverage else {
+                    throw CLIError.invalidArguments("Coverage reporting requires an index snapshot. Run without a cached rename plan.")
+                }
+
+                let cohort: CoverageCohort
+                if let createCoverageCohortPath {
+                    guard let identifier = options.coverageCohortIdentifier,
+                          let expectedCount = options.coverageExpectedCount else {
+                        throw CLIError.invalidArguments("Creating a coverage cohort requires --coverage-cohort-id and --coverage-expected-count.")
+                    }
+                    cohort = try CoverageAnalyzer.makeBaselineCohort(
+                        identifier: identifier,
+                        expectedCount: expectedCount,
+                        snapshot: snapshotForCoverage,
+                        plan: plan
+                    )
+                    try cohort.save(to: createCoverageCohortPath, fileManager: fileManager)
+                    output.write("Immutable coverage cohort saved: \(createCoverageCohortPath.path)", visibility: .quiet)
+                } else {
+                    cohort = try CoverageCohort.load(from: cohortPath)
+                    output.write("Coverage cohort loaded: \(cohortPath.path)", visibility: .quiet)
+                }
+
+                let coverageReport = try CoverageAnalyzer.makeReport(
+                    cohort: cohort,
+                    snapshot: snapshotForCoverage,
+                    plan: plan
+                )
+                let coverageReportPath = outputDirectory.appendingPathComponent("coverage-report.json")
+                try coverageReport.save(to: coverageReportPath, fileManager: fileManager)
+                summary.artifacts.coverageCohort = cohortPath.path
+                summary.artifacts.coverageReport = coverageReportPath.path
+                summary.counters.cohortDenominator = coverageReport.denominator
+                summary.counters.cohortRenamed = coverageReport.renamed
+                summary.counters.cohortDenied = coverageReport.denied
+                summary.counters.cohortMissingFromIndex = coverageReport.missingFromIndex
+                summary.counters.cohortUnclassified = coverageReport.unclassified
+                summary.counters.cohortCoveragePercent = coverageReport.coveragePercent
+                output.write(
+                    "Coverage cohort: renamed=\(coverageReport.renamed)/\(coverageReport.denominator) "
+                        + "(\(String(format: "%.2f", coverageReport.coveragePercent))%), "
+                        + "missing=\(coverageReport.missingFromIndex), unclassified=\(coverageReport.unclassified)",
+                    visibility: .quiet
+                )
+                output.write("Coverage report saved: \(coverageReportPath.path)", visibility: .quiet)
+            }
 
             switch options.command {
             case .dump:
@@ -581,6 +648,18 @@ struct SwiftObfuscatorCLI {
                 options.databasePath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--mapping":
                 options.mappingPath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+            case "--coverage-cohort":
+                options.coverageCohortPath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+            case "--create-coverage-cohort":
+                options.createCoverageCohortPath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+            case "--coverage-cohort-id":
+                options.coverageCohortIdentifier = try value(after: argument, in: arguments, index: &index)
+            case "--coverage-expected-count":
+                let value = try value(after: argument, in: arguments, index: &index)
+                guard let count = Int(value), count > 0 else {
+                    throw CLIError.invalidArguments("--coverage-expected-count must be a positive integer: \(value)")
+                }
+                options.coverageExpectedCount = count
             case "--dump":
                 options.dumpIndex = true
             case "--verify-build":
@@ -603,6 +682,26 @@ struct SwiftObfuscatorCLI {
             index += 1
         }
         return options
+    }
+
+    static func validateCoverageOptions(_ options: CLIOptions) throws {
+        if options.coverageCohortPath != nil, options.createCoverageCohortPath != nil {
+            throw CLIError.invalidArguments("Use either --coverage-cohort or --create-coverage-cohort, not both.")
+        }
+        if options.createCoverageCohortPath != nil {
+            guard let identifier = options.coverageCohortIdentifier, !identifier.isEmpty else {
+                throw CLIError.invalidArguments("--create-coverage-cohort requires --coverage-cohort-id.")
+            }
+            guard options.coverageExpectedCount != nil else {
+                throw CLIError.invalidArguments("--create-coverage-cohort requires --coverage-expected-count so the denominator cannot drift silently.")
+            }
+        } else if options.coverageCohortIdentifier != nil || options.coverageExpectedCount != nil {
+            throw CLIError.invalidArguments("--coverage-cohort-id and --coverage-expected-count are only valid with --create-coverage-cohort.")
+        }
+        if options.command == .dump,
+           options.coverageCohortPath != nil || options.createCoverageCohortPath != nil {
+            throw CLIError.invalidArguments("Coverage reporting is available for dry-run and apply, not dump.")
+        }
     }
 
     static func value(after option: String, in arguments: [String], index: inout Int) throws -> String {
@@ -854,6 +953,12 @@ Options:
   --derived-data PATH        DerivedData path. Default: <output>/DerivedData.
   --database PATH            IndexStoreDB database path. Default: <output>/IndexDatabase.
   --mapping PATH             Mapping JSON path. Default: <output>/mapping.json.
+  --coverage-cohort PATH     Compare the current plan with an immutable USR cohort and write coverage-report.json.
+  --create-coverage-cohort PATH
+                             Create an immutable baseline cohort, refusing to overwrite an existing file.
+  --coverage-cohort-id ID    Stable revision/configuration identifier required when creating a cohort.
+  --coverage-expected-count N
+                             Required expected denominator when creating a cohort; generation fails on drift.
   --dump                     Print full symbol/USR/occurrence dump before planning.
   --verify-build             After in-place apply, run xcodebuild again. For external code output, report the initial indexed build status.
   --reuse-index              Skip the initial build/import and reuse the existing IndexStoreDB only after every Swift source matches the saved SHA-256 manifest.

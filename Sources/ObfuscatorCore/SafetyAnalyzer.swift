@@ -29,17 +29,22 @@ public struct SafetyAnalyzer: Sendable {
     public let sourceRoot: URL
     public let obfuscationRoots: [URL]
     public let allowedKinds: Set<String>
+    private let interfaceBuilderClassNames: Set<String>
+    private let declarationContextCache: DeclarationContextCache
 
     public init(
         sourceRoot: URL,
         obfuscationRoots: [URL] = [],
         allowedKinds: Set<String> = SafetyAnalyzer.defaultAllowedKinds
     ) {
-        self.sourceRoot = sourceRoot.resolvingSymlinksInPath().standardizedFileURL
+        let canonicalSourceRoot = sourceRoot.resolvingSymlinksInPath().standardizedFileURL
+        self.sourceRoot = canonicalSourceRoot
         self.obfuscationRoots = obfuscationRoots.isEmpty
-            ? [self.sourceRoot]
+            ? [canonicalSourceRoot]
             : obfuscationRoots.map { $0.resolvingSymlinksInPath().standardizedFileURL }
         self.allowedKinds = allowedKinds
+        self.interfaceBuilderClassNames = Self.discoverInterfaceBuilderClassNames(under: canonicalSourceRoot)
+        self.declarationContextCache = DeclarationContextCache()
     }
 
     public func analyze(
@@ -123,6 +128,9 @@ public struct SafetyAnalyzer: Sendable {
                 }
                 if isLanguageRequiredDeclarationName(token.name) {
                     reasons.append("language-required declaration name \(token.name)")
+                }
+                if group.symbol.kind == "class", interfaceBuilderClassNames.contains(token.name) {
+                    reasons.append("Interface Builder resource requires stable class name \(token.name)")
                 }
                 if isPropertyKind(group.symbol.kind),
                    declarationLineLooksStoredProperty(source: source, occurrence: occurrence, token: token) {
@@ -276,6 +284,48 @@ public struct SafetyAnalyzer: Sendable {
         }
     }
 
+    private static func discoverInterfaceBuilderClassNames(under sourceRoot: URL) -> Set<String> {
+        let fileManager = FileManager.default
+        guard let enumerator = fileManager.enumerator(
+            at: sourceRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        let customClassPattern = try? NSRegularExpression(
+            pattern: "customClass\\s*=\\s*\"([A-Za-z_][A-Za-z0-9_]*)\""
+        )
+        var classNames: Set<String> = []
+
+        for case let resourceURL as URL in enumerator {
+            let pathExtension = resourceURL.pathExtension.lowercased()
+            guard pathExtension == "xib" || pathExtension == "storyboard" else {
+                continue
+            }
+
+            if pathExtension == "xib" {
+                classNames.insert(resourceURL.deletingPathExtension().lastPathComponent)
+            }
+
+            guard let customClassPattern,
+                  let contents = try? String(contentsOf: resourceURL, encoding: .utf8) else {
+                continue
+            }
+            let fullRange = NSRange(contents.startIndex..<contents.endIndex, in: contents)
+            for match in customClassPattern.matches(in: contents, range: fullRange) {
+                guard match.numberOfRanges > 1,
+                      let range = Range(match.range(at: 1), in: contents) else {
+                    continue
+                }
+                classNames.insert(String(contents[range]))
+            }
+        }
+
+        return classNames
+    }
+
     private enum SourceDeclarationContext: Equatable {
         case protocolBody
         case extensionBody(owner: String)
@@ -283,35 +333,85 @@ public struct SafetyAnalyzer: Sendable {
         case otherBody
     }
 
+    private struct DeclarationContextCheckpoint {
+        let byteOffset: Int
+        let contexts: [SourceDeclarationContext]
+    }
+
+    private struct DeclarationContextIndex {
+        let byteCount: Int
+        let checkpoints: [DeclarationContextCheckpoint]
+
+        func contexts(beforeByteOffset byteOffset: Int) -> [SourceDeclarationContext] {
+            let boundedOffset = min(max(byteOffset, 0), byteCount)
+            var lowerBound = 0
+            var upperBound = checkpoints.count
+            while lowerBound < upperBound {
+                let middle = lowerBound + (upperBound - lowerBound) / 2
+                if checkpoints[middle].byteOffset <= boundedOffset {
+                    lowerBound = middle + 1
+                } else {
+                    upperBound = middle
+                }
+            }
+            return checkpoints[max(0, lowerBound - 1)].contexts
+        }
+    }
+
+    private final class DeclarationContextCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var indexesByPath: [String: DeclarationContextIndex] = [:]
+
+        func index(
+            for source: SourceFile,
+            makeIndex: () -> DeclarationContextIndex
+        ) -> DeclarationContextIndex {
+            lock.lock()
+            defer { lock.unlock() }
+            if let existing = indexesByPath[source.path] {
+                return existing
+            }
+            let index = makeIndex()
+            indexesByPath[source.path] = index
+            return index
+        }
+    }
+
     private func declarationContexts(source: SourceFile, beforeByteOffset byteOffset: Int) -> [SourceDeclarationContext] {
+        declarationContextCache.index(for: source) {
+            makeDeclarationContextIndex(source: source)
+        }.contexts(beforeByteOffset: byteOffset)
+    }
+
+    private func makeDeclarationContextIndex(source: SourceFile) -> DeclarationContextIndex {
         let bytes = [UInt8](source.data)
-        let end = min(max(byteOffset, 0), bytes.count)
         var stack: [SourceDeclarationContext] = []
+        var checkpoints = [DeclarationContextCheckpoint(byteOffset: 0, contexts: [])]
         var headerStart = 0
         var index = 0
 
-        while index < end {
+        while index < bytes.count {
             let byte = bytes[index]
-            if byte == UInt8(ascii: "/"), index + 1 < end, bytes[index + 1] == UInt8(ascii: "/") {
+            if byte == UInt8(ascii: "/"), index + 1 < bytes.count, bytes[index + 1] == UInt8(ascii: "/") {
                 index += 2
-                while index < end, bytes[index] != UInt8(ascii: "\n") {
+                while index < bytes.count, bytes[index] != UInt8(ascii: "\n") {
                     index += 1
                 }
                 continue
             }
-            if byte == UInt8(ascii: "/"), index + 1 < end, bytes[index + 1] == UInt8(ascii: "*") {
+            if byte == UInt8(ascii: "/"), index + 1 < bytes.count, bytes[index + 1] == UInt8(ascii: "*") {
                 index += 2
-                while index + 1 < end, !(bytes[index] == UInt8(ascii: "*") && bytes[index + 1] == UInt8(ascii: "/")) {
+                while index + 1 < bytes.count, !(bytes[index] == UInt8(ascii: "*") && bytes[index + 1] == UInt8(ascii: "/")) {
                     index += 1
                 }
-                index = min(index + 2, end)
+                index = min(index + 2, bytes.count)
                 continue
             }
             if byte == UInt8(ascii: "\"") {
                 index += 1
-                while index < end {
+                while index < bytes.count {
                     if bytes[index] == UInt8(ascii: "\\") {
-                        index += 2
+                        index = min(index + 2, bytes.count)
                     } else if bytes[index] == UInt8(ascii: "\"") {
                         index += 1
                         break
@@ -324,11 +424,13 @@ public struct SafetyAnalyzer: Sendable {
 
             if byte == UInt8(ascii: "{") {
                 stack.append(contextFromHeader(String(decoding: source.data[headerStart..<index], as: UTF8.self)))
+                checkpoints.append(DeclarationContextCheckpoint(byteOffset: index + 1, contexts: stack))
                 headerStart = index + 1
             } else if byte == UInt8(ascii: "}") {
                 if !stack.isEmpty {
                     stack.removeLast()
                 }
+                checkpoints.append(DeclarationContextCheckpoint(byteOffset: index + 1, contexts: stack))
                 headerStart = index + 1
             } else if byte == UInt8(ascii: ";") {
                 headerStart = index + 1
@@ -336,7 +438,7 @@ public struct SafetyAnalyzer: Sendable {
             index += 1
         }
 
-        return stack
+        return DeclarationContextIndex(byteCount: bytes.count, checkpoints: checkpoints)
     }
 
     private func contextFromHeader(_ header: String) -> SourceDeclarationContext {

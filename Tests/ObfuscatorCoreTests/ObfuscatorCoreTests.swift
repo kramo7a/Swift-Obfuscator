@@ -425,6 +425,68 @@ import Testing
     #expect(decision.reasons.contains { $0.contains("unsupported symbol kind parameter") })
 }
 
+@Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Controllers.swift")
+    let lines = [
+        "class MainViewController {}",
+        "class StoryboardViewController {}",
+        "class PlainViewController {}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    try "<document/>\n".write(
+        to: directory.appendingPathComponent("MainViewController.xib"),
+        atomically: true,
+        encoding: .utf8
+    )
+    try #"<document><viewController customClass="StoryboardViewController"/></document>"#.write(
+        to: directory.appendingPathComponent("Scene.storyboard"),
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let analyzer = SafetyAnalyzer(sourceRoot: directory)
+
+    func decision(name: String, line: Int) -> SafetyDecision {
+        let symbol = SymbolRecord(
+            usr: "usr-\(name)",
+            name: name,
+            kind: "class",
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+        let occurrence = OccurrenceRecord(
+            symbol: symbol,
+            path: file.path,
+            line: line,
+            utf8Column: utf8Column(of: name, in: lines[line - 1]),
+            moduleName: "Fixture",
+            isSystem: false,
+            rolesRaw: 1,
+            roles: ["declaration"],
+            rolesDescription: "decl",
+            symbolProvider: "swift",
+            relations: []
+        )
+        return analyzer.analyze(
+            group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+            sourceCache: cache
+        )
+    }
+
+    let xibDecision = decision(name: "MainViewController", line: 1)
+    #expect(xibDecision.allowed == false)
+    #expect(xibDecision.reasons.contains("Interface Builder resource requires stable class name MainViewController"))
+
+    let storyboardDecision = decision(name: "StoryboardViewController", line: 2)
+    #expect(storyboardDecision.allowed == false)
+    #expect(storyboardDecision.reasons.contains("Interface Builder resource requires stable class name StoryboardViewController"))
+
+    #expect(decision(name: "PlainViewController", line: 3).allowed == true)
+}
+
 @Test func safetyAnalyzerAllowsPublicAndOpenDeclarations() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1608,6 +1670,181 @@ import Testing
     #expect(plan.entries.isEmpty)
     #expect(plan.denied.count == 1)
     #expect(plan.denied.first?.reasons.contains { $0.contains("no declaration or definition occurrence inside selected source roots") } == true)
+}
+
+@Test func coverageCohortKeepsFixedEngineeringDenominatorAndExcludesSyntheticAccessors() throws {
+    let path = "/tmp/CoverageSample.swift"
+    let renamedProperty = SymbolRecord(
+        usr: "usr-renamed-property",
+        name: "renamedValue",
+        kind: "instanceProperty",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let deniedProperty = SymbolRecord(
+        usr: "usr-denied-property",
+        name: "storedValue",
+        kind: "instanceProperty",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let getter = SymbolRecord(
+        usr: "usr-getter",
+        name: "getter:renamedValue",
+        kind: "instanceMethod",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let setter = SymbolRecord(
+        usr: "usr-setter",
+        name: "setter:storedValue",
+        kind: "instanceMethod",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let parameter = SymbolRecord(
+        usr: "usr-parameter",
+        name: "value",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let runtimeProperty = SymbolRecord(
+        usr: "c:objc-runtime-property",
+        name: "runtimeValue",
+        kind: "instanceProperty",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+
+    func occurrence(_ symbol: SymbolRecord, relation: RelationRecord? = nil) -> OccurrenceRecord {
+        OccurrenceRecord(
+            symbol: symbol,
+            path: path,
+            line: 1,
+            utf8Column: 1,
+            moduleName: "CoverageSample",
+            isSystem: false,
+            rolesRaw: 1,
+            roles: ["declaration"],
+            rolesDescription: "declaration",
+            symbolProvider: "swift",
+            relations: relation.map { [$0] } ?? []
+        )
+    }
+
+    let snapshot = IndexSnapshot(
+        sourceFiles: [path],
+        symbols: [renamedProperty, deniedProperty, getter, setter, parameter, runtimeProperty],
+        occurrences: [
+            occurrence(renamedProperty),
+            occurrence(deniedProperty),
+            occurrence(getter, relation: RelationRecord(
+                usr: renamedProperty.usr,
+                name: renamedProperty.name,
+                rolesRaw: 1,
+                roles: ["accessorOf"]
+            )),
+            occurrence(setter),
+            occurrence(parameter),
+            occurrence(runtimeProperty)
+        ]
+    )
+    let plan = RenamePlan(
+        entries: [
+            RenamePlanEntry(
+                usr: renamedProperty.usr,
+                kind: renamedProperty.kind,
+                oldName: renamedProperty.name,
+                newName: "oa",
+                replacements: []
+            )
+        ],
+        denied: [
+            SafetyDecision(
+                usr: deniedProperty.usr,
+                symbolName: deniedProperty.name,
+                kind: deniedProperty.kind,
+                allowed: false,
+                oldName: deniedProperty.name,
+                reasons: [
+                    "stored property declarations require memberwise initializer label support",
+                    "implicit occurrence at \(path):1:1"
+                ]
+            ),
+            SafetyDecision(
+                usr: getter.usr,
+                symbolName: getter.name,
+                kind: getter.kind,
+                allowed: false,
+                oldName: nil,
+                reasons: ["implicit occurrence at \(path):1:1"]
+            ),
+            SafetyDecision(
+                usr: setter.usr,
+                symbolName: setter.name,
+                kind: setter.kind,
+                allowed: false,
+                oldName: nil,
+                reasons: ["implicit occurrence at \(path):1:1"]
+            ),
+            SafetyDecision(
+                usr: parameter.usr,
+                symbolName: parameter.name,
+                kind: parameter.kind,
+                allowed: false,
+                oldName: parameter.name,
+                reasons: ["unsupported symbol kind parameter"]
+            ),
+            SafetyDecision(
+                usr: runtimeProperty.usr,
+                symbolName: runtimeProperty.name,
+                kind: runtimeProperty.kind,
+                allowed: false,
+                oldName: runtimeProperty.name,
+                reasons: ["Objective-C-compatible USR requires a stable runtime name"]
+            )
+        ],
+        conflicts: []
+    )
+
+    let cohort = try CoverageAnalyzer.makeBaselineCohort(
+        identifier: "fixture@1",
+        expectedCount: 2,
+        snapshot: snapshot,
+        plan: plan
+    )
+    let report = try CoverageAnalyzer.makeReport(cohort: cohort, snapshot: snapshot, plan: plan)
+
+    #expect(cohort.members.map(\.usr) == [deniedProperty.usr, renamedProperty.usr].sorted())
+    #expect(cohort.denominator == 2)
+    #expect(report.renamed == 1)
+    #expect(report.denied == 1)
+    #expect(report.syntheticAccessors.total == 2)
+    #expect(report.syntheticAccessors.getters == 1)
+    #expect(report.syntheticAccessors.setters == 1)
+    #expect(report.syntheticAccessors.derivedRenamed == 1)
+    #expect(report.syntheticAccessors.derivedUnchanged == 0)
+    #expect(report.syntheticAccessors.unresolvedParent == 1)
+    #expect(report.syntheticAccessors.unexpectedlyPlanned == 0)
+
+    do {
+        _ = try CoverageAnalyzer.makeBaselineCohort(
+            identifier: "fixture@1",
+            expectedCount: 3,
+            snapshot: snapshot,
+            plan: plan
+        )
+        Issue.record("Expected fixed denominator validation to fail")
+    } catch let error as CoverageReportError {
+        #expect(error.localizedDescription.contains("expected 3"))
+    }
 }
 
 private func utf8Column(of needle: String, in line: String) -> Int {
