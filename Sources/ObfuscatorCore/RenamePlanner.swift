@@ -20,6 +20,7 @@ public struct RenamePlan: Codable, Sendable {
     public let parameterCallableReferenceSyntaxFacts: ParameterCallableReferenceSyntaxFactsSummary
     public let parameterCallableReferenceBindingFacts: ParameterCallableReferenceBindingFactsSummary
     public let parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary
+    public let parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary
     public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
 
     public init(
@@ -34,6 +35,7 @@ public struct RenamePlan: Codable, Sendable {
         parameterCallableReferenceSyntaxFacts: ParameterCallableReferenceSyntaxFactsSummary = .empty,
         parameterCallableReferenceBindingFacts: ParameterCallableReferenceBindingFactsSummary = .empty,
         parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary = .empty,
+        parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary = .empty,
         parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty
     ) {
         self.entries = entries
@@ -47,6 +49,7 @@ public struct RenamePlan: Codable, Sendable {
         self.parameterCallableReferenceSyntaxFacts = parameterCallableReferenceSyntaxFacts
         self.parameterCallableReferenceBindingFacts = parameterCallableReferenceBindingFacts
         self.parameterExternalLabelComponentFacts = parameterExternalLabelComponentFacts
+        self.parameterExternalLabelRenameOutcome = parameterExternalLabelRenameOutcome
         self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
     }
 
@@ -62,6 +65,7 @@ public struct RenamePlan: Codable, Sendable {
         case parameterCallableReferenceSyntaxFacts
         case parameterCallableReferenceBindingFacts
         case parameterExternalLabelComponentFacts
+        case parameterExternalLabelRenameOutcome
         case parameterLocalBindingOutcome
     }
 
@@ -101,6 +105,10 @@ public struct RenamePlan: Codable, Sendable {
         parameterExternalLabelComponentFacts = try container.decodeIfPresent(
             ParameterExternalLabelComponentFactsSummary.self,
             forKey: .parameterExternalLabelComponentFacts
+        ) ?? .empty
+        parameterExternalLabelRenameOutcome = try container.decodeIfPresent(
+            ParameterExternalLabelRenameOutcomeSummary.self,
+            forKey: .parameterExternalLabelRenameOutcome
         ) ?? .empty
         parameterLocalBindingOutcome = try container.decodeIfPresent(
             ParameterLocalBindingOutcomeSummary.self,
@@ -178,6 +186,15 @@ public struct RenamePlanner {
             callBindingFacts: parameterCallArgumentBindingFacts,
             callableReferenceBindingFacts: parameterCallableReferenceBindingFacts
         )
+        let externalLabelParameterUSRs = Set(
+            parameterExternalLabelComponentFacts.components.flatMap(\.namedParameterUSRs)
+        )
+        let externalLabelComponentByParameterUSR = Dictionary(
+            uniqueKeysWithValues: parameterExternalLabelComponentFacts.components.flatMap {
+                component in
+                component.namedParameterUSRs.map { ($0, component) }
+            }
+        )
         let codingKeyComponents = Self.codingKeyPreservationComponents(
             indexedFacts: indexedFacts,
             groupsByUSR: groupsByUSR,
@@ -209,6 +226,9 @@ public struct RenamePlanner {
         var processedCoordinatedComponents: Set<String> = []
 
         for group in groups {
+            if externalLabelParameterUSRs.contains(group.usr) {
+                continue
+            }
             if let component = coordinatedComponentByUSR[group.usr] {
                 guard processedCoordinatedComponents.insert(component.key).inserted else {
                     continue
@@ -489,6 +509,91 @@ public struct RenamePlanner {
             ))
         }
 
+        let externalLabelPlanning = ParameterExternalLabelRenamePlanning.makeResult(
+            facts: parameterExternalLabelComponentFacts,
+            groupsByUSR: groupsByUSR,
+            indexedFacts: indexedFacts,
+            parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
+            callBindingFacts: parameterCallArgumentBindingFacts,
+            callableReferenceBindingFacts: parameterCallableReferenceBindingFacts,
+            analyzer: analyzer,
+            sourceCache: sourceCache
+        )
+        denied.append(contentsOf: externalLabelPlanning.denied)
+        for componentTemplate in externalLabelPlanning.componentTemplates {
+            guard let component = parameterExternalLabelComponentFacts.components.first(where: {
+                $0.key == componentTemplate.key
+            }) else {
+                continue
+            }
+            var mappingFailures: Set<String> = []
+            var existingNamesByOrdinal: [Int: String] = [:]
+            for ordinalTemplate in componentTemplate.ordinals {
+                let existingEntries = ordinalTemplate.parameters.compactMap {
+                    mappingStore.entry(for: $0.usr)
+                }
+                let existingNames = Set(existingEntries.map(\.obfuscatedName))
+                if existingNames.count > 1 {
+                    mappingFailures.insert(
+                        "ordinal \(ordinalTemplate.ordinal) has inconsistent persisted mappings"
+                    )
+                } else if let existingName = existingNames.first {
+                    existingNamesByOrdinal[ordinalTemplate.ordinal] = existingName
+                }
+                for parameter in ordinalTemplate.parameters {
+                    guard let existing = mappingStore.entry(for: parameter.usr) else {
+                        continue
+                    }
+                    if existing.originalName != parameter.oldName
+                        || existing.kind != "parameter" {
+                        mappingFailures.insert(
+                            "persisted mapping metadata disagrees for \(parameter.usr)"
+                        )
+                    }
+                }
+            }
+            guard mappingFailures.isEmpty else {
+                denied.append(contentsOf: ParameterExternalLabelRenamePlanning.denialDecisions(
+                    component: component,
+                    groupsByUSR: groupsByUSR,
+                    reasons: mappingFailures.sorted()
+                ))
+                continue
+            }
+
+            for ordinalTemplate in componentTemplate.ordinals {
+                let newName: String
+                if let existingName = existingNamesByOrdinal[ordinalTemplate.ordinal] {
+                    newName = existingName
+                } else {
+                    newName = nextName(for: "parameter", avoiding: reservedNames)
+                    reservedNames.insert(newName)
+                }
+                for parameter in ordinalTemplate.parameters {
+                    if mappingStore.entry(for: parameter.usr) == nil {
+                        mappingStore.record(
+                            usr: parameter.usr,
+                            originalName: parameter.oldName,
+                            obfuscatedName: newName,
+                            kind: "parameter"
+                        )
+                    }
+                    entries.append(RenamePlanEntry(
+                        usr: parameter.usr,
+                        kind: "parameter",
+                        oldName: parameter.oldName,
+                        newName: newName,
+                        replacements: parameter.replacements.map {
+                            $0.replacement(newName: newName)
+                        }.sorted { lhs, rhs in
+                            (lhs.path, lhs.byteOffset, lhs.usr)
+                                < (rhs.path, rhs.byteOffset, rhs.usr)
+                        }
+                    ))
+                }
+            }
+        }
+
         let conflictGroups = Dictionary(grouping: entries.flatMap(\.replacements)) { replacement in
             "\(replacement.path):\(replacement.byteOffset)"
         }
@@ -506,9 +611,22 @@ public struct RenamePlanner {
                 }
                 return coordinatedComponentByUSR[entry.usr]?.key
             })
+            let conflictedExternalLabelComponents = Set(entries.compactMap {
+                entry -> String? in
+                guard entry.replacements.contains(where: {
+                    conflictKeys.contains("\($0.path):\($0.byteOffset)")
+                }) else {
+                    return nil
+                }
+                return externalLabelComponentByParameterUSR[entry.usr]?.key
+            })
             entries = entries.compactMap { entry in
                 if let componentKey = coordinatedComponentByUSR[entry.usr]?.key,
                    conflictedCoordinatedComponents.contains(componentKey) {
+                    return nil
+                }
+                if let componentKey = externalLabelComponentByParameterUSR[entry.usr]?.key,
+                   conflictedExternalLabelComponents.contains(componentKey) {
                     return nil
                 }
                 return entry.replacements.contains {
@@ -529,6 +647,16 @@ public struct RenamePlanner {
                         reasons: [reason]
                     ))
                 }
+            }
+            for component in parameterExternalLabelComponentFacts.components
+            where conflictedExternalLabelComponents.contains(component.key) {
+                denied.append(contentsOf: ParameterExternalLabelRenamePlanning.denialDecisions(
+                    component: component,
+                    groupsByUSR: groupsByUSR,
+                    reasons: [
+                        "component contains a replacement conflict and was removed atomically"
+                    ]
+                ))
             }
         }
 
@@ -555,6 +683,11 @@ public struct RenamePlanner {
             parameterCallableReferenceBindingFacts:
                 parameterCallableReferenceBindingFacts.summary,
             parameterExternalLabelComponentFacts: parameterExternalLabelComponentFacts.summary,
+            parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary(
+                components: parameterExternalLabelComponentFacts.components,
+                entries: entries,
+                decisions: denied
+            ),
             parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary(
                 candidateUSRs: parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs,
                 entries: entries,

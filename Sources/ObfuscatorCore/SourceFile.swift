@@ -162,6 +162,20 @@ public func isPlainSwiftIdentifier(_ value: String) -> Bool {
     return !SwiftKeywords.all.contains(value)
 }
 
+/// Returns whether `value` is an unescaped ASCII argument-label token.
+///
+/// Swift permits contextual use of keywords such as `for` and `in` as
+/// argument labels. They are not plain declaration identifiers, but they are
+/// still exact source tokens that can be renamed when declaration and use-site
+/// labels are coordinated semantically.
+public func isPlainSwiftArgumentLabel(_ value: String) -> Bool {
+    let bytes = [UInt8](value.utf8)
+    guard let first = bytes.first, isIdentifierHead(first) else {
+        return false
+    }
+    return bytes.allSatisfy(isIdentifierBody)
+}
+
 private func isIdentifierHead(_ byte: UInt8) -> Bool {
     (byte >= UInt8(ascii: "A") && byte <= UInt8(ascii: "Z"))
         || (byte >= UInt8(ascii: "a") && byte <= UInt8(ascii: "z"))

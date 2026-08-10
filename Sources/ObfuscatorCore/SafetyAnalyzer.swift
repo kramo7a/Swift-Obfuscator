@@ -55,7 +55,9 @@ public struct SafetyAnalyzer: Sendable {
         coordinatedProtocolRequirementUSRs: Set<String> = [],
         serializationKeyPreservedUSRs: Set<String> = [],
         propertyWrapperSupportedUSRs: Set<String> = [],
-        localBindingOnlyParameterUSRs: Set<String> = []
+        localBindingOnlyParameterUSRs: Set<String> = [],
+        coordinatedExternalLabelParameterUSRs: Set<String> = [],
+        externalLabelOnlyParameterUSRs: Set<String> = []
     ) -> SafetyDecision {
         var reasons: [String] = []
         var tokenNames: Set<String> = []
@@ -73,7 +75,11 @@ public struct SafetyAnalyzer: Sendable {
         }
         let isSupportedLocalBindingParameter = group.symbol.kind == "parameter"
             && localBindingOnlyParameterUSRs.contains(group.usr)
-        if !allowedKinds.contains(group.symbol.kind) && !isSupportedLocalBindingParameter {
+        let isSupportedExternalLabelParameter = group.symbol.kind == "parameter"
+            && coordinatedExternalLabelParameterUSRs.contains(group.usr)
+        let isSupportedParameter = isSupportedLocalBindingParameter
+            || isSupportedExternalLabelParameter
+        if !allowedKinds.contains(group.symbol.kind) && !isSupportedParameter {
             reasons.append("unsupported symbol kind \(group.symbol.kind)")
         }
         if group.occurrences.isEmpty {
@@ -140,10 +146,13 @@ public struct SafetyAnalyzer: Sendable {
                 reasons.append("identifier token unavailable at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
                 continue
             }
+            let isExternalLabelOnlyUnderscore = isSupportedExternalLabelParameter
+                && externalLabelOnlyParameterUSRs.contains(group.usr)
+                && token.name == "_"
             if token.isBackticked {
                 reasons.append("backticked identifier \(token.name)")
             }
-            if !isPlainSwiftIdentifier(token.name) {
+            if !isExternalLabelOnlyUnderscore && !isPlainSwiftIdentifier(token.name) {
                 reasons.append("non-plain identifier \(token.name)")
             }
             tokenNames.insert(token.name)
@@ -153,7 +162,7 @@ public struct SafetyAnalyzer: Sendable {
                    declarationLineLooksGenericTypeParameter(source: source, occurrence: occurrence, token: token) {
                     reasons.append("generic type parameter occurrences are incomplete")
                 }
-                if isLanguageRequiredDeclarationName(token.name) {
+                if Self.isLanguageRequiredDeclarationName(token.name) {
                     reasons.append("language-required declaration name \(token.name)")
                 }
                 if group.symbol.kind == "class", interfaceBuilderClassNames.contains(token.name) {
@@ -244,7 +253,7 @@ public struct SafetyAnalyzer: Sendable {
         }
     }
 
-    private func isLanguageRequiredDeclarationName(_ name: String) -> Bool {
+    static func isLanguageRequiredDeclarationName(_ name: String) -> Bool {
         let names: Set<String> = [
             "wrappedValue",
             "projectedValue",

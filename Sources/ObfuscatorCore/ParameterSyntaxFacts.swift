@@ -658,8 +658,19 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         return .visitChildren
     }
 
+    override func visit(
+        _ node: ClosureShorthandParameterSyntax
+    ) -> SyntaxVisitorContinueKind {
+        guard let localBinding = sourceToken(node.name),
+              localBinding.name != "_" else {
+            return .visitChildren
+        }
+        bindingDeclarations.append(localBinding)
+        return .visitChildren
+    }
+
     override func visit(_ node: DeclReferenceExprSyntax) -> SyntaxVisitorContinueKind {
-        if !isMemberAccessName(node), let token = sourceToken(node.baseName) {
+        if !isQualifiedReferenceName(node), let token = sourceToken(node.baseName) {
             declarationReferences.append(token)
         }
         return .visitChildren
@@ -887,12 +898,16 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         firstName.name == "_" ? .omitted(firstName) : .named(firstName)
     }
 
-    private func isMemberAccessName(_ node: DeclReferenceExprSyntax) -> Bool {
-        guard let memberAccess = node.parent?.as(MemberAccessExprSyntax.self) else {
-            return false
+    private func isQualifiedReferenceName(_ node: DeclReferenceExprSyntax) -> Bool {
+        if let memberAccess = node.parent?.as(MemberAccessExprSyntax.self) {
+            return node.baseName.positionAfterSkippingLeadingTrivia
+                == memberAccess.declName.baseName.positionAfterSkippingLeadingTrivia
         }
-        return node.baseName.positionAfterSkippingLeadingTrivia
-            == memberAccess.declName.baseName.positionAfterSkippingLeadingTrivia
+        if let keyPathComponent = node.parent?.as(KeyPathPropertyComponentSyntax.self) {
+            return node.baseName.positionAfterSkippingLeadingTrivia
+                == keyPathComponent.declName.baseName.positionAfterSkippingLeadingTrivia
+        }
+        return false
     }
 
     private func sourceToken(_ token: TokenSyntax) -> SourceTokenRange? {

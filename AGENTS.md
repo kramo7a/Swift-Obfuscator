@@ -135,6 +135,18 @@ All parameter USRs at one eligible ordinal receive one coordinated replacement
 name across declarations, body references, calls, full-name references, and
 subscript labels.
 
+Some labels are Swift language entry points, not ordinary API spelling.
+`subscript(dynamicMember:)` and property-wrapper `init(wrappedValue:)` must
+remain unchanged even when every declaration and call is local. Constructor
+coverage must also account for source-local subtype descendants from
+IndexStoreDB `baseOf` relations: an inherited initializer call may have no
+indexed call occurrence for the declaring owner, so a descendant missing from
+the coordinated constructor component denies that component. In lexical
+parameter analysis, key-path member tokens are member references rather than
+local-binding references, while shorthand closure parameters are shadowing
+declarations. Keep these distinctions syntax-node based and covered by focused
+regressions.
+
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 
 

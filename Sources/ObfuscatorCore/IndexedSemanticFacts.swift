@@ -26,6 +26,7 @@ public struct IndexedSemanticFacts: Sendable {
     let ownerUSRsByChild: [String: Set<String>]
     let childUSRsByOwner: [String: Set<String>]
     let extensionTargetUSRs: [String: Set<String>]
+    let nominalSubtypeUSRsByBase: [String: Set<String>]
 
     public init(
         selectedDeclarationUSRs: Set<String> = [],
@@ -58,6 +59,7 @@ public struct IndexedSemanticFacts: Sendable {
         self.ownerUSRsByChild = [:]
         self.childUSRsByOwner = [:]
         self.extensionTargetUSRs = [:]
+        self.nominalSubtypeUSRsByBase = [:]
     }
 
     public init(snapshot: IndexSnapshot, obfuscationRoots: [URL]) {
@@ -74,6 +76,7 @@ public struct IndexedSemanticFacts: Sendable {
         var ownerUSRsByChild: [String: Set<String>] = [:]
         var childUSRsByOwner: [String: Set<String>] = [:]
         var extensionTargetUSRs: [String: Set<String>] = [:]
+        var nominalSubtypeUSRsByBase: [String: Set<String>] = [:]
         var overrideRelationNeighbors: [String: Set<String>] = [:]
         var runtimeDispatchNeighbors: [String: Set<String>] = [:]
         var storedPropertyUSRs: Set<String> = []
@@ -154,6 +157,15 @@ public struct IndexedSemanticFacts: Sendable {
 
             for relation in occurrence.relations where relation.roles.contains("extendedBy") {
                 extensionTargetUSRs[relation.usr, default: []].insert(occurrence.usr)
+            }
+            if occurrence.symbol.kind == "class",
+               Self.isPath(occurrence.path, underRootPaths: rootPaths) {
+                for relation in occurrence.relations
+                where relation.roles.contains("baseOf")
+                    && symbolsByUSR[relation.usr]?.kind == "class" {
+                    nominalSubtypeUSRsByBase[occurrence.usr, default: []]
+                        .insert(relation.usr)
+                }
             }
             for relation in occurrence.relations {
                 let occurrenceIsSynthetic = Self.isSyntheticAccessorName(occurrence.symbol.name)
@@ -295,6 +307,7 @@ public struct IndexedSemanticFacts: Sendable {
         self.ownerUSRsByChild = ownerUSRsByChild
         self.childUSRsByOwner = childUSRsByOwner
         self.extensionTargetUSRs = extensionTargetUSRs
+        self.nominalSubtypeUSRsByBase = nominalSubtypeUSRsByBase
     }
 
     func nominalOwnerUSR(of childUSR: String) -> String? {
@@ -311,6 +324,13 @@ public struct IndexedSemanticFacts: Sendable {
 
     func directStoredPropertyUSRs(of ownerUSR: String) -> Set<String> {
         Set((childUSRsByOwner[ownerUSR] ?? []).filter(storedPropertyUSRs.contains))
+    }
+
+    func nominalDescendantUSRs(of baseUSR: String) -> Set<String> {
+        Self.descendants(
+            of: nominalSubtypeUSRsByBase[baseUSR] ?? [],
+            childUSRsByOwner: nominalSubtypeUSRsByBase
+        )
     }
 
     func qualifiedNominalOwnerUSRs(for ownerUSR: String) -> [String]? {

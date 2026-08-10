@@ -9,6 +9,8 @@ public enum ParameterExternalLabelComponentBlocker: String, Codable, Hashable, S
     case incompleteParameterSyntax
     case unsafeLocalBindingScope
     case backtickedIdentifier
+    case languageRequiredExternalLabel
+    case incompleteInheritedConstructorCoverage
     case incompleteCallBindings
     case incompleteCallableReferenceBindings
     case inconsistentRelatedSignature
@@ -168,6 +170,80 @@ public struct ParameterExternalLabelComponentFactsSummary: Codable, Equatable, S
     }
 }
 
+public struct DeniedParameterExternalLabelRenameOutcome: Codable, Equatable, Sendable {
+    public let key: String
+    public let parameterUSRs: [String]
+    public let reasons: [String]
+}
+
+public struct ParameterExternalLabelRenameOutcomeSummary: Codable, Equatable, Sendable {
+    public let candidateAtomicComponents: Int
+    public let candidateParameterUSRs: Int
+    public let renamedAtomicComponents: Int
+    public let renamedParameterUSRs: Int
+    public let deniedAtomicComponents: Int
+    public let deniedParameterUSRs: Int
+    public let unclassifiedAtomicComponents: Int
+    public let unclassifiedParameterUSRs: Int
+    public let deniedComponents: [DeniedParameterExternalLabelRenameOutcome]
+
+    public static let empty = ParameterExternalLabelRenameOutcomeSummary(
+        components: [],
+        entries: [],
+        decisions: []
+    )
+
+    init(
+        components: [ParameterExternalLabelRenameComponent],
+        entries: [RenamePlanEntry],
+        decisions: [SafetyDecision]
+    ) {
+        let candidates = components.filter(\.isEligible)
+        let renamedUSRs = Set(entries.map(\.usr))
+        let decisionsByUSR = Dictionary(
+            decisions.map { ($0.usr, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let candidateUSRs = Set(candidates.flatMap(\.namedParameterUSRs))
+        let renamedCandidateUSRs = candidateUSRs.intersection(renamedUSRs)
+        let deniedCandidateUSRs = candidateUSRs.intersection(decisionsByUSR.keys)
+        let unclassifiedUSRs = candidateUSRs
+            .subtracting(renamedCandidateUSRs)
+            .subtracting(deniedCandidateUSRs)
+        let renamedComponents = candidates.filter {
+            $0.namedParameterUSRs.isSubset(of: renamedCandidateUSRs)
+        }
+        let deniedComponents = candidates.filter {
+            !$0.namedParameterUSRs.isDisjoint(with: deniedCandidateUSRs)
+        }
+        let unclassifiedComponents = candidates.filter {
+            !$0.namedParameterUSRs.isDisjoint(with: unclassifiedUSRs)
+        }
+
+        self.candidateAtomicComponents = candidates.count
+        self.candidateParameterUSRs = candidateUSRs.count
+        self.renamedAtomicComponents = renamedComponents.count
+        self.renamedParameterUSRs = renamedCandidateUSRs.count
+        self.deniedAtomicComponents = deniedComponents.count
+        self.deniedParameterUSRs = deniedCandidateUSRs.count
+        self.unclassifiedAtomicComponents = unclassifiedComponents.count
+        self.unclassifiedParameterUSRs = unclassifiedUSRs.count
+        self.deniedComponents = deniedComponents.map { component in
+            let parameterUSRs = component.namedParameterUSRs
+                .intersection(deniedCandidateUSRs)
+                .sorted()
+            let reasons = Array(Set(parameterUSRs.flatMap {
+                decisionsByUSR[$0]?.reasons ?? []
+            })).sorted()
+            return DeniedParameterExternalLabelRenameOutcome(
+                key: component.key,
+                parameterUSRs: parameterUSRs,
+                reasons: reasons
+            )
+        }.sorted { $0.key < $1.key }
+    }
+}
+
 public struct ParameterExternalLabelComponentFacts: Sendable {
     public let components: [ParameterExternalLabelRenameComponent]
     public let summary: ParameterExternalLabelComponentFactsSummary
@@ -187,7 +263,7 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
         let targetCallableUSRs = Set(callableComponents.compactMap { component -> String? in
             component.members.contains { member in
                 if case .named = member.externalLabel {
-                    return true
+                    return parameterRolesByUSR[member.parameterUSR]?.kind != .accessor
                 }
                 return false
             } ? component.callableUSR : nil
@@ -342,6 +418,34 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
             }
         }
 
+        let constructorComponents = sourceComponents.filter {
+            $0.callableKind == "constructor"
+        }
+        if !constructorComponents.isEmpty {
+            let coveredOwnerUSRs = Set(sourceComponents.compactMap {
+                indexedFacts.nominalOwnerUSR(of: $0.callableUSR)
+            })
+            for component in constructorComponents {
+                guard let ownerUSR = indexedFacts.nominalOwnerUSR(
+                    of: component.callableUSR
+                ) else {
+                    continue
+                }
+                let uncoveredDescendants = indexedFacts
+                    .nominalDescendantUSRs(of: ownerUSR)
+                    .subtracting(coveredOwnerUSRs)
+                if !uncoveredDescendants.isEmpty {
+                    blockers.insert(.incompleteInheritedConstructorCoverage)
+                    for descendantUSR in uncoveredDescendants.sorted() {
+                        details.insert(
+                            "constructor label may be inherited by an uncovered subtype: "
+                                + descendantUSR
+                        )
+                    }
+                }
+            }
+        }
+
         var ordinalComponents: [ParameterExternalLabelOrdinalComponent] = []
         if let first = sourceComponents.first {
             let parameterCounts = Set(sourceComponents.map { $0.members.count })
@@ -367,6 +471,22 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
                     }
                     switch label {
                     case .named(let name):
+                        if first.ownerCategory == .subscriptDeclaration,
+                           name == "dynamicMember" {
+                            blockers.insert(.languageRequiredExternalLabel)
+                            details.insert(
+                                "Swift dynamic-member lookup requires "
+                                    + "subscript(dynamicMember:) at ordinal \(ordinal)"
+                            )
+                        }
+                        if first.callableKind == "constructor",
+                           name == "wrappedValue" {
+                            blockers.insert(.languageRequiredExternalLabel)
+                            details.insert(
+                                "Swift property-wrapper initialization requires "
+                                    + "init(wrappedValue:) at ordinal \(ordinal)"
+                            )
+                        }
                         ordinalComponents.append(ParameterExternalLabelOrdinalComponent(
                             ordinal: ordinal,
                             originalLabel: name,

@@ -1566,8 +1566,10 @@ import Testing
     let lhsEntry = try #require(plan.entries.first { $0.usr == lhs.usr })
     let rhsEntry = try #require(plan.entries.first { $0.usr == rhs.usr })
     let indexEntry = try #require(plan.entries.first { $0.usr == index.usr })
-    #expect(Set(plan.entries.map(\.usr)) == [lhs.usr, rhs.usr, index.usr])
-    #expect(plan.denied.contains { $0.usr == localIndex.usr })
+    let localIndexEntry = try #require(plan.entries.first { $0.usr == localIndex.usr })
+    #expect(Set(plan.entries.map(\.usr)) == [
+        lhs.usr, rhs.usr, index.usr, localIndex.usr
+    ])
     #expect(lhsEntry.replacements.count == 2)
     #expect(rhsEntry.replacements.count == 2)
     #expect(indexEntry.replacements.count == 2)
@@ -1580,7 +1582,9 @@ import Testing
         "static func + (\(lhsEntry.newName): Sample, \(rhsEntry.newName): Sample)"
     ))
     #expect(patched.contains("subscript(\(indexEntry.newName): Int)"))
-    #expect(patched.contains("subscript(label localIndex: Int)"))
+    #expect(patched.contains(
+        "subscript(\(localIndexEntry.newName) \(localIndexEntry.newName): Int)"
+    ))
 }
 
 @Test func renamePlannerRenamesOnlyParametersWhoseExternalLabelIsAlreadyAbsent() throws {
@@ -2478,6 +2482,807 @@ import Testing
     })
     #expect(!externalComponent.isEligible)
     #expect(externalComponent.blockers == [.relationLeavesSelectedSourceRoots])
+}
+
+@Test func renamePlannerCoordinatesExternalLabelsAcrossProtocolDeclarationsAndUses() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("ExternalLabels.swift")
+    let lines = [
+        "protocol Service {",
+        "    func send(wire requirementValue: Int)",
+        "}",
+        "struct ServiceImpl: Service {",
+        "    func send(wire localValue: Int) {",
+        "        _ = localValue",
+        "    }",
+        "}",
+        "func exercise(service: Service) {",
+        "    service.send(wire: 1)",
+        "    _ = Service.send(wire:)",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+
+    let service = symbol("usr-service", "Service", "protocol")
+    let implementation = symbol("usr-service-impl", "ServiceImpl", "struct")
+    let requirement = symbol("usr-send-requirement", "send(wire:)", "instanceMethod")
+    let witness = symbol("usr-send-witness", "send(wire:)", "instanceMethod")
+    let requirementValue = symbol(
+        "usr-requirement-value",
+        "requirementValue",
+        "parameter"
+    )
+    let localValue = symbol("usr-local-value", "localValue", "parameter")
+
+    func relation(_ symbol: SymbolRecord, role: String) -> RelationRecord {
+        RelationRecord(
+            usr: symbol.usr,
+            name: symbol.name,
+            rolesRaw: 0,
+            roles: [role]
+        )
+    }
+
+    let occurrences = [
+        testOccurrence(
+            service,
+            path: file.path,
+            line: 1,
+            token: "Service",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            implementation,
+            path: file.path,
+            line: 4,
+            token: "ServiceImpl",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            requirement,
+            path: file.path,
+            line: 2,
+            token: "send",
+            roles: ["definition"],
+            relations: [
+                relation(service, role: "childOf"),
+                relation(witness, role: "baseOf")
+            ]
+        ),
+        testOccurrence(
+            witness,
+            path: file.path,
+            line: 5,
+            token: "send",
+            roles: ["definition"],
+            relations: [
+                relation(implementation, role: "childOf"),
+                relation(requirement, role: "overrideOf")
+            ]
+        ),
+        testOccurrence(
+            requirement,
+            path: file.path,
+            line: 10,
+            token: "send",
+            roles: ["reference", "call"]
+        ),
+        testOccurrence(
+            requirement,
+            path: file.path,
+            line: 11,
+            token: "send",
+            roles: ["reference"]
+        ),
+        testOccurrence(
+            requirementValue,
+            path: file.path,
+            line: 2,
+            token: "requirementValue",
+            roles: ["definition"],
+            relations: [relation(requirement, role: "childOf")]
+        ),
+        testOccurrence(
+            localValue,
+            path: file.path,
+            line: 5,
+            token: "localValue",
+            roles: ["definition"],
+            relations: [relation(witness, role: "childOf")]
+        ),
+        testOccurrence(
+            localValue,
+            path: file.path,
+            line: 6,
+            token: "localValue",
+            roles: ["reference", "read"]
+        )
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [
+            service, implementation, requirement, witness,
+            requirementValue, localValue
+        ],
+        occurrences: occurrences
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let requirementEntry = try #require(plan.entries.first {
+        $0.usr == requirementValue.usr
+    })
+    let witnessEntry = try #require(plan.entries.first { $0.usr == localValue.usr })
+    #expect(requirementEntry.newName == witnessEntry.newName)
+    #expect(requirementEntry.newName.first?.isLowercase == true)
+    #expect(Set(requirementEntry.replacements.map(\.oldName)) == [
+        "wire", "requirementValue"
+    ])
+    #expect(Set(witnessEntry.replacements.map(\.oldName)) == ["wire", "localValue"])
+    #expect(plan.conflicts.isEmpty)
+    #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 1)
+    #expect(plan.parameterExternalLabelRenameOutcome.candidateParameterUSRs == 2)
+    #expect(plan.parameterExternalLabelRenameOutcome.renamedAtomicComponents == 1)
+    #expect(plan.parameterExternalLabelRenameOutcome.renamedParameterUSRs == 2)
+    #expect(plan.parameterExternalLabelRenameOutcome.deniedAtomicComponents == 0)
+    #expect(plan.parameterExternalLabelRenameOutcome.unclassifiedParameterUSRs == 0)
+
+    try SourcePatcher().apply(
+        [requirementEntry, witnessEntry].flatMap(\.replacements)
+    )
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    let newName = requirementEntry.newName
+    #expect(patched.contains("func send(\(newName) \(newName): Int)"))
+    #expect(patched.contains("_ = \(newName)"))
+    #expect(patched.contains("service.send(\(newName): 1)"))
+    #expect(patched.contains("Service.send(\(newName):)"))
+}
+
+@Test func renamePlannerRenamesInitializerLabelWithoutInventingALocalBinding() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("InitializerLabel.swift")
+    let lines = [
+        "struct Sink {",
+        "    init(event _: Int) {}",
+        "}",
+        "let sink = Sink(event: 1)"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+
+    let sink = symbol("usr-sink", "Sink", "struct")
+    let initializer = symbol("usr-sink-init", "init(event:)", "constructor")
+    let event = symbol("usr-event", "_", "parameter")
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(
+            usr: owner.usr,
+            name: owner.name,
+            rolesRaw: 0,
+            roles: ["childOf"]
+        )
+    }
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [sink, initializer, event],
+        occurrences: [
+            testOccurrence(
+                sink,
+                path: file.path,
+                line: 1,
+                token: "Sink",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                initializer,
+                path: file.path,
+                line: 2,
+                token: "init",
+                roles: ["definition"],
+                relations: [childOf(sink)]
+            ),
+            testOccurrence(
+                initializer,
+                path: file.path,
+                line: 4,
+                token: "Sink",
+                roles: ["reference", "call"]
+            ),
+            testOccurrence(
+                event,
+                path: file.path,
+                line: 2,
+                token: "_",
+                roles: ["definition"],
+                relations: [childOf(initializer)]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == event.usr })
+    #expect(entry.oldName == "event")
+    #expect(Set(entry.replacements.map(\.oldName)) == ["event"])
+    #expect(entry.replacements.count == 2)
+    #expect(!entry.replacements.contains { $0.oldName == "_" })
+    #expect(plan.parameterExternalLabelRenameOutcome.renamedParameterUSRs == 1)
+    #expect(plan.parameterExternalLabelRenameOutcome.deniedParameterUSRs == 0)
+
+    try SourcePatcher().apply(entry.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("init(\(entry.newName) _: Int)"))
+    #expect(patched.contains("Sink(\(entry.newName): 1)"))
+}
+
+@Test func renamePlannerCoordinatesKeywordArgumentLabels() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("KeywordArgumentLabel.swift")
+    let lines = [
+        "func route(for value: Int) {",
+        "    _ = value",
+        "}",
+        "route(for: 1)"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    let route = symbol("usr-route", "route(for:)", "function")
+    let value = symbol("usr-route-value", "value", "parameter")
+    let childOfRoute = RelationRecord(
+        usr: route.usr,
+        name: route.name,
+        rolesRaw: 0,
+        roles: ["childOf"]
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [route, value],
+        occurrences: [
+            testOccurrence(
+                route,
+                path: file.path,
+                line: 1,
+                token: "route",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                route,
+                path: file.path,
+                line: 4,
+                token: "route",
+                roles: ["reference", "call"]
+            ),
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 1,
+                token: "value",
+                roles: ["definition"],
+                relations: [childOfRoute]
+            ),
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 2,
+                token: "value",
+                roles: ["reference", "read"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(Set(entry.replacements.map(\.oldName)) == ["for", "value"])
+    #expect(entry.replacements.count == 4)
+    #expect(plan.parameterExternalLabelRenameOutcome.renamedParameterUSRs == 1)
+    #expect(plan.parameterExternalLabelRenameOutcome.deniedParameterUSRs == 0)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(entry.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("func route(\(entry.newName) \(entry.newName): Int)"))
+    #expect(patched.contains("_ = \(entry.newName)"))
+    #expect(patched.contains("route(\(entry.newName): 1)"))
+}
+
+@Test func externalLabelComponentFailsClosedForShorthandClosureShadowing() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("ClosureShadow.swift")
+    let lines = [
+        "func compute(state: Int, commands: (Int) -> Void) {",
+        "    work { state in commands(state) }",
+        "}",
+        "compute(state: 1, commands: { _ in })"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    let compute = symbol(
+        "usr-shadowed-compute",
+        "compute(state:commands:)",
+        "function"
+    )
+    let state = symbol("usr-shadowed-state", "state", "parameter")
+    let commands = symbol("usr-shadowed-commands", "commands", "parameter")
+    func childOfCompute() -> RelationRecord {
+        RelationRecord(
+            usr: compute.usr,
+            name: compute.name,
+            rolesRaw: 0,
+            roles: ["childOf"]
+        )
+    }
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [compute, state, commands],
+        occurrences: [
+            testOccurrence(
+                compute,
+                path: file.path,
+                line: 1,
+                token: "compute",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                compute,
+                path: file.path,
+                line: 4,
+                token: "compute",
+                roles: ["reference", "call"]
+            ),
+            testOccurrence(
+                state,
+                path: file.path,
+                line: 1,
+                token: "state",
+                roles: ["definition"],
+                relations: [childOfCompute()]
+            ),
+            testOccurrence(
+                commands,
+                path: file.path,
+                line: 1,
+                token: "commands",
+                roles: ["definition"],
+                relations: [childOfCompute()]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    #expect(!plan.entries.contains { $0.usr == state.usr || $0.usr == commands.usr })
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 1)
+    #expect(plan.parameterExternalLabelComponentFacts.deniedAtomicComponents == 1)
+    #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
+        "unsafeLocalBindingScope": 1
+    ])
+    #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 0)
+    #expect(plan.conflicts.isEmpty)
+}
+
+@Test func externalLabelComponentPreservesDynamicMemberLookupLabel() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("DynamicMember.swift")
+    let lines = [
+        "struct Root { let value: Int }",
+        "@dynamicMemberLookup",
+        "struct Wrapper {",
+        "    let root: Root",
+        "    subscript<T>(dynamicMember keyPath: KeyPath<Root, T>) -> T {",
+        "        root[keyPath: keyPath]",
+        "    }",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    let wrapper = symbol("usr-dynamic-wrapper", "Wrapper", "struct")
+    let dynamicSubscript = symbol(
+        "usr-dynamic-subscript",
+        "subscript(dynamicMember:)",
+        "instanceProperty"
+    )
+    let keyPath = symbol("usr-dynamic-key-path", "keyPath", "parameter")
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(
+            usr: owner.usr,
+            name: owner.name,
+            rolesRaw: 0,
+            roles: ["childOf"]
+        )
+    }
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [wrapper, dynamicSubscript, keyPath],
+        occurrences: [
+            testOccurrence(
+                wrapper,
+                path: file.path,
+                line: 3,
+                token: "Wrapper",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                dynamicSubscript,
+                path: file.path,
+                line: 5,
+                token: "subscript",
+                roles: ["definition"],
+                relations: [childOf(wrapper)]
+            ),
+            testOccurrence(
+                keyPath,
+                path: file.path,
+                line: 5,
+                token: "keyPath",
+                roles: ["definition"],
+                relations: [childOf(dynamicSubscript)]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    #expect(!plan.entries.contains { $0.usr == keyPath.usr })
+    #expect(plan.parameterExternalLabelComponentFacts.deniedAtomicComponents == 1)
+    #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
+        "languageRequiredExternalLabel": 1
+    ])
+    #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 0)
+    #expect(plan.conflicts.isEmpty)
+}
+
+@Test func parameterSyntaxFactsExcludeKeyPathMembersFromLocalBindingReferences() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("KeyPathMember.swift")
+    let lines = [
+        "struct Model { var position: Int }",
+        "func inspect(_ position: Int) {",
+        "    _ = \\Model.position",
+        "    print(position)",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let position = SymbolRecord(
+        usr: "usr-key-path-position",
+        name: "position",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [position],
+        occurrences: [
+            testOccurrence(
+                position,
+                path: file.path,
+                line: 2,
+                token: "position",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == position.usr })
+    #expect(entry.replacements.count == 2)
+    #expect(plan.parameterSyntaxFacts.localBindingReferenceTokens == 1)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(entry.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("func inspect(_ \(entry.newName): Int)"))
+    #expect(patched.contains("\\Model.position"))
+    #expect(patched.contains("print(\(entry.newName))"))
+}
+
+@Test func externalLabelComponentPreservesPropertyWrapperInitializerLabel() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("PropertyWrapperInitializer.swift")
+    let lines = [
+        "@propertyWrapper",
+        "struct Wrapper<Value> {",
+        "    var wrappedValue: Value",
+        "    init(wrappedValue value: Value) {",
+        "        wrappedValue = value",
+        "    }",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    let wrapper = symbol("usr-wrapper", "Wrapper", "struct")
+    let initializer = symbol(
+        "usr-wrapper-initializer",
+        "init(wrappedValue:)",
+        "constructor"
+    )
+    let value = symbol("usr-wrapper-value", "value", "parameter")
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(
+            usr: owner.usr,
+            name: owner.name,
+            rolesRaw: 0,
+            roles: ["childOf"]
+        )
+    }
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [wrapper, initializer, value],
+        occurrences: [
+            testOccurrence(
+                wrapper,
+                path: file.path,
+                line: 2,
+                token: "Wrapper",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                initializer,
+                path: file.path,
+                line: 4,
+                token: "init",
+                roles: ["definition"],
+                relations: [childOf(wrapper)]
+            ),
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 4,
+                token: "value",
+                roles: ["definition"],
+                relations: [childOf(initializer)]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    #expect(!plan.entries.contains { $0.usr == value.usr })
+    #expect(plan.parameterExternalLabelComponentFacts.deniedAtomicComponents == 1)
+    #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
+        "languageRequiredExternalLabel": 1
+    ])
+    #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 0)
+    #expect(plan.conflicts.isEmpty)
+}
+
+@Test func externalLabelComponentDeniesUncoveredInheritedConstructorCalls() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("InheritedInitializer.swift")
+    let lines = [
+        "class Base {",
+        "    init(session: Int, url: String) {}",
+        "    convenience init(session: Int) {",
+        "        self.init(session: session, url: \"\")",
+        "    }",
+        "}",
+        "class Child: Base {}",
+        "let child = Child(session: 1)"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    let base = symbol("usr-inherited-base", "Base", "class")
+    let child = symbol("usr-inherited-child", "Child", "class")
+    let initializer = symbol(
+        "usr-inherited-convenience-initializer",
+        "init(session:)",
+        "constructor"
+    )
+    let session = symbol("usr-inherited-session", "session", "parameter")
+    func relation(_ owner: SymbolRecord, role: String) -> RelationRecord {
+        RelationRecord(
+            usr: owner.usr,
+            name: owner.name,
+            rolesRaw: 0,
+            roles: [role]
+        )
+    }
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [base, child, initializer, session],
+        occurrences: [
+            testOccurrence(
+                base,
+                path: file.path,
+                line: 1,
+                token: "Base",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                child,
+                path: file.path,
+                line: 7,
+                token: "Child",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                base,
+                path: file.path,
+                line: 7,
+                token: "Base",
+                roles: ["reference", "baseOf"],
+                relations: [relation(child, role: "baseOf")]
+            ),
+            testOccurrence(
+                initializer,
+                path: file.path,
+                line: 3,
+                token: "init",
+                roles: ["definition"],
+                relations: [relation(base, role: "childOf")]
+            ),
+            testOccurrence(
+                session,
+                path: file.path,
+                line: 3,
+                token: "session",
+                roles: ["definition"],
+                relations: [relation(initializer, role: "childOf")]
+            ),
+            testOccurrence(
+                child,
+                path: file.path,
+                line: 8,
+                token: "Child",
+                roles: ["reference"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    #expect(!plan.entries.contains { $0.usr == session.usr })
+    #expect(plan.parameterExternalLabelComponentFacts.deniedAtomicComponents == 1)
+    #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
+        "incompleteInheritedConstructorCoverage": 1
+    ])
+    #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 0)
+    #expect(plan.conflicts.isEmpty)
 }
 
 @Test func parameterCallArgumentBindingsResolveDefaultsVariadicsAndTrailingClosures() throws {
