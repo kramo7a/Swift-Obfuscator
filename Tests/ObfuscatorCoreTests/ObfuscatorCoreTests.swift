@@ -1090,6 +1090,11 @@ import Testing
     )
     #expect(facts.unresolvedReasonsByUSR.isEmpty)
     #expect(facts.rolesByUSR.count == 9)
+    #expect(facts.localBindingOnlyCoverageCandidateUSRs == [
+        nestedValue.usr,
+        nextValue.usr,
+        closureValue.usr
+    ])
 
     let outerRoles = try #require(facts.rolesByUSR[local.usr])
     #expect(outerRoles.kind == .function)
@@ -1174,6 +1179,10 @@ import Testing
     #expect(summary.parametersWithoutSourceNames == 1)
     #expect(summary.sharedLabelAndBindingTokens == 0)
     #expect(summary.distinctLabelAndBindingTokens == 5)
+    #expect(summary.localBindingOnlyCoverageCandidates == 3)
+    #expect(summary.parametersRequiringExternalLabelCoordination == 3)
+    #expect(summary.nonEnumParametersWithoutLocalBindings == 0)
+    #expect(summary.enumCaseParametersExcludedFromParameterStage == 3)
 }
 
 @Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {

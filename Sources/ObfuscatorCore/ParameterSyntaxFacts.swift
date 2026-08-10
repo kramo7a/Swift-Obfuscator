@@ -80,6 +80,10 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
     public let parametersWithoutSourceNames: Int
     public let sharedLabelAndBindingTokens: Int
     public let distinctLabelAndBindingTokens: Int
+    public let localBindingOnlyCoverageCandidates: Int
+    public let parametersRequiringExternalLabelCoordination: Int
+    public let nonEnumParametersWithoutLocalBindings: Int
+    public let enumCaseParametersExcludedFromParameterStage: Int
     public let unresolvedByReason: [String: Int]
 
     public static let empty = ParameterSyntaxFactsSummary(
@@ -124,6 +128,24 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
                 && $0.localBinding != nil
                 && !$0.sharesLabelAndBindingToken
         }
+        self.localBindingOnlyCoverageCandidates = roles.count {
+            ParameterSyntaxFacts.isLocalBindingOnlyCoverageCandidate($0)
+        }
+        self.parametersRequiringExternalLabelCoordination = roles.count { role in
+            guard role.kind != .enumCase, role.localBinding != nil else {
+                return false
+            }
+            if case .named = role.externalLabel {
+                return true
+            }
+            return false
+        }
+        self.nonEnumParametersWithoutLocalBindings = roles.count {
+            $0.kind != .enumCase && $0.localBinding == nil
+        }
+        self.enumCaseParametersExcludedFromParameterStage = roles.count {
+            $0.kind == .enumCase
+        }
         self.unresolvedByReason = Dictionary(
             grouping: unresolvedReasonsByUSR.values,
             by: { $0 }
@@ -133,6 +155,7 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
 
 public struct ParameterSyntaxFacts: Sendable {
     public let rolesByUSR: [String: ParameterDeclarationSyntaxRoles]
+    public let localBindingOnlyCoverageCandidateUSRs: Set<String>
     public let unresolvedReasonsByUSR: [String: String]
     public let summary: ParameterSyntaxFactsSummary
 
@@ -258,6 +281,11 @@ public struct ParameterSyntaxFacts: Sendable {
         }
 
         self.rolesByUSR = rolesByUSR
+        self.localBindingOnlyCoverageCandidateUSRs = Set(
+            rolesByUSR.compactMap { usr, role in
+                Self.isLocalBindingOnlyCoverageCandidate(role) ? usr : nil
+            }
+        )
         self.unresolvedReasonsByUSR = unresolvedReasonsByUSR
         self.summary = ParameterSyntaxFactsSummary(
             explicitParameters: declarationsByUSR.count,
@@ -270,6 +298,20 @@ public struct ParameterSyntaxFacts: Sendable {
         let canonicalPath = SourcePathNormalizer.canonicalPath(path)
         return rootPaths.contains { rootPath in
             canonicalPath == rootPath || canonicalPath.hasPrefix(rootPath + "/")
+        }
+    }
+
+    static func isLocalBindingOnlyCoverageCandidate(
+        _ role: ParameterDeclarationSyntaxRoles
+    ) -> Bool {
+        guard role.kind != .enumCase, role.localBinding != nil else {
+            return false
+        }
+        switch role.externalLabel {
+        case .none, .omitted:
+            return true
+        case .named:
+            return false
         }
     }
 }
