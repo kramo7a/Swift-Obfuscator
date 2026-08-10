@@ -196,7 +196,8 @@ public struct SafetyAnalyzer: Sendable {
 
     private func hasUnsafeRelation(_ relation: RelationRecord, symbolKind: String) -> Bool {
         relation.roles.contains("overrideOf")
-            || (symbolKind != "protocol" && relation.roles.contains("baseOf"))
+            || (IndexedSemanticFacts.isOverrideDispatchKind(symbolKind)
+                && relation.roles.contains("baseOf"))
             || relation.roles.contains("specializationOf")
             || relation.roles.contains("ibTypeOf")
     }
@@ -221,7 +222,7 @@ public struct SafetyAnalyzer: Sendable {
         // token. They describe dispatch edges but are not spellings of the
         // requirement/witness identifier and therefore must never be patched.
         return occurrence.relations.contains { relation in
-            relation.roles.contains("overrideOf")
+            (relation.roles.contains("overrideOf") || relation.roles.contains("baseOf"))
                 && coordinatedRelatedUSRs.contains(relation.usr)
         }
     }

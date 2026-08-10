@@ -54,25 +54,24 @@ public struct RenamePlanner {
             snapshot: snapshot,
             obfuscationRoots: analyzer.obfuscationRoots
         )
-        let overrideRelatedUSRs = Self.overrideRelatedUSRs(snapshot: snapshot)
         let tupleTypealiasRelatedUSRs = Self.tupleTypealiasRelatedUSRs(
             snapshot: snapshot,
             sourceCache: sourceCache
         )
-        let protocolComponents = Self.protocolRenameComponents(
-            snapshot: snapshot,
-            indexedFacts: indexedFacts
+        let coordinatedComponents = Self.coordinatedRenameComponents(
+            indexedFacts: indexedFacts,
+            groupsByUSR: groupsByUSR
         )
-        let protocolComponentByUSR = Dictionary(uniqueKeysWithValues: protocolComponents.flatMap { component in
+        let coordinatedComponentByUSR = Dictionary(uniqueKeysWithValues: coordinatedComponents.flatMap { component in
             component.memberUSRs.compactMap { usr in
                 groupsByUSR[usr] == nil ? nil : (usr, component)
             }
         })
-        var processedProtocolComponents: Set<String> = []
+        var processedCoordinatedComponents: Set<String> = []
 
         for group in groups {
-            if let component = protocolComponentByUSR[group.usr] {
-                guard processedProtocolComponents.insert(component.key).inserted else {
+            if let component = coordinatedComponentByUSR[group.usr] {
+                guard processedCoordinatedComponents.insert(component.key).inserted else {
                     continue
                 }
 
@@ -85,7 +84,7 @@ public struct RenamePlanner {
                         group: componentGroup,
                         sourceCache: sourceCache,
                         indexedFacts: indexedFacts,
-                        overrideRelatedUSRs: overrideRelatedUSRs,
+                        overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
                         tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs,
                         coordinatedRelatedUSRs: coordinationEnabled ? component.memberUSRs : [],
                         coordinatedProtocolRequirementUSRs: coordinationEnabled
@@ -173,7 +172,7 @@ public struct RenamePlanner {
                 }
 
                 guard failureSummaries.isEmpty, let oldName = oldNames.first else {
-                    let componentReason = Self.protocolComponentDenialReason(failureSummaries)
+                    let componentReason = component.denialReason(failureSummaries)
                     denied.append(contentsOf: zip(componentGroups, decisions).map { componentGroup, decision in
                         var reasons = decision.allowed ? [] : decision.reasons
                         reasons.append(componentReason)
@@ -235,7 +234,7 @@ public struct RenamePlanner {
                 group: group,
                 sourceCache: sourceCache,
                 indexedFacts: indexedFacts,
-                overrideRelatedUSRs: overrideRelatedUSRs,
+                overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
                 tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs
             )
             guard decision.allowed, let oldName = decision.oldName else {
@@ -316,25 +315,25 @@ public struct RenamePlanner {
         })
         if !conflictKeys.isEmpty {
             conflicts = conflictKeys.sorted()
-            let conflictedProtocolComponents = Set(entries.compactMap { entry -> String? in
+            let conflictedCoordinatedComponents = Set(entries.compactMap { entry -> String? in
                 guard entry.replacements.contains(where: {
                     conflictKeys.contains("\($0.path):\($0.byteOffset)")
                 }) else {
                     return nil
                 }
-                return protocolComponentByUSR[entry.usr]?.key
+                return coordinatedComponentByUSR[entry.usr]?.key
             })
             entries = entries.compactMap { entry in
-                if let componentKey = protocolComponentByUSR[entry.usr]?.key,
-                   conflictedProtocolComponents.contains(componentKey) {
+                if let componentKey = coordinatedComponentByUSR[entry.usr]?.key,
+                   conflictedCoordinatedComponents.contains(componentKey) {
                     return nil
                 }
                 return entry.replacements.contains {
                     conflictKeys.contains("\($0.path):\($0.byteOffset)")
                 } ? nil : entry
             }
-            for component in protocolComponents where conflictedProtocolComponents.contains(component.key) {
-                let reason = Self.protocolComponentDenialReason([
+            for component in coordinatedComponents where conflictedCoordinatedComponents.contains(component.key) {
+                let reason = component.denialReason([
                     "component contains a replacement conflict and was removed atomically"
                 ])
                 for componentGroup in groups where component.memberUSRs.contains(componentGroup.usr) {
@@ -357,56 +356,58 @@ public struct RenamePlanner {
         )
     }
 
-    private struct ProtocolRenameComponent {
+    private enum CoordinatedRenameComponentKind {
+        case protocolWitness
+        case overrideChain
+    }
+
+    private struct CoordinatedRenameComponent {
         let key: String
         let memberUSRs: Set<String>
         let protocolRequirementUSRs: Set<String>
         let structuralReasons: [String]
+
+        let kind: CoordinatedRenameComponentKind
+
+        func denialReason(_ summaries: [String]) -> String {
+            let uniqueSummaries = Array(Set(summaries)).sorted()
+            let visible = uniqueSummaries.prefix(5).joined(separator: " | ")
+            let remainder = uniqueSummaries.count - min(uniqueSummaries.count, 5)
+            let suffix = remainder > 0 ? " | plus \(remainder) more blocker(s)" : ""
+            switch kind {
+            case .protocolWitness:
+                return "protocol members require relation-aware witness renaming: coordinated component denied atomically (\(visible)\(suffix))"
+            case .overrideChain:
+                return "override relations require coordinated renaming: coordinated override/base component denied atomically (\(visible)\(suffix))"
+            }
+        }
     }
 
-    private static func protocolRenameComponents(
-        snapshot: IndexSnapshot,
-        indexedFacts: IndexedSemanticFacts
-    ) -> [ProtocolRenameComponent] {
-        let groups = snapshot.groupsByUSR
-        let groupsByUSR = Dictionary(uniqueKeysWithValues: groups.map { ($0.usr, $0) })
-        let symbolsByUSR = Dictionary(
-            snapshot.symbols.map { ($0.usr, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
+    private static func coordinatedRenameComponents(
+        indexedFacts: IndexedSemanticFacts,
+        groupsByUSR: [String: USROccurrenceGroup]
+    ) -> [CoordinatedRenameComponent] {
         let localRequirementUSRs = Set(indexedFacts.protocolRequirementUSRs.filter { usr in
             groupsByUSR[usr].map { !isSyntheticAccessorName($0.symbol.name) } == true
         })
-
-        var adjacency: [String: Set<String>] = [:]
-        for occurrence in snapshot.occurrences {
-            guard !isSyntheticAccessorName(occurrence.symbol.name) else {
-                continue
-            }
-            for relation in occurrence.relations where relation.roles.contains("overrideOf") {
-                let targetName = symbolsByUSR[relation.usr]?.name ?? relation.name
-                guard !isSyntheticAccessorName(targetName) else {
-                    continue
-                }
-                adjacency[occurrence.usr, default: []].insert(relation.usr)
-                adjacency[relation.usr, default: []].insert(occurrence.usr)
-            }
-        }
+        let componentSeeds = localRequirementUSRs.union(indexedFacts.overrideRelatedUSRs)
 
         var visited: Set<String> = []
-        var components: [ProtocolRenameComponent] = []
-        for requirementUSR in localRequirementUSRs.sorted() {
-            guard !visited.contains(requirementUSR) else {
+        var components: [CoordinatedRenameComponent] = []
+        for seedUSR in componentSeeds.sorted() {
+            guard !visited.contains(seedUSR) else {
                 continue
             }
 
             var members: Set<String> = []
-            var pending = [requirementUSR]
+            var pending = [seedUSR]
             while let usr = pending.popLast() {
                 guard members.insert(usr).inserted else {
                     continue
                 }
-                pending.append(contentsOf: (adjacency[usr] ?? []).filter { !members.contains($0) })
+                pending.append(contentsOf: (indexedFacts.overrideRelationNeighbors[usr] ?? []).filter {
+                    !members.contains($0)
+                })
             }
             visited.formUnion(members)
 
@@ -424,11 +425,13 @@ public struct RenamePlanner {
                 }
             }
 
-            components.append(ProtocolRenameComponent(
-                key: members.sorted().first ?? requirementUSR,
+            let protocolRequirementUSRs = members.intersection(localRequirementUSRs)
+            components.append(CoordinatedRenameComponent(
+                key: members.sorted().first ?? seedUSR,
                 memberUSRs: members,
-                protocolRequirementUSRs: members.intersection(localRequirementUSRs),
-                structuralReasons: Array(Set(structuralReasons)).sorted()
+                protocolRequirementUSRs: protocolRequirementUSRs,
+                structuralReasons: Array(Set(structuralReasons)).sorted(),
+                kind: protocolRequirementUSRs.isEmpty ? .overrideChain : .protocolWitness
             ))
         }
 
@@ -454,16 +457,9 @@ public struct RenamePlanner {
             return false
         }
         return occurrence.relations.contains { relation in
-            relation.roles.contains("overrideOf") && componentUSRs.contains(relation.usr)
+            (relation.roles.contains("overrideOf") || relation.roles.contains("baseOf"))
+                && componentUSRs.contains(relation.usr)
         }
-    }
-
-    private static func protocolComponentDenialReason(_ summaries: [String]) -> String {
-        let uniqueSummaries = Array(Set(summaries)).sorted()
-        let visible = uniqueSummaries.prefix(5).joined(separator: " | ")
-        let remainder = uniqueSummaries.count - min(uniqueSummaries.count, 5)
-        let suffix = remainder > 0 ? " | plus \(remainder) more blocker(s)" : ""
-        return "protocol members require relation-aware witness renaming: coordinated component denied atomically (\(visible)\(suffix))"
     }
 
     private mutating func nextName(for symbolKind: String, avoiding reservedNames: Set<String>) -> String {
@@ -494,17 +490,6 @@ public struct RenamePlanner {
 
         var result = name
         result.replaceSubrange(letterIndex...letterIndex, with: String(name[letterIndex]).lowercased())
-        return result
-    }
-
-    private static func overrideRelatedUSRs(snapshot: IndexSnapshot) -> Set<String> {
-        var result: Set<String> = []
-        for occurrence in snapshot.occurrences {
-            for relation in occurrence.relations where relation.roles.contains("overrideOf") {
-                result.insert(occurrence.usr)
-                result.insert(relation.usr)
-            }
-        }
         return result
     }
 

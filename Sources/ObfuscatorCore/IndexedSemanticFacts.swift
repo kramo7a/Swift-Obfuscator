@@ -12,17 +12,22 @@ public struct IndexedSemanticFacts: Sendable {
     public let protocolRequirementUSRs: Set<String>
     public let externallyOwnedUSRs: Set<String>
     public let runtimeSensitiveUSRs: Set<String>
+    public let overrideRelationNeighbors: [String: Set<String>]
+    public let overrideRelatedUSRs: Set<String>
 
     public init(
         selectedDeclarationUSRs: Set<String> = [],
         protocolRequirementUSRs: Set<String> = [],
         externallyOwnedUSRs: Set<String> = [],
-        runtimeSensitiveUSRs: Set<String> = []
+        runtimeSensitiveUSRs: Set<String> = [],
+        overrideRelationNeighbors: [String: Set<String>] = [:]
     ) {
         self.selectedDeclarationUSRs = selectedDeclarationUSRs
         self.protocolRequirementUSRs = protocolRequirementUSRs
         self.externallyOwnedUSRs = externallyOwnedUSRs
         self.runtimeSensitiveUSRs = runtimeSensitiveUSRs
+        self.overrideRelationNeighbors = overrideRelationNeighbors
+        self.overrideRelatedUSRs = Self.relatedUSRs(in: overrideRelationNeighbors)
     }
 
     public init(snapshot: IndexSnapshot, obfuscationRoots: [URL]) {
@@ -38,6 +43,7 @@ public struct IndexedSemanticFacts: Sendable {
         var ownerUSRsByChild: [String: Set<String>] = [:]
         var childUSRsByOwner: [String: Set<String>] = [:]
         var extensionTargetUSRs: [String: Set<String>] = [:]
+        var overrideRelationNeighbors: [String: Set<String>] = [:]
         var runtimeDispatchNeighbors: [String: Set<String>] = [:]
         var runtimeSeeds = Set(symbolsByUSR.values.compactMap { symbol -> String? in
             Self.isRuntimeSymbol(symbol) ? symbol.usr : nil
@@ -62,13 +68,27 @@ public struct IndexedSemanticFacts: Sendable {
             for relation in occurrence.relations where relation.roles.contains("extendedBy") {
                 extensionTargetUSRs[relation.usr, default: []].insert(occurrence.usr)
             }
-            for relation in occurrence.relations where
-                Self.isRuntimeDispatchKind(occurrence.symbol.kind)
-                    && (relation.roles.contains("overrideOf") || relation.roles.contains("baseOf")) {
-                runtimeDispatchNeighbors[occurrence.usr, default: []].insert(relation.usr)
-                runtimeDispatchNeighbors[relation.usr, default: []].insert(occurrence.usr)
-                if Self.isRuntimeUSR(relation.usr, symbolsByUSR: symbolsByUSR) {
-                    runtimeSeeds.insert(relation.usr)
+            for relation in occurrence.relations {
+                let occurrenceIsSynthetic = Self.isSyntheticAccessorName(occurrence.symbol.name)
+                let targetIsSynthetic = Self.isSyntheticAccessorName(
+                    symbolsByUSR[relation.usr]?.name ?? relation.name
+                )
+                guard !occurrenceIsSynthetic, !targetIsSynthetic else {
+                    continue
+                }
+
+                let isDispatchRelation = Self.isOverrideDispatchKind(occurrence.symbol.kind)
+                    && Self.isOverrideRelation(relation)
+                if relation.roles.contains("overrideOf") || isDispatchRelation {
+                    overrideRelationNeighbors[occurrence.usr, default: []].insert(relation.usr)
+                    overrideRelationNeighbors[relation.usr, default: []].insert(occurrence.usr)
+                }
+                if isDispatchRelation {
+                    runtimeDispatchNeighbors[occurrence.usr, default: []].insert(relation.usr)
+                    runtimeDispatchNeighbors[relation.usr, default: []].insert(occurrence.usr)
+                    if Self.isRuntimeUSR(relation.usr, symbolsByUSR: symbolsByUSR) {
+                        runtimeSeeds.insert(relation.usr)
+                    }
                 }
             }
         }
@@ -107,6 +127,8 @@ public struct IndexedSemanticFacts: Sendable {
             of: runtimeSeeds,
             neighbors: runtimeDispatchNeighbors
         )
+        self.overrideRelationNeighbors = overrideRelationNeighbors
+        self.overrideRelatedUSRs = Self.relatedUSRs(in: overrideRelationNeighbors)
     }
 
     private static func descendants(
@@ -144,6 +166,10 @@ public struct IndexedSemanticFacts: Sendable {
         }
     }
 
+    private static func relatedUSRs(in neighbors: [String: Set<String>]) -> Set<String> {
+        Set(neighbors.keys).union(neighbors.values.joined())
+    }
+
     private static func isRuntimeUSR(
         _ usr: String,
         symbolsByUSR: [String: SymbolRecord]
@@ -170,7 +196,7 @@ public struct IndexedSemanticFacts: Sendable {
         return !properties.intersection(runtimeProperties).isEmpty
     }
 
-    private static func isRuntimeDispatchKind(_ kind: String) -> Bool {
+    static func isOverrideDispatchKind(_ kind: String) -> Bool {
         let dispatchKinds: Set<String> = [
             "constructor",
             "instanceMethod",
@@ -181,5 +207,14 @@ public struct IndexedSemanticFacts: Sendable {
             "staticProperty"
         ]
         return dispatchKinds.contains(kind)
+    }
+
+    private static func isOverrideRelation(_ relation: RelationRecord) -> Bool {
+        relation.roles.contains("overrideOf") || relation.roles.contains("baseOf")
+    }
+
+    private static func isSyntheticAccessorName(_ name: String) -> Bool {
+        let lowercasedName = name.lowercased()
+        return lowercasedName.hasPrefix("getter:") || lowercasedName.hasPrefix("setter:")
     }
 }
