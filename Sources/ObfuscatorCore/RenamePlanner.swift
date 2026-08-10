@@ -23,6 +23,7 @@ public struct RenamePlan: Codable, Sendable {
     public let parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary
     public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
     public let enumCaseComponentFacts: EnumCaseComponentFactsSummary
+    public let enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary
 
     public init(
         entries: [RenamePlanEntry],
@@ -38,7 +39,8 @@ public struct RenamePlan: Codable, Sendable {
         parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary = .empty,
         parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary = .empty,
         parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty,
-        enumCaseComponentFacts: EnumCaseComponentFactsSummary = .empty
+        enumCaseComponentFacts: EnumCaseComponentFactsSummary = .empty,
+        enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary = .empty
     ) {
         self.entries = entries
         self.denied = denied
@@ -54,6 +56,7 @@ public struct RenamePlan: Codable, Sendable {
         self.parameterExternalLabelRenameOutcome = parameterExternalLabelRenameOutcome
         self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
         self.enumCaseComponentFacts = enumCaseComponentFacts
+        self.enumCaseSyntaxFacts = enumCaseSyntaxFacts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -71,6 +74,7 @@ public struct RenamePlan: Codable, Sendable {
         case parameterExternalLabelRenameOutcome
         case parameterLocalBindingOutcome
         case enumCaseComponentFacts
+        case enumCaseSyntaxFacts
     }
 
     public init(from decoder: Decoder) throws {
@@ -122,6 +126,10 @@ public struct RenamePlan: Codable, Sendable {
             EnumCaseComponentFactsSummary.self,
             forKey: .enumCaseComponentFacts
         ) ?? .empty
+        enumCaseSyntaxFacts = try container.decodeIfPresent(
+            EnumCaseSyntaxFactsSummary.self,
+            forKey: .enumCaseSyntaxFacts
+        ) ?? .empty
     }
 
     public var replacements: [SourceReplacement] {
@@ -168,6 +176,12 @@ public struct RenamePlanner {
         let enumCaseComponentFacts = EnumCaseComponentFacts(
             snapshot: snapshot,
             indexedFacts: indexedFacts,
+            obfuscationRoots: analyzer.obfuscationRoots
+        )
+        let enumCaseSyntaxFacts = EnumCaseSyntaxFacts(
+            snapshot: snapshot,
+            semanticFacts: enumCaseComponentFacts,
+            sourceCache: sourceCache,
             obfuscationRoots: analyzer.obfuscationRoots
         )
         let parameterSyntaxFacts = ParameterSyntaxFacts(
@@ -707,7 +721,8 @@ public struct RenamePlanner {
                 decisions: denied,
                 groupsByUSR: groupsByUSR
             ),
-            enumCaseComponentFacts: enumCaseComponentFacts.summary
+            enumCaseComponentFacts: enumCaseComponentFacts.summary,
+            enumCaseSyntaxFacts: enumCaseSyntaxFacts.summary
         )
     }
 

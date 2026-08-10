@@ -161,6 +161,15 @@ type or Codable conformance is only a structural candidate fact, not proof that
 the case spelling is unobservable. Associated-value declarations, patterns,
 constructor references, and their parameter labels form one atomic component.
 
+Enum syntax fallbacks must be compiler-node based and matched to exact indexed
+declaration/reference anchors. Record effective lexical access, declaration
+attributes, direct string interpolation, and exact-name string literal evidence
+without using raw-text searches. A string literal or reflected use is a
+spelling-contract blocker for its owner component. Treat broad access-level or
+unrelated protocol-conformance bans as explicitly provisional inventory rules;
+do not silently turn them into permanent hard contracts or remove the affected
+cases from coverage.
+
 Safety decisions must stay project-agnostic. Do not add hardcoded allow/deny lists of concrete SDK, framework, or target-project type names such as `String`, `Array`, `UXColor`, or app-specific symbols. If a rule needs to distinguish local code from external code, derive that from IndexStore/source semantics for the current target, such as local declarations, symbol providers, relations, roles, or selected source roots.
 
 Never reconstruct semantic declaration context by scanning Swift braces or parsing declaration headers in `SafetyAnalyzer`. Ownership, protocol requirements, extension targets, override/base relationships, and runtime-dispatch ancestry must come from IndexStoreDB symbol kinds, properties, roles, relations, USR provenance, and declarations inside the selected source roots. Source text is limited to validating exact identifier tokens and byte ranges, plus narrowly documented lexical facts that IndexStoreDB does not expose; every such fallback requires a focused regression test.

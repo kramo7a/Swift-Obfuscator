@@ -6663,6 +6663,154 @@ import Testing
     #expect(runtime.isRuntimeSensitive)
 }
 
+@Test func enumCaseSyntaxFactsProtectVisibilityReflectionAndProtocolContracts() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("EnumSyntax.swift")
+    let source = [
+        "private enum Safe {",
+        "    case idle",
+        "    case payload(value: Int)",
+        "    static func match(_ value: Safe) {",
+        "        switch value {",
+        "        case .idle: break",
+        "        case .payload: break",
+        "        }",
+        "    }",
+        "}",
+        "private enum Reflected {",
+        "    case logged",
+        "}",
+        "let reflectedText = \"\\(Reflected.logged)\"",
+        "let reflectedWire = \"logged\"",
+        "public enum Visible {",
+        "    case shown",
+        "}",
+        "@available(*, deprecated)",
+        "private enum Attributed {",
+        "    case marked",
+        "}",
+        "private enum Conforming: Equatable {",
+        "    case equal",
+        "}"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])
+    }
+    func baseOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["baseOf"])
+    }
+
+    let safe = symbol("s:safe", "Safe", "enum")
+    let idle = symbol("s:safe-idle", "idle", "enumConstant")
+    let payload = symbol("s:safe-payload", "payload(value:)", "enumConstant")
+    let value = symbol("s:safe-payload-value", "value", "parameter")
+    let reflected = symbol("s:reflected", "Reflected", "enum")
+    let logged = symbol("s:reflected-logged", "logged", "enumConstant")
+    let visible = symbol("s:visible", "Visible", "enum")
+    let shown = symbol("s:visible-shown", "shown", "enumConstant")
+    let attributed = symbol("s:attributed", "Attributed", "enum")
+    let marked = symbol("s:attributed-marked", "marked", "enumConstant")
+    let conforming = symbol("s:conforming", "Conforming", "enum")
+    let equal = symbol("s:conforming-equal", "equal", "enumConstant")
+    let equatable = symbol("s:SQ", "Equatable", "protocol")
+
+    let occurrences = [
+        testOccurrence(safe, path: file.path, line: 1, token: "Safe", roles: ["definition"]),
+        testOccurrence(idle, path: file.path, line: 2, token: "idle", roles: ["definition"], relations: [childOf(safe)]),
+        testOccurrence(payload, path: file.path, line: 3, token: "payload", roles: ["definition"], relations: [childOf(safe)]),
+        testOccurrence(value, path: file.path, line: 3, token: "value", roles: ["definition"], relations: [childOf(payload)]),
+        testOccurrence(idle, path: file.path, line: 6, token: "idle", roles: ["reference"]),
+        testOccurrence(payload, path: file.path, line: 7, token: "payload", roles: ["reference"]),
+        testOccurrence(reflected, path: file.path, line: 11, token: "Reflected", roles: ["definition"]),
+        testOccurrence(logged, path: file.path, line: 12, token: "logged", roles: ["definition"], relations: [childOf(reflected)]),
+        testOccurrence(logged, path: file.path, line: 14, token: "logged", roles: ["reference"]),
+        testOccurrence(visible, path: file.path, line: 16, token: "Visible", roles: ["definition"]),
+        testOccurrence(shown, path: file.path, line: 17, token: "shown", roles: ["definition"], relations: [childOf(visible)]),
+        testOccurrence(attributed, path: file.path, line: 20, token: "Attributed", roles: ["definition"]),
+        testOccurrence(marked, path: file.path, line: 21, token: "marked", roles: ["definition"], relations: [childOf(attributed)]),
+        testOccurrence(conforming, path: file.path, line: 23, token: "Conforming", roles: ["definition"]),
+        testOccurrence(equatable, path: file.path, line: 23, token: "Equatable", roles: ["reference", "baseOf"], relations: [baseOf(conforming)]),
+        testOccurrence(equal, path: file.path, line: 24, token: "equal", roles: ["definition"], relations: [childOf(conforming)])
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [
+            safe, idle, payload, value,
+            reflected, logged,
+            visible, shown,
+            attributed, marked,
+            conforming, equal, equatable
+        ],
+        occurrences: occurrences
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let indexedFacts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+    let semanticFacts = EnumCaseComponentFacts(
+        snapshot: snapshot,
+        indexedFacts: indexedFacts,
+        obfuscationRoots: [directory]
+    )
+    let facts = EnumCaseSyntaxFacts(
+        snapshot: snapshot,
+        semanticFacts: semanticFacts,
+        sourceCache: cache,
+        obfuscationRoots: [directory]
+    )
+
+    #expect(facts.summary.explicitEnumCases == 6)
+    #expect(facts.summary.resolvedEnumCases == 6)
+    #expect(facts.summary.unresolvedEnumCases == 0)
+    #expect(facts.summary.indexedReferenceOccurrences == 3)
+    #expect(facts.summary.resolvedReferenceOccurrences == 3)
+    #expect(facts.summary.unresolvedReferenceOccurrences == 0)
+    #expect(facts.summary.casesWithMatchingStringLiterals == 1)
+    #expect(facts.summary.casesDirectlyInterpolated == 1)
+    #expect(facts.summary.preliminaryEligibleOwnerComponents == 1)
+    #expect(facts.summary.preliminaryEligibleCases == 2)
+    #expect(facts.summary.preliminaryEligibleSimpleCases == 1)
+    #expect(facts.summary.preliminaryEligibleAssociatedValueCases == 1)
+    #expect(facts.summary.preliminaryEligibleAssociatedValueParameters == 1)
+
+    let safeFacts = try #require(facts.components.first { $0.ownerUSR == safe.usr })
+    #expect(safeFacts.accessLevel == .private)
+    #expect(safeFacts.blockers.isEmpty)
+
+    let reflectedFacts = try #require(
+        facts.components.first { $0.ownerUSR == reflected.usr }
+    )
+    #expect(reflectedFacts.blockers.contains(.stringLiteralSpelling))
+    #expect(reflectedFacts.blockers.contains(.directStringInterpolation))
+
+    let visibleFacts = try #require(facts.components.first { $0.ownerUSR == visible.usr })
+    #expect(visibleFacts.accessLevel == .public)
+    #expect(visibleFacts.blockers.contains(.nonFileScopedAccess))
+
+    let attributedFacts = try #require(
+        facts.components.first { $0.ownerUSR == attributed.usr }
+    )
+    #expect(attributedFacts.blockers.contains(.declarationAttribute))
+
+    let conformingFacts = try #require(
+        facts.components.first { $0.ownerUSR == conforming.usr }
+    )
+    #expect(conformingFacts.blockers.contains(.protocolConformance))
+}
+
 private func utf8Column(of needle: String, in line: String) -> Int {
     let range = line.range(of: needle)!
     return line[..<range.lowerBound].utf8.count + 1

@@ -2,7 +2,7 @@ import Foundation
 import SwiftParser
 import SwiftSyntax
 
-public struct SourceTokenRange: Hashable, Sendable {
+public struct SourceTokenRange: Codable, Hashable, Sendable {
     public let path: String
     public let name: String
     public let byteRange: Range<Int>
