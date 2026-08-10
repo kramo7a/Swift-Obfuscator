@@ -971,6 +971,89 @@ import Testing
     #expect(decision.reasons.contains("stored property declarations require memberwise initializer label support"))
 }
 
+@Test func safetyAnalyzerAllowsTypeStoredPropertiesWithoutMemberwiseInitializerSupport() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("StoredProperties.swift")
+    let lines = [
+        "struct Settings { static let timeout = 3; let title: String }",
+        "final class Registry { static let shared = Registry() }"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [file.path])
+    let analyzer = SafetyAnalyzer(sourceRoot: directory)
+
+    func decision(
+        usr: String,
+        name: String,
+        kind: String,
+        ownerUSR: String,
+        ownerName: String,
+        line: Int
+    ) -> SafetyDecision {
+        let symbol = SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+        let occurrence = OccurrenceRecord(
+            symbol: symbol,
+            path: file.path,
+            line: line,
+            utf8Column: utf8Column(of: name, in: lines[line - 1]),
+            moduleName: "Fixture",
+            isSystem: false,
+            rolesRaw: 1,
+            roles: ["declaration"],
+            rolesDescription: "decl",
+            symbolProvider: "swift",
+            relations: [
+                RelationRecord(usr: ownerUSR, name: ownerName, rolesRaw: 1, roles: ["childOf"])
+            ]
+        )
+        return analyzer.analyze(
+            group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+            sourceCache: cache
+        )
+    }
+
+    let structTypeProperty = decision(
+        usr: "usr-timeout",
+        name: "timeout",
+        kind: "staticProperty",
+        ownerUSR: "usr-settings",
+        ownerName: "Settings",
+        line: 1
+    )
+    #expect(structTypeProperty.allowed)
+    #expect(!structTypeProperty.reasons.contains("stored property declarations require memberwise initializer label support"))
+
+    let structInstanceProperty = decision(
+        usr: "usr-title",
+        name: "title",
+        kind: "instanceProperty",
+        ownerUSR: "usr-settings",
+        ownerName: "Settings",
+        line: 1
+    )
+    #expect(structInstanceProperty.allowed == false)
+    #expect(structInstanceProperty.reasons.contains("stored property declarations require memberwise initializer label support"))
+
+    let classTypeProperty = decision(
+        usr: "usr-shared",
+        name: "shared",
+        kind: "classProperty",
+        ownerUSR: "usr-registry",
+        ownerName: "Registry",
+        line: 2
+    )
+    #expect(classTypeProperty.allowed)
+    #expect(!classTypeProperty.reasons.contains("stored property declarations require memberwise initializer label support"))
+}
+
 @Test func safetyAnalyzerDeniesPropertyWrapperRequiredNames() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

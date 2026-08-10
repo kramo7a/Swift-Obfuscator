@@ -132,7 +132,7 @@ public struct SafetyAnalyzer: Sendable {
                 if group.symbol.kind == "class", interfaceBuilderClassNames.contains(token.name) {
                     reasons.append("Interface Builder resource requires stable class name \(token.name)")
                 }
-                if isPropertyKind(group.symbol.kind),
+                if storedPropertyRequiresMemberwiseInitializerSupport(group.symbol.kind),
                    declarationLineLooksStoredProperty(source: source, occurrence: occurrence, token: token) {
                     reasons.append("stored property declarations require memberwise initializer label support")
                 }
@@ -202,8 +202,11 @@ public struct SafetyAnalyzer: Sendable {
         return names.contains(name)
     }
 
-    private func isPropertyKind(_ kind: String) -> Bool {
-        kind == "instanceProperty" || kind == "staticProperty" || kind == "classProperty"
+    private func storedPropertyRequiresMemberwiseInitializerSupport(_ kind: String) -> Bool {
+        // IndexStore's property kinds already encode owner-aware dispatch:
+        // `staticProperty` and `classProperty` are type members and never form
+        // labels in a synthesized instance memberwise initializer.
+        kind == "instanceProperty"
     }
 
     private func declarationLineLooksStoredProperty(
