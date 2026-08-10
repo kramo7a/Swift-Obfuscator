@@ -15,6 +15,7 @@ public struct RenamePlan: Codable, Sendable {
     public let supportReplacements: [SourceReplacement]
     public let parameterFacts: ParameterFactsSummary
     public let parameterSyntaxFacts: ParameterSyntaxFactsSummary
+    public let parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary
     public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
 
     public init(
@@ -24,6 +25,7 @@ public struct RenamePlan: Codable, Sendable {
         supportReplacements: [SourceReplacement] = [],
         parameterFacts: ParameterFactsSummary = .empty,
         parameterSyntaxFacts: ParameterSyntaxFactsSummary = .empty,
+        parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary = .empty,
         parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty
     ) {
         self.entries = entries
@@ -32,6 +34,7 @@ public struct RenamePlan: Codable, Sendable {
         self.supportReplacements = supportReplacements
         self.parameterFacts = parameterFacts
         self.parameterSyntaxFacts = parameterSyntaxFacts
+        self.parameterCallSiteSyntaxFacts = parameterCallSiteSyntaxFacts
         self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
     }
 
@@ -42,6 +45,7 @@ public struct RenamePlan: Codable, Sendable {
         case supportReplacements
         case parameterFacts
         case parameterSyntaxFacts
+        case parameterCallSiteSyntaxFacts
         case parameterLocalBindingOutcome
     }
 
@@ -61,6 +65,10 @@ public struct RenamePlan: Codable, Sendable {
         parameterSyntaxFacts = try container.decodeIfPresent(
             ParameterSyntaxFactsSummary.self,
             forKey: .parameterSyntaxFacts
+        ) ?? .empty
+        parameterCallSiteSyntaxFacts = try container.decodeIfPresent(
+            ParameterCallSiteSyntaxFactsSummary.self,
+            forKey: .parameterCallSiteSyntaxFacts
         ) ?? .empty
         parameterLocalBindingOutcome = try container.decodeIfPresent(
             ParameterLocalBindingOutcomeSummary.self,
@@ -113,6 +121,10 @@ public struct RenamePlanner {
             snapshot: snapshot,
             sourceCache: sourceCache,
             obfuscationRoots: analyzer.obfuscationRoots
+        )
+        let parameterCallSiteSyntaxFacts = ParameterCallSiteSyntaxFacts(
+            components: indexedFacts.parameterRenameComponents,
+            sourceCache: sourceCache
         )
         let codingKeyComponents = Self.codingKeyPreservationComponents(
             indexedFacts: indexedFacts,
@@ -485,6 +497,7 @@ public struct RenamePlanner {
             supportReplacements: supportReplacements,
             parameterFacts: indexedFacts.parameterFactsSummary,
             parameterSyntaxFacts: parameterSyntaxFacts.summary,
+            parameterCallSiteSyntaxFacts: parameterCallSiteSyntaxFacts.summary,
             parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary(
                 candidateUSRs: parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs,
                 entries: entries,

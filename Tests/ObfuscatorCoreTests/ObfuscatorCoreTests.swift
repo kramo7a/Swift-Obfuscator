@@ -1501,6 +1501,167 @@ import Testing
     #expect(plan.denied.map(\.usr).contains(oldValue.usr))
 }
 
+@Test func parameterCallSiteSyntaxFactsResolveCompilerAnchoredLabelsAndCallShapes() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Calls.swift")
+    let lines = [
+        "struct Box {",
+        "    init(first: Int, second: Int = 0) {}",
+        "}",
+        "func consume<T>(value: T) {}",
+        "func use(box: Box) {",
+        "    _ = Box(first: 1)",
+        "    box.run(value: 2) {}",
+        "    consume<Int>(value: 3)",
+        "    _ = box[index: 0]",
+        "    box.perform(value: 4) {} failure: {}",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func component(
+        usr: String,
+        labels: [String],
+        ownerCategory: ParameterOwnerCategory = .callable,
+        callLine: Int? = nil,
+        callToken: String? = nil,
+        hasNonCallReference: Bool = false
+    ) -> ParameterRenameComponent {
+        let callLocations: [IndexedSourceLocation]
+        if let callLine, let callToken {
+            callLocations = [IndexedSourceLocation(
+                path: file.path,
+                line: callLine,
+                utf8Column: utf8Column(of: callToken, in: lines[callLine - 1])
+            )]
+        } else {
+            callLocations = []
+        }
+        let nonCallReferenceLocations = hasNonCallReference
+            ? [IndexedSourceLocation(
+                path: file.path,
+                line: 8,
+                utf8Column: utf8Column(of: "consume", in: lines[7])
+            )]
+            : []
+        return ParameterRenameComponent(
+            callableUSR: usr,
+            callableName: "call(\(labels.map { "\($0):" }.joined()))",
+            callableKind: ownerCategory == .subscriptDeclaration
+                ? "instanceProperty"
+                : "instanceMethod",
+            ownerCategory: ownerCategory,
+            members: labels.enumerated().map { ordinal, label in
+                ParameterRenameMember(
+                    parameterUSR: "\(usr)-parameter-\(ordinal)",
+                    ordinal: ordinal,
+                    localBinding: label,
+                    externalLabel: .named(label),
+                    declarationLocations: [],
+                    referenceLocations: []
+                )
+            },
+            declarationLocations: [],
+            callLocations: callLocations,
+            nonCallReferenceLocations: nonCallReferenceLocations,
+            hasOccurrenceOutsideSelectedRoots: false,
+            isProtocolRequirement: false,
+            isOverrideRelated: false,
+            isRuntimeSensitive: false,
+            isExternallyOwned: false,
+            structuralReasons: []
+        )
+    }
+
+    let components = [
+        component(usr: "usr-box-init", labels: ["first", "second"], callLine: 6, callToken: "Box"),
+        component(usr: "usr-run", labels: ["value", "completion"], callLine: 7, callToken: "run"),
+        component(usr: "usr-consume", labels: ["value"], callLine: 8, callToken: "consume"),
+        component(
+            usr: "usr-subscript",
+            labels: ["index"],
+            ownerCategory: .subscriptDeclaration,
+            callLine: 9,
+            callToken: "["
+        ),
+        component(
+            usr: "usr-perform",
+            labels: ["value", "completion", "failure"],
+            callLine: 10,
+            callToken: "perform"
+        ),
+        component(
+            usr: "usr-bad-anchor",
+            labels: ["value"],
+            callLine: 7,
+            callToken: "value"
+        ),
+        component(
+            usr: "usr-reference-only",
+            labels: ["input"],
+            hasNonCallReference: true
+        )
+    ]
+
+    let facts = ParameterCallSiteSyntaxFacts(components: components, sourceCache: cache)
+    let summary = facts.summary
+    #expect(summary.componentsWithNamedExternalLabels == 7)
+    #expect(summary.namedExternalLabelParameters == 11)
+    #expect(summary.indexedCallAnchors == 6)
+    #expect(summary.resolvedCallAnchors == 5)
+    #expect(summary.unresolvedCallAnchors == 1)
+    #expect(summary.resolvedFunctionCalls == 4)
+    #expect(summary.resolvedSubscriptCalls == 1)
+    #expect(summary.parenthesizedArguments == 5)
+    #expect(summary.namedParenthesizedArgumentTokens == 5)
+    #expect(summary.unlabeledParenthesizedArguments == 0)
+    #expect(summary.firstTrailingClosures == 2)
+    #expect(summary.additionalTrailingClosureLabelTokens == 1)
+    #expect(summary.callsWithoutExplicitArgumentDelimiters == 0)
+    #expect(summary.componentsWithAllIndexedCallsResolved == 5)
+    #expect(summary.namedParametersInComponentsWithAllIndexedCallsResolved == 9)
+    #expect(summary.componentsWithoutIndexedCalls == 1)
+    #expect(summary.namedParametersInComponentsWithoutIndexedCalls == 1)
+    #expect(summary.componentsWithNonCallReferences == 1)
+    #expect(summary.namedParametersInComponentsWithNonCallReferences == 1)
+    #expect(summary.unresolvedByReason == [
+        "compiler call syntax unavailable at indexed call anchor": 1
+    ])
+    #expect(summary.unresolvedAnchors == [
+        UnresolvedParameterCallSiteSyntaxFact(
+            callableUSR: "usr-bad-anchor",
+            callableName: "call(value:)",
+            path: file.path,
+            line: 7,
+            utf8Column: utf8Column(of: "value", in: lines[6]),
+            reason: "compiler call syntax unavailable at indexed call anchor"
+        )
+    ])
+
+    let labelNames = Set(facts.rolesByAnchor.values.flatMap { roles in
+        roles.arguments.compactMap { argument -> String? in
+            switch argument {
+            case .parenthesized(label: let label):
+                return label?.name
+            case .firstTrailingClosure:
+                return nil
+            case .additionalTrailingClosure(label: let label):
+                return label.name
+            }
+        }
+    })
+    #expect(labelNames == ["failure", "first", "index", "value"])
+}
+
 @Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

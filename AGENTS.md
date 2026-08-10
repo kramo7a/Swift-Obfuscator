@@ -27,6 +27,7 @@ Tests use Swift Testing (`@Test` and `#expect`), not XCTest. Full test runs can 
 - `Sources/ObfuscatorCore/IndexedSemanticFacts.swift`: compiler-index-derived ownership, extension, protocol, and runtime-dispatch facts.
 - `Sources/ObfuscatorCore/ParameterRenameComponent.swift`: indexed callable/parameter ownership, ordering, external-label, local-binding, and call-anchor facts.
 - `Sources/ObfuscatorCore/ParameterSyntaxFacts.swift`: SwiftParser-backed exact parameter declaration roles and byte ranges for facts that IndexStoreDB does not expose.
+- `Sources/ObfuscatorCore/ParameterCallSiteSyntaxFacts.swift`: IndexStore-call-anchored SwiftParser ranges for argument labels and call syntax shapes.
 - `Sources/ObfuscatorCore/SafetyAnalyzer.swift`: deny-by-default rename eligibility checks.
 - `Sources/ObfuscatorCore/RenamePlanner.swift`: stable name assignment and replacement planning.
 - `Sources/ObfuscatorCore/SourcePatcher.swift`: validation and source rewriting/copying.
@@ -79,6 +80,13 @@ explicit shadow binding, or implicit Swift binding such as catch `error`, setter
 `newValue`, or observer `oldValue`, must fail closed for the whole parameter
 USR. Generated parameter and other value-binding identifiers must use
 lowerCamelCase spelling.
+
+For external argument labels, IndexStoreDB call occurrences provide callable
+identity and the exact semantic call anchor. SwiftParser may map that anchor to
+compiler syntax and expose label byte ranges, but it must never infer a call
+target from source spelling, overload order, or a text search. Unmatched or
+multiply matched anchors fail closed and remain individually reproducible in
+the machine-readable report.
 
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 
