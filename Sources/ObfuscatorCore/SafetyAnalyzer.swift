@@ -52,7 +52,9 @@ public struct SafetyAnalyzer: Sendable {
         sourceCache: SourceFileCache,
         localNominalTypeNames: Set<String> = [],
         overrideRelatedUSRs: Set<String> = [],
-        tupleTypealiasRelatedUSRs: Set<String> = []
+        tupleTypealiasRelatedUSRs: Set<String> = [],
+        coordinatedRelatedUSRs: Set<String> = [],
+        coordinatedProtocolRequirementUSRs: Set<String> = []
     ) -> SafetyDecision {
         var reasons: [String] = []
         var tokenNames: Set<String> = []
@@ -71,7 +73,7 @@ public struct SafetyAnalyzer: Sendable {
         if group.occurrences.isEmpty {
             reasons.append("no occurrences")
         }
-        if overrideRelatedUSRs.contains(group.usr) {
+        if overrideRelatedUSRs.contains(group.usr), !coordinatedRelatedUSRs.contains(group.usr) {
             reasons.append("override relations require coordinated renaming")
         }
         if tupleTypealiasRelatedUSRs.contains(group.usr) {
@@ -79,6 +81,12 @@ public struct SafetyAnalyzer: Sendable {
         }
 
         for occurrence in group.occurrences {
+            if isSemanticOnlyCoordinatedOccurrence(
+                occurrence,
+                coordinatedRelatedUSRs: coordinatedRelatedUSRs
+            ) {
+                continue
+            }
             if occurrence.isSystem {
                 reasons.append("system occurrence at \(occurrence.path):\(occurrence.line)")
             }
@@ -94,7 +102,10 @@ public struct SafetyAnalyzer: Sendable {
                     hasSelectedDeclarationOrDefinition = true
                 }
             }
-            if occurrence.relations.contains(where: { hasUnsafeRelation($0, symbolKind: group.symbol.kind) }) {
+            if occurrence.relations.contains(where: {
+                hasUnsafeRelation($0, symbolKind: group.symbol.kind)
+                    && !coordinatedRelatedUSRs.contains($0.usr)
+            }) {
                 reasons.append("unsafe relation at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
             }
 
@@ -116,7 +127,9 @@ public struct SafetyAnalyzer: Sendable {
 
             if occurrence.roles.contains("declaration") || occurrence.roles.contains("definition") {
                 let contexts = declarationContexts(source: source, beforeByteOffset: token.byteRange.lowerBound)
-                if group.symbol.kind != "protocol", contexts.contains(.protocolBody) {
+                if group.symbol.kind != "protocol",
+                   !coordinatedProtocolRequirementUSRs.contains(group.usr),
+                   contexts.contains(.protocolBody) {
                     reasons.append("protocol members require relation-aware witness renaming")
                 }
                 if group.symbol.kind == "typealias",
@@ -132,7 +145,8 @@ public struct SafetyAnalyzer: Sendable {
                 if group.symbol.kind == "class", interfaceBuilderClassNames.contains(token.name) {
                     reasons.append("Interface Builder resource requires stable class name \(token.name)")
                 }
-                if storedPropertyRequiresMemberwiseInitializerSupport(group.symbol.kind),
+                if !coordinatedProtocolRequirementUSRs.contains(group.usr),
+                   storedPropertyRequiresMemberwiseInitializerSupport(group.symbol.kind),
                    declarationLineLooksStoredProperty(source: source, occurrence: occurrence, token: token) {
                     reasons.append("stored property declarations require memberwise initializer label support")
                 }
@@ -183,6 +197,31 @@ public struct SafetyAnalyzer: Sendable {
             || (symbolKind != "protocol" && relation.roles.contains("baseOf"))
             || relation.roles.contains("specializationOf")
             || relation.roles.contains("ibTypeOf")
+    }
+
+    private func isSemanticOnlyCoordinatedOccurrence(
+        _ occurrence: OccurrenceRecord,
+        coordinatedRelatedUSRs: Set<String>
+    ) -> Bool {
+        guard occurrence.roles.contains("implicit"),
+              !coordinatedRelatedUSRs.isEmpty else {
+            return false
+        }
+
+        let lexicalRoles: Set<String> = [
+            "declaration", "definition", "reference", "read", "write", "call", "dynamic", "addressOf"
+        ]
+        guard lexicalRoles.isDisjoint(with: occurrence.roles) else {
+            return false
+        }
+
+        // IndexStore emits semantic witness occurrences at the conforming type's
+        // token. They describe dispatch edges but are not spellings of the
+        // requirement/witness identifier and therefore must never be patched.
+        return occurrence.relations.contains { relation in
+            relation.roles.contains("overrideOf")
+                && coordinatedRelatedUSRs.contains(relation.usr)
+        }
     }
 
     private func isLanguageRequiredDeclarationName(_ name: String) -> Bool {
