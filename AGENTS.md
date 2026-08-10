@@ -108,6 +108,16 @@ exact IndexStore occurrence resolves exclusively to nominal struct/class/enum/
 actor symbols. Typealiases, protocols, generics, unresolved tokens, and other
 shapes remain unknown; never hardcode concrete type names.
 
+Do not treat an IndexStore `reference` occurrence without the `call` role as a
+bare callable value. Swift subscript invocations can be indexed at the `[` token
+with only `reference`, while full-name references such as `method(label:)` and
+bare method values share the same role. Classify each exact indexed anchor with
+compiler syntax as bare reference, full-name reference, or subscript call.
+Bare references contribute no label replacement; full-name and subscript label
+tokens must be ordinal-bound before rename. Unavailable or multiply matched
+syntax fails closed. Keep call and non-call-reference anchors as distinct
+semantic types even when their stored fields happen to match.
+
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 
 

@@ -2005,6 +2005,158 @@ import Testing
     #expect(labelNames == ["failure", "first", "index", "value", "сallSettingsSource"])
 }
 
+@Test func parameterCallableReferenceSyntaxFactsClassifyBareFullNameAndSubscriptUses() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("CallableReferences.swift")
+    let lines = [
+        "struct Service {",
+        "    func convert(value: Int) -> Int { value }",
+        "    subscript(label value: Int) -> Int { value }",
+        "}",
+        "func use(service: Service) {",
+        "    let bare = service.convert",
+        "    let full = service.convert(value:)",
+        "    _ = service[label: 1]",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func location(line: Int, token: String) -> IndexedSourceLocation {
+        IndexedSourceLocation(
+            path: file.path,
+            line: line,
+            utf8Column: utf8Column(of: token, in: lines[line - 1])
+        )
+    }
+
+    func component(
+        usr: String,
+        name: String,
+        ownerCategory: ParameterOwnerCategory = .callable,
+        references: [IndexedSourceLocation]
+    ) -> ParameterRenameComponent {
+        ParameterRenameComponent(
+            callableUSR: usr,
+            callableName: name,
+            callableKind: ownerCategory == .subscriptDeclaration
+                ? "instanceProperty"
+                : "instanceMethod",
+            ownerCategory: ownerCategory,
+            members: [ParameterRenameMember(
+                parameterUSR: "\(usr)-parameter",
+                ordinal: 0,
+                localBinding: "value",
+                externalLabel: .named(
+                    ownerCategory == .subscriptDeclaration ? "label" : "value"
+                ),
+                declarationLocations: [],
+                referenceLocations: []
+            )],
+            declarationLocations: [],
+            callLocations: [],
+            nonCallReferenceLocations: references,
+            hasOccurrenceOutsideSelectedRoots: false,
+            isProtocolRequirement: false,
+            isOverrideRelated: false,
+            isRuntimeSensitive: false,
+            isExternallyOwned: false,
+            structuralReasons: []
+        )
+    }
+
+    let convert = component(
+        usr: "usr-convert",
+        name: "convert(value:)",
+        references: [
+            location(line: 6, token: "convert"),
+            location(line: 7, token: "convert")
+        ]
+    )
+    let subscriptComponent = component(
+        usr: "usr-subscript-reference",
+        name: "subscript(label:)",
+        ownerCategory: .subscriptDeclaration,
+        references: [location(line: 8, token: "[")]
+    )
+    let invalid = component(
+        usr: "usr-invalid-reference",
+        name: "invalid(value:)",
+        references: [location(line: 2, token: "value")]
+    )
+
+    let facts = ParameterCallableReferenceSyntaxFacts(
+        components: [convert, subscriptComponent, invalid],
+        sourceCache: cache
+    )
+    let summary = facts.summary
+    #expect(summary.componentsWithNamedExternalLabels == 3)
+    #expect(summary.namedExternalLabelParameters == 3)
+    #expect(summary.componentsWithIndexedReferences == 3)
+    #expect(summary.namedParametersInComponentsWithIndexedReferences == 3)
+    #expect(summary.indexedReferenceAnchors == 4)
+    #expect(summary.resolvedReferenceAnchors == 3)
+    #expect(summary.unresolvedReferenceAnchors == 1)
+    #expect(summary.resolvedBareReferences == 1)
+    #expect(summary.resolvedFullNameReferences == 1)
+    #expect(summary.fullNameArgumentTokens == 1)
+    #expect(summary.namedFullNameArgumentTokens == 1)
+    #expect(summary.resolvedSubscriptCalls == 1)
+    #expect(summary.subscriptArguments == 1)
+    #expect(summary.namedSubscriptArgumentLabelTokens == 1)
+    #expect(summary.componentsWithAllIndexedReferencesResolved == 2)
+    #expect(summary.namedParametersInComponentsWithAllIndexedReferencesResolved == 2)
+    #expect(summary.unresolvedByReason == [
+        "compiler callable reference syntax unavailable at indexed anchor": 1
+    ])
+    #expect(summary.unresolvedAnchors == [
+        UnresolvedParameterCallableReferenceSyntaxFact(
+            callableUSR: invalid.callableUSR,
+            callableName: invalid.callableName,
+            path: file.path,
+            line: 2,
+            utf8Column: utf8Column(of: "value", in: lines[1]),
+            reason: "compiler callable reference syntax unavailable at indexed anchor"
+        )
+    ])
+
+    let bareAnchor = ParameterCallableReferenceAnchor(
+        callableUSR: convert.callableUSR,
+        location: location(line: 6, token: "convert")
+    )
+    let bareRoles = try #require(facts.rolesByAnchor[bareAnchor])
+    #expect(bareRoles.kind == .bareReference)
+    #expect(bareRoles.fullNameArgumentTokens.isEmpty)
+
+    let fullNameAnchor = ParameterCallableReferenceAnchor(
+        callableUSR: convert.callableUSR,
+        location: location(line: 7, token: "convert")
+    )
+    let fullNameRoles = try #require(facts.rolesByAnchor[fullNameAnchor])
+    #expect(fullNameRoles.kind == .fullNameReference)
+    #expect(fullNameRoles.fullNameArgumentTokens.map(\.name) == ["value"])
+
+    let subscriptAnchor = ParameterCallableReferenceAnchor(
+        callableUSR: subscriptComponent.callableUSR,
+        location: location(line: 8, token: "[")
+    )
+    let subscriptRoles = try #require(facts.rolesByAnchor[subscriptAnchor])
+    #expect(subscriptRoles.kind == .subscriptCall)
+    if case .parenthesized(label: let label)? = subscriptRoles.subscriptArguments.first {
+        #expect(label?.name == "label")
+    } else {
+        Issue.record("Expected a named subscript argument")
+    }
+}
+
 @Test func parameterCallArgumentBindingsResolveDefaultsVariadicsAndTrailingClosures() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,

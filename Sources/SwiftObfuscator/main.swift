@@ -63,6 +63,7 @@ struct RunSummary: Codable {
     var parameterSyntaxFacts: ParameterSyntaxFactsSummary?
     var parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary?
     var parameterCallArgumentBindingFacts: ParameterCallArgumentBindingFactsSummary?
+    var parameterCallableReferenceSyntaxFacts: ParameterCallableReferenceSyntaxFactsSummary?
     var parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary?
     var artifacts = RunArtifacts()
     var logs: [String] = []
@@ -414,6 +415,8 @@ struct SwiftObfuscatorCLI {
             summary.parameterSyntaxFacts = plan.parameterSyntaxFacts
             summary.parameterCallSiteSyntaxFacts = plan.parameterCallSiteSyntaxFacts
             summary.parameterCallArgumentBindingFacts = plan.parameterCallArgumentBindingFacts
+            summary.parameterCallableReferenceSyntaxFacts =
+                plan.parameterCallableReferenceSyntaxFacts
             summary.parameterLocalBindingOutcome = plan.parameterLocalBindingOutcome
             let dryRunReport = ReportRenderer.renderDryRun(plan: plan, compact: options.compactReport)
             let dryRunReportPath = try output.writeArtifact(named: "dry-run-report.txt", contents: dryRunReport)
