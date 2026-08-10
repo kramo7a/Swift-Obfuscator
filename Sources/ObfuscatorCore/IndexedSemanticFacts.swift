@@ -19,6 +19,8 @@ public struct IndexedSemanticFacts: Sendable {
     public let propertyWrapperDerivedUSRsByPropertyUSR: [String: Set<String>]
     public let overrideRelationNeighbors: [String: Set<String>]
     public let overrideRelatedUSRs: Set<String>
+    public let parameterRenameComponents: [ParameterRenameComponent]
+    public let parameterFactsSummary: ParameterFactsSummary
 
     let symbolsByUSR: [String: SymbolRecord]
     let ownerUSRsByChild: [String: Set<String>]
@@ -35,7 +37,9 @@ public struct IndexedSemanticFacts: Sendable {
         explicitCodingKeysOwnerUSRs: Set<String> = [],
         customSerializationImplementationOwnerUSRs: Set<String> = [],
         propertyWrapperDerivedUSRsByPropertyUSR: [String: Set<String>] = [:],
-        overrideRelationNeighbors: [String: Set<String>] = [:]
+        overrideRelationNeighbors: [String: Set<String>] = [:],
+        parameterRenameComponents: [ParameterRenameComponent] = [],
+        parameterFactsSummary: ParameterFactsSummary = .empty
     ) {
         self.selectedDeclarationUSRs = selectedDeclarationUSRs
         self.protocolRequirementUSRs = protocolRequirementUSRs
@@ -48,6 +52,8 @@ public struct IndexedSemanticFacts: Sendable {
         self.propertyWrapperDerivedUSRsByPropertyUSR = propertyWrapperDerivedUSRsByPropertyUSR
         self.overrideRelationNeighbors = overrideRelationNeighbors
         self.overrideRelatedUSRs = Self.relatedUSRs(in: overrideRelationNeighbors)
+        self.parameterRenameComponents = parameterRenameComponents
+        self.parameterFactsSummary = parameterFactsSummary
         self.symbolsByUSR = [:]
         self.ownerUSRsByChild = [:]
         self.childUSRsByOwner = [:]
@@ -248,23 +254,43 @@ public struct IndexedSemanticFacts: Sendable {
             }
         }
 
-        self.selectedDeclarationUSRs = selectedDeclarationUSRs
-        self.protocolRequirementUSRs = protocolRequirementUSRs
-        self.externallyOwnedUSRs = Self.descendants(
+        let externallyOwnedUSRs = Self.descendants(
             of: externalExtensionUSRs,
             childUSRsByOwner: childUSRsByOwner
         )
-        self.runtimeSensitiveUSRs = Self.reachable(
+        let runtimeSensitiveUSRs = Self.reachable(
             of: runtimeSeeds,
             neighbors: runtimeDispatchNeighbors
         )
+        let overrideRelatedUSRs = Self.relatedUSRs(in: overrideRelationNeighbors)
+        let parameterRenameComponents = ParameterRenameComponentBuilder.makeComponents(
+            snapshot: snapshot,
+            rootPaths: rootPaths,
+            symbolsByUSR: symbolsByUSR,
+            protocolRequirementUSRs: protocolRequirementUSRs,
+            overrideRelatedUSRs: overrideRelatedUSRs,
+            runtimeSensitiveUSRs: runtimeSensitiveUSRs,
+            externallyOwnedUSRs: externallyOwnedUSRs
+        )
+
+        self.selectedDeclarationUSRs = selectedDeclarationUSRs
+        self.protocolRequirementUSRs = protocolRequirementUSRs
+        self.externallyOwnedUSRs = externallyOwnedUSRs
+        self.runtimeSensitiveUSRs = runtimeSensitiveUSRs
         self.storedPropertyUSRs = storedPropertyUSRs.intersection(explicitDeclarationUSRs)
         self.serializationSensitiveOwnerUSRs = serializationSensitiveOwnerUSRs
         self.explicitCodingKeysOwnerUSRs = explicitCodingKeysOwnerUSRs
         self.customSerializationImplementationOwnerUSRs = customSerializationImplementationOwnerUSRs
         self.propertyWrapperDerivedUSRsByPropertyUSR = propertyWrapperDerivedUSRsByPropertyUSR
         self.overrideRelationNeighbors = overrideRelationNeighbors
-        self.overrideRelatedUSRs = Self.relatedUSRs(in: overrideRelationNeighbors)
+        self.overrideRelatedUSRs = overrideRelatedUSRs
+        self.parameterRenameComponents = parameterRenameComponents
+        self.parameterFactsSummary = ParameterFactsSummary(
+            explicitParameters: explicitDeclarationUSRs.count { usr in
+                symbolsByUSR[usr]?.kind == "parameter"
+            },
+            components: parameterRenameComponents
+        )
         self.symbolsByUSR = symbolsByUSR
         self.ownerUSRsByChild = ownerUSRsByChild
         self.childUSRsByOwner = childUSRsByOwner

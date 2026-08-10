@@ -25,6 +25,7 @@ Tests use Swift Testing (`@Test` and `#expect`), not XCTest. Full test runs can 
 - `Sources/ObfuscatorCore/ProjectBuilder.swift`: `xcodebuild` invocation and index-store location.
 - `Sources/ObfuscatorCore/IndexReader.swift`: IndexStoreDB snapshot extraction and source file discovery.
 - `Sources/ObfuscatorCore/IndexedSemanticFacts.swift`: compiler-index-derived ownership, extension, protocol, and runtime-dispatch facts.
+- `Sources/ObfuscatorCore/ParameterRenameComponent.swift`: indexed callable/parameter ownership, ordering, external-label, local-binding, and call-anchor facts.
 - `Sources/ObfuscatorCore/SafetyAnalyzer.swift`: deny-by-default rename eligibility checks.
 - `Sources/ObfuscatorCore/RenamePlanner.swift`: stable name assignment and replacement planning.
 - `Sources/ObfuscatorCore/SourcePatcher.swift`: validation and source rewriting/copying.
@@ -52,6 +53,12 @@ Do not re-enable `parameter` renames without a regression test proving external 
 ```text
 incorrect argument label in call (have 'name:', expected '_oe:')
 ```
+
+Parameter planning must keep the external argument label and local binding as
+separate roles even when they share one declaration token. Build callable
+components from IndexStoreDB `childOf` ownership, callable symbol names, and
+occurrence roles. Do not infer parameter ownership or signature boundaries by
+scanning source braces or declaration text.
 
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 

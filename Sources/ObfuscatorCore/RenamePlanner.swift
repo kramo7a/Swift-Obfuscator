@@ -13,17 +13,20 @@ public struct RenamePlan: Codable, Sendable {
     public let denied: [SafetyDecision]
     public let conflicts: [String]
     public let supportReplacements: [SourceReplacement]
+    public let parameterFacts: ParameterFactsSummary
 
     public init(
         entries: [RenamePlanEntry],
         denied: [SafetyDecision],
         conflicts: [String],
-        supportReplacements: [SourceReplacement] = []
+        supportReplacements: [SourceReplacement] = [],
+        parameterFacts: ParameterFactsSummary = .empty
     ) {
         self.entries = entries
         self.denied = denied
         self.conflicts = conflicts
         self.supportReplacements = supportReplacements
+        self.parameterFacts = parameterFacts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -31,6 +34,7 @@ public struct RenamePlan: Codable, Sendable {
         case denied
         case conflicts
         case supportReplacements
+        case parameterFacts
     }
 
     public init(from decoder: Decoder) throws {
@@ -42,6 +46,10 @@ public struct RenamePlan: Codable, Sendable {
             [SourceReplacement].self,
             forKey: .supportReplacements
         ) ?? []
+        parameterFacts = try container.decodeIfPresent(
+            ParameterFactsSummary.self,
+            forKey: .parameterFacts
+        ) ?? .empty
     }
 
     public var replacements: [SourceReplacement] {
@@ -413,7 +421,8 @@ public struct RenamePlanner {
             entries: entries.sorted { ($0.oldName, $0.usr) < ($1.oldName, $1.usr) },
             denied: denied.sorted { ($0.symbolName, $0.usr) < ($1.symbolName, $1.usr) },
             conflicts: conflicts,
-            supportReplacements: supportReplacements
+            supportReplacements: supportReplacements,
+            parameterFacts: indexedFacts.parameterFactsSummary
         )
     }
 

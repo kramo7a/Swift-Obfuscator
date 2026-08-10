@@ -672,6 +672,206 @@ import Testing
     #expect(decision.reasons.contains { $0.contains("unsupported symbol kind parameter") })
 }
 
+@Test func indexedParameterComponentsSeparateExternalLabelsFromLocalBindings() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let selectedFile = directory.appendingPathComponent("Selected.swift")
+    let outsideFile = directory.appendingPathComponent("Outside.swift")
+    let lines = [
+        "func combine(_ hidden: Int, wire local: Int, shorthand: Int) -> Int {",
+        "    hidden + local + shorthand",
+        "}",
+        "let result = combine(1, wire: 2, shorthand: 3)",
+        "let functionValue = combine",
+        "struct Box {",
+        "    init(loadController: Int, workspaceId localWorkspaceID: Int) {",
+        "        _ = loadController + localWorkspaceID",
+        "    }",
+        "}",
+        "func broken(one: Int) {}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: selectedFile,
+        atomically: true,
+        encoding: .utf8
+    )
+    try "let outside = combine(1, wire: 2, shorthand: 3)\n".write(
+        to: outsideFile,
+        atomically: true,
+        encoding: .utf8
+    )
+
+    func symbol(_ usr: String, _ name: String, _ kind: String = "parameter") -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+
+    let combine = symbol("usr-combine", "combine(_:wire:shorthand:)", "function")
+    let hidden = symbol("usr-hidden", "hidden")
+    let local = symbol("usr-local", "local")
+    let shorthand = symbol("usr-shorthand", "shorthand")
+    let initializer = symbol(
+        "usr-initializer",
+        "init(loadController:workspaceId:)",
+        "constructor"
+    )
+    let loadController = symbol("usr-load-controller", "loadController")
+    let localWorkspaceID = symbol("usr-workspace-id", "localWorkspaceID")
+    let broken = symbol("usr-broken", "broken(one:two:)", "function")
+    let brokenParameter = symbol("usr-broken-parameter", "one")
+
+    func childOf(_ callable: SymbolRecord) -> RelationRecord {
+        RelationRecord(
+            usr: callable.usr,
+            name: callable.name,
+            rolesRaw: 0,
+            roles: ["childOf"]
+        )
+    }
+
+    func occurrence(
+        _ symbol: SymbolRecord,
+        path: URL = selectedFile,
+        line: Int,
+        token: String,
+        roles: [String],
+        relations: [RelationRecord] = []
+    ) -> OccurrenceRecord {
+        let sourceLine = try! String(contentsOf: path, encoding: .utf8)
+            .split(separator: "\n", omittingEmptySubsequences: false)[line - 1]
+        return OccurrenceRecord(
+            symbol: symbol,
+            path: path.path,
+            line: line,
+            utf8Column: utf8Column(of: token, in: String(sourceLine)),
+            moduleName: "Sample",
+            isSystem: false,
+            rolesRaw: 0,
+            roles: roles,
+            rolesDescription: roles.joined(separator: ","),
+            symbolProvider: "swift",
+            relations: relations
+        )
+    }
+
+    let occurrences = [
+        occurrence(combine, line: 1, token: "combine", roles: ["definition"]),
+        occurrence(combine, line: 4, token: "combine", roles: ["reference", "call"]),
+        occurrence(combine, line: 5, token: "combine", roles: ["reference"]),
+        occurrence(
+            combine,
+            path: outsideFile,
+            line: 1,
+            token: "combine",
+            roles: ["reference", "call"]
+        ),
+        // Deliberately shuffled: ordinal comes from compiler locations, not snapshot order.
+        occurrence(shorthand, line: 1, token: "shorthand", roles: ["definition"], relations: [childOf(combine)]),
+        occurrence(hidden, line: 1, token: "hidden", roles: ["definition"], relations: [childOf(combine)]),
+        occurrence(local, line: 1, token: "local", roles: ["definition"], relations: [childOf(combine)]),
+        occurrence(hidden, line: 2, token: "hidden", roles: ["reference", "read"]),
+        occurrence(local, line: 2, token: "local", roles: ["reference", "read"]),
+        occurrence(shorthand, line: 2, token: "shorthand", roles: ["reference", "read"]),
+        occurrence(initializer, line: 7, token: "init", roles: ["definition"]),
+        occurrence(
+            loadController,
+            line: 7,
+            token: "loadController",
+            roles: ["definition"],
+            relations: [childOf(initializer)]
+        ),
+        occurrence(
+            localWorkspaceID,
+            line: 7,
+            token: "localWorkspaceID",
+            roles: ["definition"],
+            relations: [childOf(initializer)]
+        ),
+        occurrence(loadController, line: 8, token: "loadController", roles: ["reference", "read"]),
+        occurrence(localWorkspaceID, line: 8, token: "localWorkspaceID", roles: ["reference", "read"]),
+        occurrence(broken, line: 11, token: "broken", roles: ["definition"]),
+        occurrence(
+            brokenParameter,
+            line: 11,
+            token: "one",
+            roles: ["definition"],
+            relations: [childOf(broken)]
+        )
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [selectedFile.path, outsideFile.path],
+        symbols: [
+            combine, hidden, local, shorthand, initializer, loadController,
+            localWorkspaceID, broken, brokenParameter
+        ],
+        occurrences: occurrences
+    )
+
+    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [selectedFile])
+    #expect(facts.parameterRenameComponents.count == 3)
+
+    let combineComponent = try #require(
+        facts.parameterRenameComponents.first { $0.callableUSR == combine.usr }
+    )
+    #expect(combineComponent.isStructurallyComplete)
+    #expect(combineComponent.members.map(\.parameterUSR) == [hidden.usr, local.usr, shorthand.usr])
+    #expect(combineComponent.members.map(\.ordinal) == [0, 1, 2])
+    #expect(combineComponent.members.map(\.localBinding) == ["hidden", "local", "shorthand"])
+    #expect(combineComponent.members.map(\.externalLabel) == [
+        .omitted, .named("wire"), .named("shorthand")
+    ])
+    #expect(combineComponent.members.map { $0.referenceLocations.map(\.line) } == [[2], [2], [2]])
+    #expect(combineComponent.callLocations.map(\.line) == [4])
+    #expect(combineComponent.functionReferenceLocations.map(\.line) == [5])
+    #expect(combineComponent.hasOccurrenceOutsideSelectedRoots)
+
+    let initializerComponent = try #require(
+        facts.parameterRenameComponents.first { $0.callableUSR == initializer.usr }
+    )
+    #expect(initializerComponent.isStructurallyComplete)
+    #expect(initializerComponent.members.map(\.localBinding) == ["loadController", "localWorkspaceID"])
+    #expect(initializerComponent.members.map(\.externalLabel) == [
+        .named("loadController"), .named("workspaceId")
+    ])
+
+    let brokenComponent = try #require(
+        facts.parameterRenameComponents.first { $0.callableUSR == broken.usr }
+    )
+    #expect(!brokenComponent.isStructurallyComplete)
+    #expect(brokenComponent.members.map(\.externalLabel) == [.unavailable])
+    #expect(brokenComponent.structuralReasons == [
+        "callable index name does not expose exactly 1 external argument label(s)"
+    ])
+
+    let summary = facts.parameterFactsSummary
+    #expect(summary.explicitParameters == 6)
+    #expect(summary.modeledParameters == 6)
+    #expect(summary.unmodeledParameters == 0)
+    #expect(summary.components == 3)
+    #expect(summary.structurallyCompleteComponents == 2)
+    #expect(summary.structurallyCompleteParameters == 5)
+    #expect(summary.omittedExternalLabels == 1)
+    #expect(summary.sharedLabelAndBindingParameters == 2)
+    #expect(summary.distinctLabelAndBindingParameters == 2)
+    #expect(summary.unavailableExternalLabels == 1)
+    #expect(summary.callAnchors == 1)
+    #expect(summary.functionReferenceAnchors == 1)
+    #expect(summary.componentsWithOccurrencesOutsideSelectedRoots == 1)
+    #expect(summary.protocolRequirementComponents == 0)
+    #expect(summary.overrideRelatedComponents == 0)
+    #expect(summary.runtimeSensitiveComponents == 0)
+    #expect(summary.externallyOwnedComponents == 0)
+}
+
 @Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
