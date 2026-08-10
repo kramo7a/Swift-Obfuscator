@@ -672,6 +672,74 @@ import Testing
     #expect(decision.reasons.contains { $0.contains("unsupported symbol kind parameter") })
 }
 
+@Test func safetyAnalyzerKeepsRuntimeOwnerContractsSeparateFromLocalParameterBindings() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Action.swift")
+    let lines = [
+        "@objc func action(_ sender: Any) {",
+        "    _ = sender",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let symbol = SymbolRecord(
+        usr: "usr-sender",
+        name: "sender",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let group = USROccurrenceGroup(
+        usr: symbol.usr,
+        symbol: symbol,
+        occurrences: [
+            testOccurrence(
+                symbol,
+                path: file.path,
+                line: 1,
+                token: "sender",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                symbol,
+                path: file.path,
+                line: 2,
+                token: "sender",
+                roles: ["reference"]
+            )
+        ]
+    )
+    let facts = IndexedSemanticFacts(
+        externallyOwnedUSRs: [symbol.usr],
+        runtimeSensitiveUSRs: [symbol.usr]
+    )
+
+    let denied = SafetyAnalyzer(sourceRoot: directory).analyze(
+        group: group,
+        sourceCache: cache,
+        indexedFacts: facts
+    )
+    #expect(!denied.allowed)
+
+    let localBindingDecision = SafetyAnalyzer(sourceRoot: directory).analyze(
+        group: group,
+        sourceCache: cache,
+        indexedFacts: facts,
+        localBindingOnlyParameterUSRs: [symbol.usr]
+    )
+    #expect(localBindingDecision.allowed)
+    #expect(localBindingDecision.oldName == "sender")
+}
+
 @Test func indexedParameterComponentsSeparateExternalLabelsFromLocalBindings() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
@@ -1179,10 +1247,258 @@ import Testing
     #expect(summary.parametersWithoutSourceNames == 1)
     #expect(summary.sharedLabelAndBindingTokens == 0)
     #expect(summary.distinctLabelAndBindingTokens == 5)
+    #expect(summary.localBindingReferenceTokens == 6)
+    #expect(summary.parametersWithShadowingBindingDeclarations == 0)
     #expect(summary.localBindingOnlyCoverageCandidates == 3)
     #expect(summary.parametersRequiringExternalLabelCoordination == 3)
     #expect(summary.nonEnumParametersWithoutLocalBindings == 0)
     #expect(summary.enumCaseParametersExcludedFromParameterStage == 3)
+}
+
+@Test func renamePlannerRenamesOnlyParametersWhoseExternalLabelIsAlreadyAbsent() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Parameters.swift")
+    let lines = [
+        "func calculate(_ value: Int, wire local: Int, shared: Int) -> Int {",
+        "    value + local + shared",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func parameter(_ usr: String, _ name: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: "parameter",
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+
+    let value = parameter("usr-value", "value")
+    let local = parameter("usr-local", "local")
+    let shared = parameter("usr-shared", "shared")
+    let occurrences = [
+        testOccurrence(value, path: file.path, line: 1, token: "value", roles: ["definition"]),
+        testOccurrence(value, path: file.path, line: 2, token: "value", roles: ["reference"]),
+        testOccurrence(local, path: file.path, line: 1, token: "local", roles: ["definition"]),
+        testOccurrence(local, path: file.path, line: 2, token: "local", roles: ["reference"]),
+        testOccurrence(shared, path: file.path, line: 1, token: "shared", roles: ["definition"]),
+        testOccurrence(shared, path: file.path, line: 2, token: "shared", roles: ["reference"])
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [value, local, shared],
+        occurrences: occurrences
+    )
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    let entry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(plan.entries.count == 1)
+    #expect(entry.oldName == "value")
+    #expect(entry.newName.first?.isLowercase == true)
+    #expect(entry.replacements.count == 2)
+    #expect(plan.denied.contains { $0.usr == local.usr })
+    #expect(plan.denied.contains { $0.usr == shared.usr })
+    #expect(plan.parameterSyntaxFacts.localBindingOnlyCoverageCandidates == 1)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
+    #expect(plan.parameterLocalBindingOutcome.denied == 0)
+    #expect(plan.parameterLocalBindingOutcome.unclassified == 0)
+    #expect(plan.parameterLocalBindingOutcome.denialCategories.isEmpty)
+    #expect(plan.parameterLocalBindingOutcome.deniedCandidateUSRs.isEmpty)
+    #expect(!entry.replacements.contains { $0.oldName == "_" })
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched == [
+        "func calculate(_ \(entry.newName): Int, wire local: Int, shared: Int) -> Int {",
+        "    \(entry.newName) + local + shared",
+        "}",
+        ""
+    ].joined(separator: "\n"))
+}
+
+@Test func renamePlannerAddsCompilerSyntaxParameterReferencesMissingFromIndex() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Handler.swift")
+    let lines = [
+        "struct Handler {",
+        "    let label: String",
+        "    init(_ label: String) {",
+        "        self.label = label",
+        "    }",
+        "    func format(_ message: String) -> String {",
+        "        \"\\(message)\"",
+        "    }",
+        "    func evaluate(_ webView: WebView) {",
+        "        work { [weak webView] in webView?.run() }",
+        "    }",
+        "    func shadow(_ value: Int) -> Int {",
+        "        do { let value = 1; _ = value }",
+        "        return value",
+        "    }",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func parameter(_ usr: String, _ name: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: "parameter",
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+
+    let label = parameter("usr-label", "label")
+    let message = parameter("usr-message", "message")
+    let webView = parameter("usr-web-view", "webView")
+    let shadowedValue = parameter("usr-shadowed-value", "value")
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [label, message, webView, shadowedValue],
+        occurrences: [
+            testOccurrence(label, path: file.path, line: 3, token: "label", roles: ["definition"]),
+            testOccurrence(message, path: file.path, line: 6, token: "message", roles: ["definition"]),
+            testOccurrence(
+                webView,
+                path: file.path,
+                line: 9,
+                token: "webView",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                shadowedValue,
+                path: file.path,
+                line: 12,
+                token: "value",
+                roles: ["definition"]
+            )
+        ]
+    )
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    let labelEntry = try #require(plan.entries.first { $0.usr == label.usr })
+    let messageEntry = try #require(plan.entries.first { $0.usr == message.usr })
+    let webViewEntry = try #require(plan.entries.first { $0.usr == webView.usr })
+    #expect(plan.entries.count == 3)
+    #expect(labelEntry.replacements.count == 2)
+    #expect(messageEntry.replacements.count == 2)
+    #expect(plan.denied.contains { $0.usr == shadowedValue.usr })
+    #expect(webViewEntry.replacements.count == 3)
+    #expect(plan.parameterSyntaxFacts.localBindingReferenceTokens == 6)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 1)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 3)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 3)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("init(_ \(labelEntry.newName): String)"))
+    #expect(patched.contains("self.label = \(labelEntry.newName)"))
+    #expect(patched.contains("func format(_ \(messageEntry.newName): String)"))
+    #expect(patched.contains("\\(\(messageEntry.newName))"))
+    #expect(patched.contains("func evaluate(_ \(webViewEntry.newName): WebView)"))
+    #expect(patched.contains("[weak \(webViewEntry.newName)]"))
+    #expect(patched.contains("\(webViewEntry.newName)?.run()"))
+    #expect(patched.contains("func shadow(_ value: Int)"))
+}
+
+@Test func parameterLocalBindingRenameFailsClosedForImplicitSwiftBindings() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("ImplicitBindings.swift")
+    let lines = [
+        "func catchShadow(_ error: Error) {",
+        "    do { throw error } catch { _ = error }",
+        "}",
+        "subscript(_ newValue: Int) -> Int {",
+        "    get { newValue }",
+        "    set { print(newValue) }",
+        "}",
+        "func observerShadow(_ oldValue: Int) {",
+        "    var value = 0 { didSet { print(oldValue) } }",
+        "    print(oldValue, value)",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func parameter(_ usr: String, _ name: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: "parameter",
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+
+    let error = parameter("usr-implicit-error-shadow", "error")
+    let newValue = parameter("usr-implicit-new-value-shadow", "newValue")
+    let oldValue = parameter("usr-implicit-old-value-shadow", "oldValue")
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [error, newValue, oldValue],
+        occurrences: [
+            testOccurrence(error, path: file.path, line: 1, token: "error", roles: ["definition"]),
+            testOccurrence(
+                newValue,
+                path: file.path,
+                line: 4,
+                token: "newValue",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                oldValue,
+                path: file.path,
+                line: 8,
+                token: "oldValue",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    #expect(plan.entries.isEmpty)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 3)
+    #expect(plan.parameterSyntaxFacts.localBindingOnlyCoverageCandidates == 0)
+    #expect(plan.denied.map(\.usr).contains(error.usr))
+    #expect(plan.denied.map(\.usr).contains(newValue.usr))
+    #expect(plan.denied.map(\.usr).contains(oldValue.usr))
 }
 
 @Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {

@@ -6,11 +6,18 @@ public struct SourceTokenRange: Hashable, Sendable {
     public let path: String
     public let name: String
     public let byteRange: Range<Int>
+    public let isBackticked: Bool
 
-    public init(path: String, name: String, byteRange: Range<Int>) {
+    public init(
+        path: String,
+        name: String,
+        byteRange: Range<Int>,
+        isBackticked: Bool = false
+    ) {
         self.path = SourcePathNormalizer.canonicalPath(path)
         self.name = name
         self.byteRange = byteRange
+        self.isBackticked = isBackticked
     }
 }
 
@@ -44,6 +51,9 @@ public struct ParameterDeclarationSyntaxRoles: Hashable, Sendable {
     public let indexedDeclarationAnchor: SourceTokenRange
     public let externalLabel: ParameterExternalLabelSyntaxRole
     public let localBinding: SourceTokenRange?
+    public let localBindingReferences: [SourceTokenRange]
+    public let shadowingBindingDeclarations: [SourceTokenRange]
+    public let implicitShadowingBindingNames: Set<String>
     public let syntaxOwnerToken: SourceTokenRange?
     public let indexedOwnerUSR: String?
     public let syntaxOwnerMatchesIndexedOwner: Bool
@@ -58,6 +68,13 @@ public struct ParameterDeclarationSyntaxRoles: Hashable, Sendable {
 
     public var isNestedLocalFunctionParameter: Bool {
         kind == .function && !syntaxOwnerMatchesIndexedOwner
+    }
+
+    public var localBindingTokens: [SourceTokenRange] {
+        let declaration = localBinding.map { [$0] } ?? []
+        return Array(Set(declaration + localBindingReferences)).sorted {
+            ($0.path, $0.byteRange.lowerBound) < ($1.path, $1.byteRange.lowerBound)
+        }
     }
 }
 
@@ -80,6 +97,8 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
     public let parametersWithoutSourceNames: Int
     public let sharedLabelAndBindingTokens: Int
     public let distinctLabelAndBindingTokens: Int
+    public let localBindingReferenceTokens: Int
+    public let parametersWithShadowingBindingDeclarations: Int
     public let localBindingOnlyCoverageCandidates: Int
     public let parametersRequiringExternalLabelCoordination: Int
     public let nonEnumParametersWithoutLocalBindings: Int
@@ -128,6 +147,13 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
                 && $0.localBinding != nil
                 && !$0.sharesLabelAndBindingToken
         }
+        self.localBindingReferenceTokens = roles.reduce(0) {
+            $0 + $1.localBindingReferences.count
+        }
+        self.parametersWithShadowingBindingDeclarations = roles.count {
+            !$0.shadowingBindingDeclarations.isEmpty
+                || !$0.implicitShadowingBindingNames.isEmpty
+        }
         self.localBindingOnlyCoverageCandidates = roles.count {
             ParameterSyntaxFacts.isLocalBindingOnlyCoverageCandidate($0)
         }
@@ -150,6 +176,77 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
             grouping: unresolvedReasonsByUSR.values,
             by: { $0 }
         ).mapValues(\.count)
+    }
+}
+
+public struct ParameterLocalBindingOutcomeSummary: Codable, Equatable, Sendable {
+    public let candidates: Int
+    public let renamed: Int
+    public let denied: Int
+    public let unclassified: Int
+    public let denialCategories: [CoverageDenialSummary]
+    public let deniedCandidateUSRs: [String]
+
+    public static let empty = ParameterLocalBindingOutcomeSummary(
+        candidates: 0,
+        renamed: 0,
+        denied: 0,
+        unclassified: 0,
+        denialCategories: [],
+        deniedCandidateUSRs: []
+    )
+
+    private init(
+        candidates: Int,
+        renamed: Int,
+        denied: Int,
+        unclassified: Int,
+        denialCategories: [CoverageDenialSummary],
+        deniedCandidateUSRs: [String]
+    ) {
+        self.candidates = candidates
+        self.renamed = renamed
+        self.denied = denied
+        self.unclassified = unclassified
+        self.denialCategories = denialCategories
+        self.deniedCandidateUSRs = deniedCandidateUSRs
+    }
+
+    init(
+        candidateUSRs: Set<String>,
+        entries: [RenamePlanEntry],
+        decisions: [SafetyDecision],
+        groupsByUSR: [String: USROccurrenceGroup]
+    ) {
+        let renamedUSRs = Set(entries.map(\.usr)).intersection(candidateUSRs)
+        let decisionsByUSR = Dictionary(uniqueKeysWithValues: decisions.map { ($0.usr, $0) })
+        let deniedUSRs = candidateUSRs.intersection(decisionsByUSR.keys)
+        var categoryCounts: [CoverageDenialCategory: Int] = [:]
+        for usr in deniedUSRs {
+            guard let decision = decisionsByUSR[usr] else {
+                continue
+            }
+            let categories = CoverageAnalyzer.denialCategories(
+                for: decision,
+                group: groupsByUSR[usr]
+            ).subtracting([.parameter])
+            for category in categories.isEmpty ? [.other] : categories {
+                categoryCounts[category, default: 0] += 1
+            }
+        }
+
+        self.candidates = candidateUSRs.count
+        self.renamed = renamedUSRs.count
+        self.denied = deniedUSRs.count
+        self.unclassified = candidateUSRs.subtracting(renamedUSRs).subtracting(deniedUSRs).count
+        self.denialCategories = categoryCounts.map {
+            CoverageDenialSummary(category: $0.key, members: $0.value)
+        }.sorted {
+            $0.members == $1.members
+                ? $0.category.rawValue < $1.category.rawValue
+                : $0.members > $1.members
+        }
+        self.deniedCandidateUSRs = deniedUSRs.sorted()
     }
 }
 
@@ -188,6 +285,7 @@ public struct ParameterSyntaxFacts: Sendable {
             let tree = Parser.parse(source: String(decoding: source.data, as: UTF8.self))
             let visitor = ParameterSyntaxVisitor(source: source)
             visitor.walk(tree)
+            visitor.resolveLocalBindingReferences()
             candidatesByPathAndOffset[path] = Dictionary(
                 grouping: visitor.candidates,
                 by: { $0.indexedAnchor.byteRange.lowerBound }
@@ -210,7 +308,8 @@ public struct ParameterSyntaxFacts: Sendable {
                     SourceTokenRange(
                         path: source.path,
                         name: $0.name,
-                        byteRange: $0.byteRange
+                        byteRange: $0.byteRange,
+                        isBackticked: $0.isBackticked
                     )
                 }
                 return IndexedParameterAnchor(
@@ -260,7 +359,8 @@ public struct ParameterSyntaxFacts: Sendable {
                     return SourceTokenRange(
                         path: source.path,
                         name: token.name,
-                        byteRange: token.byteRange
+                        byteRange: token.byteRange,
+                        isBackticked: token.isBackticked
                     )
                 }
             } ?? [])
@@ -274,6 +374,9 @@ public struct ParameterSyntaxFacts: Sendable {
                 indexedDeclarationAnchor: declarationAnchor.token ?? candidate.indexedAnchor,
                 externalLabel: candidate.externalLabel,
                 localBinding: candidate.localBinding,
+                localBindingReferences: candidate.localBindingReferences,
+                shadowingBindingDeclarations: candidate.shadowingBindingDeclarations,
+                implicitShadowingBindingNames: candidate.implicitShadowingBindingNames,
                 syntaxOwnerToken: candidate.ownerToken,
                 indexedOwnerUSR: indexedOwnerUSR,
                 syntaxOwnerMatchesIndexedOwner: syntaxOwnerMatchesIndexedOwner
@@ -304,7 +407,13 @@ public struct ParameterSyntaxFacts: Sendable {
     static func isLocalBindingOnlyCoverageCandidate(
         _ role: ParameterDeclarationSyntaxRoles
     ) -> Bool {
-        guard role.kind != .enumCase, role.localBinding != nil else {
+        guard role.kind != .enumCase,
+              role.localBinding != nil,
+              role.shadowingBindingDeclarations.isEmpty,
+              role.implicitShadowingBindingNames.isEmpty,
+              role.localBindingTokens.allSatisfy({
+                  !$0.isBackticked && isPlainSwiftIdentifier($0.name)
+              }) else {
             return false
         }
         switch role.externalLabel {
@@ -322,11 +431,23 @@ private struct ParameterSyntaxCandidate {
     let externalLabel: ParameterExternalLabelSyntaxRole
     let localBinding: SourceTokenRange?
     let ownerToken: SourceTokenRange?
+    let bodyRange: Range<Int>?
+    var localBindingReferences: [SourceTokenRange] = []
+    var shadowingBindingDeclarations: [SourceTokenRange] = []
+    var implicitShadowingBindingNames: Set<String> = []
+}
+
+private struct ImplicitBindingScope {
+    let name: String
+    let bodyRange: Range<Int>
 }
 
 private final class ParameterSyntaxVisitor: SyntaxVisitor {
     let source: SourceFile
     var candidates: [ParameterSyntaxCandidate] = []
+    var declarationReferences: [SourceTokenRange] = []
+    var bindingDeclarations: [SourceTokenRange] = []
+    var implicitBindingScopes: [ImplicitBindingScope] = []
 
     init(source: SourceFile) {
         self.source = source
@@ -340,12 +461,16 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             return .visitChildren
         }
         let localBinding = indexedAnchor.name == "_" ? nil : indexedAnchor
+        if let localBinding {
+            bindingDeclarations.append(localBinding)
+        }
         candidates.append(ParameterSyntaxCandidate(
             kind: owner.kind,
             indexedAnchor: indexedAnchor,
             externalLabel: externalLabel(firstName),
             localBinding: localBinding,
-            ownerToken: owner.token
+            ownerToken: owner.token,
+            bodyRange: owner.bodyRange
         ))
         return .visitChildren
     }
@@ -361,7 +486,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                 indexedAnchor: indexedAnchor,
                 externalLabel: .none,
                 localBinding: nil,
-                ownerToken: ownerToken(of: node, as: EnumCaseElementSyntax.self, token: \.name)
+                ownerToken: ownerToken(of: node, as: EnumCaseElementSyntax.self, token: \.name),
+                bodyRange: nil
             ))
             return .visitChildren
         }
@@ -369,12 +495,17 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
               let indexedAnchor = sourceToken(node.secondName ?? firstNameSyntax) else {
             return .visitChildren
         }
+        let localBinding = indexedAnchor.name == "_" ? nil : indexedAnchor
+        if let localBinding {
+            bindingDeclarations.append(localBinding)
+        }
         candidates.append(ParameterSyntaxCandidate(
             kind: .enumCase,
             indexedAnchor: indexedAnchor,
             externalLabel: externalLabel(firstName),
-            localBinding: indexedAnchor.name == "_" ? nil : indexedAnchor,
-            ownerToken: ownerToken(of: node, as: EnumCaseElementSyntax.self, token: \.name)
+            localBinding: localBinding,
+            ownerToken: ownerToken(of: node, as: EnumCaseElementSyntax.self, token: \.name),
+            bodyRange: nil
         ))
         return .visitChildren
     }
@@ -383,12 +514,15 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         guard let indexedAnchor = sourceToken(node.name) else {
             return .visitChildren
         }
+        let owner = accessorOwner(of: node)
+        bindingDeclarations.append(indexedAnchor)
         candidates.append(ParameterSyntaxCandidate(
             kind: .accessor,
             indexedAnchor: indexedAnchor,
             externalLabel: .none,
             localBinding: indexedAnchor,
-            ownerToken: ownerToken(of: node, as: AccessorDeclSyntax.self, token: \.accessorSpecifier)
+            ownerToken: owner?.token,
+            bodyRange: owner?.bodyRange
         ))
         return .visitChildren
     }
@@ -397,36 +531,175 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         guard let indexedAnchor = sourceToken(node.secondName ?? node.firstName) else {
             return .visitChildren
         }
+        let localBinding = indexedAnchor.name == "_" ? nil : indexedAnchor
+        if let localBinding {
+            bindingDeclarations.append(localBinding)
+        }
+        let owner = closureOwner(of: node)
         candidates.append(ParameterSyntaxCandidate(
             kind: .closure,
             indexedAnchor: indexedAnchor,
             externalLabel: .none,
-            localBinding: indexedAnchor.name == "_" ? nil : indexedAnchor,
-            ownerToken: ownerToken(of: node, as: ClosureExprSyntax.self, token: \.leftBrace)
+            localBinding: localBinding,
+            ownerToken: owner?.token,
+            bodyRange: owner?.bodyRange
         ))
         return .visitChildren
     }
 
+    override func visit(_ node: DeclReferenceExprSyntax) -> SyntaxVisitorContinueKind {
+        if !isMemberAccessName(node), let token = sourceToken(node.baseName) {
+            declarationReferences.append(token)
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: IdentifierPatternSyntax) -> SyntaxVisitorContinueKind {
+        if let token = sourceToken(node.identifier) {
+            bindingDeclarations.append(token)
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: ClosureCaptureSyntax) -> SyntaxVisitorContinueKind {
+        guard let token = sourceToken(node.name) else {
+            return .visitChildren
+        }
+        if node.initializer == nil {
+            declarationReferences.append(token)
+        } else {
+            bindingDeclarations.append(token)
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: CatchClauseSyntax) -> SyntaxVisitorContinueKind {
+        if let bodyRange = syntaxRange(node.body) {
+            implicitBindingScopes.append(ImplicitBindingScope(
+                name: "error",
+                bodyRange: bodyRange
+            ))
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: AccessorDeclSyntax) -> SyntaxVisitorContinueKind {
+        guard node.parameters == nil,
+              let bodyRange = syntaxRange(node.body) else {
+            return .visitChildren
+        }
+        let implicitBindingName: String?
+        switch node.accessorSpecifier.text {
+        case "set", "willSet":
+            implicitBindingName = "newValue"
+        case "didSet":
+            implicitBindingName = "oldValue"
+        default:
+            implicitBindingName = nil
+        }
+        if let implicitBindingName {
+            implicitBindingScopes.append(ImplicitBindingScope(
+                name: implicitBindingName,
+                bodyRange: bodyRange
+            ))
+        }
+        return .visitChildren
+    }
+
+    func resolveLocalBindingReferences() {
+        for index in candidates.indices {
+            guard let localBinding = candidates[index].localBinding,
+                  let bodyRange = candidates[index].bodyRange else {
+                continue
+            }
+            candidates[index].localBindingReferences = Array(Set(
+                declarationReferences.filter {
+                    $0.name == localBinding.name
+                        && bodyRange.contains($0.byteRange.lowerBound)
+                }
+            )).sorted { $0.byteRange.lowerBound < $1.byteRange.lowerBound }
+            candidates[index].shadowingBindingDeclarations = Array(Set(
+                bindingDeclarations.filter {
+                    $0.name == localBinding.name
+                        && bodyRange.contains($0.byteRange.lowerBound)
+                }
+            )).sorted { $0.byteRange.lowerBound < $1.byteRange.lowerBound }
+            candidates[index].implicitShadowingBindingNames = Set(
+                implicitBindingScopes.compactMap { scope in
+                    scope.name == localBinding.name
+                        && bodyRange.contains(scope.bodyRange.lowerBound)
+                        ? scope.name
+                        : nil
+                }
+            )
+        }
+    }
+
     private func functionOwner(
         of node: FunctionParameterSyntax
-    ) -> (kind: ParameterDeclarationSyntaxKind, token: SourceTokenRange)? {
+    ) -> (
+        kind: ParameterDeclarationSyntaxKind,
+        token: SourceTokenRange,
+        bodyRange: Range<Int>?
+    )? {
         var ancestor = Syntax(node).parent
         while let current = ancestor {
             if let function = current.as(FunctionDeclSyntax.self),
                let token = sourceToken(function.name) {
-                return (.function, token)
+                return (.function, token, syntaxRange(function.body))
             }
             if let initializer = current.as(InitializerDeclSyntax.self),
                let token = sourceToken(initializer.initKeyword) {
-                return (.initializer, token)
+                return (.initializer, token, syntaxRange(initializer.body))
             }
             if let subscriptDeclaration = current.as(SubscriptDeclSyntax.self),
                let token = sourceToken(subscriptDeclaration.subscriptKeyword) {
-                return (.subscriptDeclaration, token)
+                return (
+                    .subscriptDeclaration,
+                    token,
+                    syntaxRange(subscriptDeclaration.accessorBlock)
+                )
             }
             ancestor = current.parent
         }
         return nil
+    }
+
+    private func accessorOwner(
+        of node: AccessorParametersSyntax
+    ) -> (token: SourceTokenRange, bodyRange: Range<Int>?)? {
+        var ancestor = Syntax(node).parent
+        while let current = ancestor {
+            if let accessor = current.as(AccessorDeclSyntax.self),
+               let token = sourceToken(accessor.accessorSpecifier) {
+                return (token, syntaxRange(accessor.body))
+            }
+            ancestor = current.parent
+        }
+        return nil
+    }
+
+    private func closureOwner(
+        of node: ClosureParameterSyntax
+    ) -> (token: SourceTokenRange, bodyRange: Range<Int>?)? {
+        var ancestor = Syntax(node).parent
+        while let current = ancestor {
+            if let closure = current.as(ClosureExprSyntax.self),
+               let token = sourceToken(closure.leftBrace) {
+                return (token, syntaxRange(closure.statements))
+            }
+            ancestor = current.parent
+        }
+        return nil
+    }
+
+    private func syntaxRange<Node: SyntaxProtocol>(_ node: Node?) -> Range<Int>? {
+        guard let node else {
+            return nil
+        }
+        let start = node.positionAfterSkippingLeadingTrivia.utf8Offset
+        let end = node.endPositionBeforeTrailingTrivia.utf8Offset
+        return start < end ? start..<end : nil
     }
 
     private func ownerToken<Node: SyntaxProtocol>(
@@ -448,6 +721,14 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         firstName.name == "_" ? .omitted(firstName) : .named(firstName)
     }
 
+    private func isMemberAccessName(_ node: DeclReferenceExprSyntax) -> Bool {
+        guard let memberAccess = node.parent?.as(MemberAccessExprSyntax.self) else {
+            return false
+        }
+        return node.baseName.positionAfterSkippingLeadingTrivia
+            == memberAccess.declName.baseName.positionAfterSkippingLeadingTrivia
+    }
+
     private func sourceToken(_ token: TokenSyntax) -> SourceTokenRange? {
         guard token.presence == .present else {
             return nil
@@ -457,7 +738,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             return SourceTokenRange(
                 path: source.path,
                 name: identifier.name,
-                byteRange: identifier.byteRange
+                byteRange: identifier.byteRange,
+                isBackticked: identifier.isBackticked
             )
         }
         let rawEnd = token.endPositionBeforeTrailingTrivia.utf8Offset

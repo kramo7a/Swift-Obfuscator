@@ -50,6 +50,29 @@ public struct SourceFile: Sendable {
         return offset
     }
 
+    public func sourceLocation(atByteOffset byteOffset: Int) -> (
+        line: Int,
+        utf8Column: Int
+    )? {
+        guard byteOffset >= 0, byteOffset <= data.count else {
+            return nil
+        }
+        var lowerBound = 0
+        var upperBound = lineStarts.count
+        while lowerBound + 1 < upperBound {
+            let middle = (lowerBound + upperBound) / 2
+            if lineStarts[middle] <= byteOffset {
+                lowerBound = middle
+            } else {
+                upperBound = middle
+            }
+        }
+        return (
+            line: lowerBound + 1,
+            utf8Column: byteOffset - lineStarts[lowerBound] + 1
+        )
+    }
+
     public func identifierToken(line: Int, utf8Column: Int) -> IdentifierToken? {
         guard let offset = byteOffset(line: line, utf8Column: utf8Column) else {
             return nil

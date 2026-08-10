@@ -15,6 +15,7 @@ public struct RenamePlan: Codable, Sendable {
     public let supportReplacements: [SourceReplacement]
     public let parameterFacts: ParameterFactsSummary
     public let parameterSyntaxFacts: ParameterSyntaxFactsSummary
+    public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
 
     public init(
         entries: [RenamePlanEntry],
@@ -22,7 +23,8 @@ public struct RenamePlan: Codable, Sendable {
         conflicts: [String],
         supportReplacements: [SourceReplacement] = [],
         parameterFacts: ParameterFactsSummary = .empty,
-        parameterSyntaxFacts: ParameterSyntaxFactsSummary = .empty
+        parameterSyntaxFacts: ParameterSyntaxFactsSummary = .empty,
+        parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty
     ) {
         self.entries = entries
         self.denied = denied
@@ -30,6 +32,7 @@ public struct RenamePlan: Codable, Sendable {
         self.supportReplacements = supportReplacements
         self.parameterFacts = parameterFacts
         self.parameterSyntaxFacts = parameterSyntaxFacts
+        self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -39,6 +42,7 @@ public struct RenamePlan: Codable, Sendable {
         case supportReplacements
         case parameterFacts
         case parameterSyntaxFacts
+        case parameterLocalBindingOutcome
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,6 +61,10 @@ public struct RenamePlan: Codable, Sendable {
         parameterSyntaxFacts = try container.decodeIfPresent(
             ParameterSyntaxFactsSummary.self,
             forKey: .parameterSyntaxFacts
+        ) ?? .empty
+        parameterLocalBindingOutcome = try container.decodeIfPresent(
+            ParameterLocalBindingOutcomeSummary.self,
+            forKey: .parameterLocalBindingOutcome
         ) ?? .empty
     }
 
@@ -158,7 +166,9 @@ public struct RenamePlanner {
                             ? component.protocolRequirementUSRs
                             : [],
                         serializationKeyPreservedUSRs: serializationKeyPreservedUSRs,
-                        propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs
+                        propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs,
+                        localBindingOnlyParameterUSRs:
+                            parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs
                     )
                 }
 
@@ -306,7 +316,9 @@ public struct RenamePlanner {
                 overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
                 tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs,
                 serializationKeyPreservedUSRs: serializationKeyPreservedUSRs,
-                propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs
+                propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs,
+                localBindingOnlyParameterUSRs:
+                    parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs
             )
             guard decision.allowed, let oldName = decision.oldName else {
                 denied.append(decision)
@@ -352,6 +364,42 @@ public struct RenamePlanner {
                     newName: newName,
                     usr: group.usr
                 ))
+            }
+
+            if group.symbol.kind == "parameter",
+               parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs.contains(group.usr),
+               let roles = parameterSyntaxFacts.rolesByUSR[group.usr] {
+                for token in roles.localBindingTokens {
+                    guard let source = sourceCache.file(for: token.path) else {
+                        localReasons.append("source file unavailable for \(token.path)")
+                        continue
+                    }
+                    guard token.name == oldName,
+                          source.text(in: token.byteRange) == oldName else {
+                        localReasons.append(
+                            "compiler syntax token mismatch at \(token.path):\(token.byteRange.lowerBound)"
+                        )
+                        continue
+                    }
+                    guard let location = source.sourceLocation(
+                        atByteOffset: token.byteRange.lowerBound
+                    ) else {
+                        localReasons.append(
+                            "compiler syntax source location unavailable at \(token.path):\(token.byteRange.lowerBound)"
+                        )
+                        continue
+                    }
+                    replacements.insert(SourceReplacement(
+                        path: source.path,
+                        byteOffset: token.byteRange.lowerBound,
+                        length: token.byteRange.count,
+                        line: location.line,
+                        utf8Column: location.utf8Column,
+                        oldName: oldName,
+                        newName: newName,
+                        usr: group.usr
+                    ))
+                }
             }
 
             if !localReasons.isEmpty || replacements.isEmpty {
@@ -436,7 +484,13 @@ public struct RenamePlanner {
             conflicts: conflicts,
             supportReplacements: supportReplacements,
             parameterFacts: indexedFacts.parameterFactsSummary,
-            parameterSyntaxFacts: parameterSyntaxFacts.summary
+            parameterSyntaxFacts: parameterSyntaxFacts.summary,
+            parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary(
+                candidateUSRs: parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs,
+                entries: entries,
+                decisions: denied,
+                groupsByUSR: groupsByUSR
+            )
         )
     }
 
@@ -836,7 +890,8 @@ public struct RenamePlanner {
             "instanceProperty",
             "staticProperty",
             "classProperty",
-            "variable"
+            "variable",
+            "parameter"
         ]
         guard lowerCamelCaseKinds.contains(symbolKind),
               let letterIndex = name.firstIndex(where: \.isLetter) else {

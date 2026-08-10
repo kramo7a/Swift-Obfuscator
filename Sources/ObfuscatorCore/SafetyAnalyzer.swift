@@ -54,7 +54,8 @@ public struct SafetyAnalyzer: Sendable {
         coordinatedRelatedUSRs: Set<String> = [],
         coordinatedProtocolRequirementUSRs: Set<String> = [],
         serializationKeyPreservedUSRs: Set<String> = [],
-        propertyWrapperSupportedUSRs: Set<String> = []
+        propertyWrapperSupportedUSRs: Set<String> = [],
+        localBindingOnlyParameterUSRs: Set<String> = []
     ) -> SafetyDecision {
         var reasons: [String] = []
         var tokenNames: Set<String> = []
@@ -70,7 +71,9 @@ public struct SafetyAnalyzer: Sendable {
         if isSyntheticAccessorName(group.symbol.name) {
             reasons.append("synthetic accessor is derived from its parent declaration")
         }
-        if !allowedKinds.contains(group.symbol.kind) {
+        let isSupportedLocalBindingParameter = group.symbol.kind == "parameter"
+            && localBindingOnlyParameterUSRs.contains(group.usr)
+        if !allowedKinds.contains(group.symbol.kind) && !isSupportedLocalBindingParameter {
             reasons.append("unsupported symbol kind \(group.symbol.kind)")
         }
         if group.occurrences.isEmpty {
@@ -80,10 +83,13 @@ public struct SafetyAnalyzer: Sendable {
            !coordinatedProtocolRequirementUSRs.contains(group.usr) {
             reasons.append("protocol members require relation-aware witness renaming")
         }
-        if indexedFacts.externallyOwnedUSRs.contains(group.usr) {
+        if indexedFacts.externallyOwnedUSRs.contains(group.usr),
+           !isSupportedLocalBindingParameter {
             reasons.append("extensions on external Swift or Objective-C owners are not self-contained")
         }
-        if !group.usr.hasPrefix("c:"), indexedFacts.runtimeSensitiveUSRs.contains(group.usr) {
+        if !group.usr.hasPrefix("c:"),
+           indexedFacts.runtimeSensitiveUSRs.contains(group.usr),
+           !isSupportedLocalBindingParameter {
             reasons.append("runtime-reflected or externally linked declaration according to IndexStore semantics")
         }
         if overrideRelatedUSRs.contains(group.usr), !coordinatedRelatedUSRs.contains(group.usr) {
@@ -159,7 +165,8 @@ public struct SafetyAnalyzer: Sendable {
                    !serializationKeyPreservedUSRs.contains(group.usr) {
                     reasons.append("serialized stored property requires explicit key preservation")
                 }
-                if declarationHasUnindexedRuntimeOrLinkageAttribute(
+                if !isSupportedLocalBindingParameter,
+                   declarationHasUnindexedRuntimeOrLinkageAttribute(
                     source: source,
                     occurrence: occurrence,
                     token: token

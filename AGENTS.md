@@ -69,6 +69,17 @@ to the outer callable. A parameter USR whose source role is `_` or an anonymous
 payload type is not a renameable local binding even though it remains visible in
 coverage-denominator diagnostics.
 
+IndexStoreDB parameter declarations and ownership are semantic anchors, but the
+index does not reliably publish lexical references to a parameter binding in
+the callable body. For local-binding replacement ranges, walk only the exact
+pinned SwiftParser owner body matched to the indexed declaration, and classify
+compiler syntax roles such as declaration references and closure captures.
+Never approximate these references with raw string matching. Any same-spelled
+explicit shadow binding, or implicit Swift binding such as catch `error`, setter
+`newValue`, or observer `oldValue`, must fail closed for the whole parameter
+USR. Generated parameter and other value-binding identifiers must use
+lowerCamelCase spelling.
+
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 
 

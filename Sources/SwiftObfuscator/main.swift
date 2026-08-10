@@ -61,6 +61,7 @@ struct RunSummary: Codable {
     var counters = RunCounters()
     var parameterFacts: ParameterFactsSummary?
     var parameterSyntaxFacts: ParameterSyntaxFactsSummary?
+    var parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary?
     var artifacts = RunArtifacts()
     var logs: [String] = []
     var error: RunErrorSummary?
@@ -409,6 +410,7 @@ struct SwiftObfuscatorCLI {
             summary.counters.conflicts = plan.conflicts.count
             summary.parameterFacts = plan.parameterFacts
             summary.parameterSyntaxFacts = plan.parameterSyntaxFacts
+            summary.parameterLocalBindingOutcome = plan.parameterLocalBindingOutcome
             let dryRunReport = ReportRenderer.renderDryRun(plan: plan, compact: options.compactReport)
             let dryRunReportPath = try output.writeArtifact(named: "dry-run-report.txt", contents: dryRunReport)
             summary.artifacts.dryRunReport = dryRunReportPath.path
