@@ -45,6 +45,12 @@ public enum ParameterExternalLabelSyntaxRole: Hashable, Sendable {
     }
 }
 
+public enum ParameterTrailingClosureCompatibility: String, Codable, Hashable, Sendable {
+    case definitelyCallable
+    case definitelyNonCallable
+    case unknown
+}
+
 public struct ParameterDeclarationSyntaxRoles: Hashable, Sendable {
     public let parameterUSR: String
     public let kind: ParameterDeclarationSyntaxKind
@@ -53,6 +59,7 @@ public struct ParameterDeclarationSyntaxRoles: Hashable, Sendable {
     public let localBinding: SourceTokenRange?
     public let hasDefaultValue: Bool
     public let isVariadic: Bool
+    public let trailingClosureCompatibility: ParameterTrailingClosureCompatibility
     public let localBindingReferences: [SourceTokenRange]
     public let shadowingBindingDeclarations: [SourceTokenRange]
     public let implicitShadowingBindingNames: Set<String>
@@ -99,6 +106,9 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
     public let parametersWithoutSourceNames: Int
     public let parametersWithDefaultValues: Int
     public let variadicParameters: Int
+    public let definitelyCallableParameters: Int
+    public let definitelyNonCallableParameters: Int
+    public let parametersWithUnknownCallability: Int
     public let sharedLabelAndBindingTokens: Int
     public let distinctLabelAndBindingTokens: Int
     public let localBindingReferenceTokens: Int
@@ -147,6 +157,15 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
         }
         self.parametersWithDefaultValues = roles.count(where: \.hasDefaultValue)
         self.variadicParameters = roles.count(where: \.isVariadic)
+        self.definitelyCallableParameters = roles.count {
+            $0.trailingClosureCompatibility == .definitelyCallable
+        }
+        self.definitelyNonCallableParameters = roles.count {
+            $0.trailingClosureCompatibility == .definitelyNonCallable
+        }
+        self.parametersWithUnknownCallability = roles.count {
+            $0.trailingClosureCompatibility == .unknown
+        }
         self.sharedLabelAndBindingTokens = roles.count(where: \.sharesLabelAndBindingToken)
         self.distinctLabelAndBindingTokens = roles.count {
             $0.externalLabel.token != nil
@@ -284,6 +303,7 @@ public struct ParameterSyntaxFacts: Sendable {
         })
 
         var candidatesByPathAndOffset: [String: [Int: [ParameterSyntaxCandidate]]] = [:]
+        var nominalTypeAnchors: Set<IndexedByteAnchor> = []
         for path in declarationPaths.sorted() {
             guard let source = sourceCache.file(for: path) else {
                 continue
@@ -292,9 +312,32 @@ public struct ParameterSyntaxFacts: Sendable {
             let visitor = ParameterSyntaxVisitor(source: source)
             visitor.walk(tree)
             visitor.resolveLocalBindingReferences()
+            nominalTypeAnchors.formUnion(visitor.candidates.compactMap { candidate in
+                candidate.nominalTypeAnchor.map {
+                    IndexedByteAnchor(path: $0.path, byteOffset: $0.byteRange.lowerBound)
+                }
+            })
             candidatesByPathAndOffset[path] = Dictionary(
                 grouping: visitor.candidates,
                 by: { $0.indexedAnchor.byteRange.lowerBound }
+            )
+        }
+
+        var symbolKindsByNominalTypeAnchor: [IndexedByteAnchor: Set<String>] = [:]
+        for occurrence in snapshot.occurrences where occurrence.roles.contains("reference") {
+            guard let source = sourceCache.file(for: occurrence.path),
+                  let byteOffset = source.byteOffset(
+                    line: occurrence.line,
+                    utf8Column: occurrence.utf8Column
+                  ) else {
+                continue
+            }
+            let anchor = IndexedByteAnchor(path: source.path, byteOffset: byteOffset)
+            guard nominalTypeAnchors.contains(anchor) else {
+                continue
+            }
+            symbolKindsByNominalTypeAnchor[anchor, default: []].insert(
+                occurrence.symbol.kind
             )
         }
 
@@ -387,6 +430,10 @@ public struct ParameterSyntaxFacts: Sendable {
                 localBinding: candidate.localBinding,
                 hasDefaultValue: candidate.hasDefaultValue,
                 isVariadic: candidate.isVariadic,
+                trailingClosureCompatibility: Self.trailingClosureCompatibility(
+                    candidate: candidate,
+                    symbolKindsByNominalTypeAnchor: symbolKindsByNominalTypeAnchor
+                ),
                 localBindingReferences: candidate.localBindingReferences,
                 shadowingBindingDeclarations: candidate.shadowingBindingDeclarations,
                 implicitShadowingBindingNames: candidate.implicitShadowingBindingNames,
@@ -417,6 +464,26 @@ public struct ParameterSyntaxFacts: Sendable {
         }
     }
 
+    private static func trailingClosureCompatibility(
+        candidate: ParameterSyntaxCandidate,
+        symbolKindsByNominalTypeAnchor: [IndexedByteAnchor: Set<String>]
+    ) -> ParameterTrailingClosureCompatibility {
+        guard candidate.trailingClosureCompatibility != .definitelyCallable,
+              let token = candidate.nominalTypeAnchor else {
+            return candidate.trailingClosureCompatibility
+        }
+        let anchor = IndexedByteAnchor(
+            path: token.path,
+            byteOffset: token.byteRange.lowerBound
+        )
+        let kinds = symbolKindsByNominalTypeAnchor[anchor] ?? []
+        let nominalKinds: Set<String> = ["actor", "class", "enum", "struct"]
+        guard !kinds.isEmpty, kinds.isSubset(of: nominalKinds) else {
+            return .unknown
+        }
+        return .definitelyNonCallable
+    }
+
     static func isLocalBindingOnlyCoverageCandidate(
         _ role: ParameterDeclarationSyntaxRoles
     ) -> Bool {
@@ -445,6 +512,8 @@ private struct ParameterSyntaxCandidate {
     let localBinding: SourceTokenRange?
     let hasDefaultValue: Bool
     let isVariadic: Bool
+    let trailingClosureCompatibility: ParameterTrailingClosureCompatibility
+    let nominalTypeAnchor: SourceTokenRange?
     let ownerToken: SourceTokenRange?
     let bodyRange: Range<Int>?
     var localBindingReferences: [SourceTokenRange] = []
@@ -479,6 +548,7 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         if let localBinding {
             bindingDeclarations.append(localBinding)
         }
+        let trailingClosureType = trailingClosureType(of: node.type)
         candidates.append(ParameterSyntaxCandidate(
             kind: owner.kind,
             indexedAnchor: indexedAnchor,
@@ -489,6 +559,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             localBinding: localBinding,
             hasDefaultValue: node.defaultValue != nil,
             isVariadic: node.ellipsis != nil,
+            trailingClosureCompatibility: trailingClosureType.compatibility,
+            nominalTypeAnchor: trailingClosureType.nominalTypeAnchor,
             ownerToken: owner.token,
             bodyRange: owner.bodyRange
         ))
@@ -501,6 +573,7 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                   let indexedAnchor = sourceToken(typeToken) else {
                 return .visitChildren
             }
+            let trailingClosureType = trailingClosureType(of: node.type)
             candidates.append(ParameterSyntaxCandidate(
                 kind: .enumCase,
                 indexedAnchor: indexedAnchor,
@@ -508,6 +581,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                 localBinding: nil,
                 hasDefaultValue: node.defaultValue != nil,
                 isVariadic: false,
+                trailingClosureCompatibility: trailingClosureType.compatibility,
+                nominalTypeAnchor: trailingClosureType.nominalTypeAnchor,
                 ownerToken: ownerToken(of: node, as: EnumCaseElementSyntax.self, token: \.name),
                 bodyRange: nil
             ))
@@ -521,6 +596,7 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         if let localBinding {
             bindingDeclarations.append(localBinding)
         }
+        let trailingClosureType = trailingClosureType(of: node.type)
         candidates.append(ParameterSyntaxCandidate(
             kind: .enumCase,
             indexedAnchor: indexedAnchor,
@@ -528,6 +604,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             localBinding: localBinding,
             hasDefaultValue: node.defaultValue != nil,
             isVariadic: false,
+            trailingClosureCompatibility: trailingClosureType.compatibility,
+            nominalTypeAnchor: trailingClosureType.nominalTypeAnchor,
             ownerToken: ownerToken(of: node, as: EnumCaseElementSyntax.self, token: \.name),
             bodyRange: nil
         ))
@@ -547,6 +625,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             localBinding: indexedAnchor,
             hasDefaultValue: false,
             isVariadic: false,
+            trailingClosureCompatibility: .unknown,
+            nominalTypeAnchor: nil,
             ownerToken: owner?.token,
             bodyRange: owner?.bodyRange
         ))
@@ -562,6 +642,7 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             bindingDeclarations.append(localBinding)
         }
         let owner = closureOwner(of: node)
+        let trailingClosureType = trailingClosureType(of: node.type)
         candidates.append(ParameterSyntaxCandidate(
             kind: .closure,
             indexedAnchor: indexedAnchor,
@@ -569,6 +650,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             localBinding: localBinding,
             hasDefaultValue: false,
             isVariadic: node.ellipsis != nil,
+            trailingClosureCompatibility: trailingClosureType.compatibility,
+            nominalTypeAnchor: trailingClosureType.nominalTypeAnchor,
             ownerToken: owner?.token,
             bodyRange: owner?.bodyRange
         ))
@@ -707,6 +790,45 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         default:
             return false
         }
+    }
+
+    private func trailingClosureType(
+        of type: TypeSyntax?
+    ) -> (
+        compatibility: ParameterTrailingClosureCompatibility,
+        nominalTypeAnchor: SourceTokenRange?
+    ) {
+        guard let type else {
+            return (.unknown, nil)
+        }
+        if type.is(FunctionTypeSyntax.self) {
+            return (.definitelyCallable, nil)
+        }
+        if let optional = type.as(OptionalTypeSyntax.self) {
+            return trailingClosureType(of: optional.wrappedType)
+        }
+        if let implicitlyUnwrapped = type.as(ImplicitlyUnwrappedOptionalTypeSyntax.self) {
+            return trailingClosureType(of: implicitlyUnwrapped.wrappedType)
+        }
+        if let attributed = type.as(AttributedTypeSyntax.self) {
+            return trailingClosureType(of: attributed.baseType)
+        }
+        if let tuple = type.as(TupleTypeSyntax.self),
+           tuple.elements.count == 1,
+           let element = tuple.elements.first,
+           element.firstName == nil,
+           element.secondName == nil {
+            return trailingClosureType(of: element.type)
+        }
+        if let identifier = type.as(IdentifierTypeSyntax.self),
+           identifier.genericArgumentClause == nil {
+            return (.unknown, sourceToken(identifier.name))
+        }
+        if let member = type.as(MemberTypeSyntax.self),
+           member.genericArgumentClause == nil {
+            return (.unknown, sourceToken(member.name))
+        }
+        return (.unknown, nil)
     }
 
     private func accessorOwner(

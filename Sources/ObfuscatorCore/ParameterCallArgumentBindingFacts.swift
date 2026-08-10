@@ -243,7 +243,8 @@ public struct ParameterCallArgumentBindingFacts: Sendable {
                 parameterUSR: member.parameterUSR,
                 externalLabel: member.externalLabel,
                 hasDefaultValue: syntaxRole.hasDefaultValue,
-                isVariadic: syntaxRole.isVariadic
+                isVariadic: syntaxRole.isVariadic,
+                trailingClosureCompatibility: syntaxRole.trailingClosureCompatibility
             ))
         }
         return .success(parameters)
@@ -344,8 +345,10 @@ public struct ParameterCallArgumentBindingFacts: Sendable {
                 return false
             }
             switch argument {
-            case .parenthesized(label: nil), .firstTrailingClosure:
+            case .parenthesized(label: nil):
                 return true
+            case .firstTrailingClosure:
+                return parameter.trailingClosureCompatibility != .definitelyNonCallable
             case .parenthesized(label: .some), .additionalTrailingClosure:
                 return false
             }
@@ -362,9 +365,10 @@ public struct ParameterCallArgumentBindingFacts: Sendable {
                 return false
             }
         case .firstTrailingClosure:
-            return true
+            return parameter.trailingClosureCompatibility != .definitelyNonCallable
         case .additionalTrailingClosure(label: let label):
-            if case .named(let name) = parameter.externalLabel {
+            if parameter.trailingClosureCompatibility != .definitelyNonCallable,
+               case .named(let name) = parameter.externalLabel {
                 return label.name == name
             }
             return false
@@ -377,6 +381,7 @@ private struct MatchParameter {
     let externalLabel: ParameterExternalLabel
     let hasDefaultValue: Bool
     let isVariadic: Bool
+    let trailingClosureCompatibility: ParameterTrailingClosureCompatibility
 }
 
 private enum AssignmentOutcome {

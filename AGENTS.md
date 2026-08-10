@@ -101,7 +101,12 @@ ASCII-only text scanner. Argument-to-parameter matching must enumerate only
 monotonic assignments supported by declaration labels, defaults, variadics,
 and trailing-closure syntax. Accept a call only when that deliberately relaxed
 model has one assignment; zero or multiple assignments fail closed with the
-exact indexed call anchor in the machine-readable report.
+exact indexed call anchor in the machine-readable report. A trailing closure
+may exclude a parameter only from compiler facts: direct/optional function-type
+syntax is callable, while a simple type token is non-callable only when its
+exact IndexStore occurrence resolves exclusively to nominal struct/class/enum/
+actor symbols. Typealiases, protocols, generics, unresolved tokens, and other
+shapes remain unknown; never hardcode concrete type names.
 
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 

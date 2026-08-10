@@ -1267,9 +1267,14 @@ import Testing
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = directory.appendingPathComponent("ParameterTraits.swift")
     let lines = [
-        "func configure(_ values: Int..., retries: Int = 3) {",
+        "func configure(",
+        "    _ values: Int...,",
+        "    retries: Int = 3,",
+        "    completion: (() -> Void)? = nil",
+        ") {",
         "    _ = values",
         "    _ = retries",
+        "    _ = completion",
         "}"
     ]
     try (lines.joined(separator: "\n") + "\n").write(
@@ -1289,9 +1294,11 @@ import Testing
             properties: "[]"
         )
     }
-    let owner = symbol("usr-configure", "configure(_:retries:)", "function")
+    let owner = symbol("usr-configure", "configure(_:retries:completion:)", "function")
     let values = symbol("usr-values", "values", "parameter")
     let retries = symbol("usr-retries", "retries", "parameter")
+    let completion = symbol("usr-traits-completion", "completion", "parameter")
+    let int = symbol("usr-int", "Int", "struct")
     let childOfOwner = RelationRecord(
         usr: owner.usr,
         name: owner.name,
@@ -1300,7 +1307,7 @@ import Testing
     )
     let snapshot = IndexSnapshot(
         sourceFiles: [file.path],
-        symbols: [owner, values, retries],
+        symbols: [owner, values, retries, completion, int],
         occurrences: [
             testOccurrence(
                 owner,
@@ -1312,7 +1319,7 @@ import Testing
             testOccurrence(
                 values,
                 path: file.path,
-                line: 1,
+                line: 2,
                 token: "values",
                 roles: ["definition"],
                 relations: [childOfOwner]
@@ -1320,14 +1327,15 @@ import Testing
             testOccurrence(
                 values,
                 path: file.path,
-                line: 2,
+                line: 6,
                 token: "values",
                 roles: ["reference"]
             ),
+            testOccurrence(int, path: file.path, line: 2, token: "Int", roles: ["reference"]),
             testOccurrence(
                 retries,
                 path: file.path,
-                line: 1,
+                line: 3,
                 token: "retries",
                 roles: ["definition"],
                 relations: [childOfOwner]
@@ -1335,8 +1343,24 @@ import Testing
             testOccurrence(
                 retries,
                 path: file.path,
-                line: 3,
+                line: 7,
                 token: "retries",
+                roles: ["reference"]
+            ),
+            testOccurrence(int, path: file.path, line: 3, token: "Int", roles: ["reference"]),
+            testOccurrence(
+                completion,
+                path: file.path,
+                line: 4,
+                token: "completion",
+                roles: ["definition"],
+                relations: [childOfOwner]
+            ),
+            testOccurrence(
+                completion,
+                path: file.path,
+                line: 8,
+                token: "completion",
                 roles: ["reference"]
             )
         ]
@@ -1350,6 +1374,7 @@ import Testing
     let valuesRoles = try #require(facts.rolesByUSR[values.usr])
     #expect(!valuesRoles.hasDefaultValue)
     #expect(valuesRoles.isVariadic)
+    #expect(valuesRoles.trailingClosureCompatibility == .definitelyNonCallable)
     if case .omitted(let label) = valuesRoles.externalLabel {
         #expect(label.name == "_")
     } else {
@@ -1359,14 +1384,22 @@ import Testing
     let retriesRoles = try #require(facts.rolesByUSR[retries.usr])
     #expect(retriesRoles.hasDefaultValue)
     #expect(!retriesRoles.isVariadic)
+    #expect(retriesRoles.trailingClosureCompatibility == .definitelyNonCallable)
     if case .named(let label) = retriesRoles.externalLabel {
         #expect(label.name == "retries")
     } else {
         Issue.record("Expected a named defaulted label")
     }
 
-    #expect(facts.summary.parametersWithDefaultValues == 1)
+    let completionRoles = try #require(facts.rolesByUSR[completion.usr])
+    #expect(completionRoles.hasDefaultValue)
+    #expect(completionRoles.trailingClosureCompatibility == .definitelyCallable)
+
+    #expect(facts.summary.parametersWithDefaultValues == 2)
     #expect(facts.summary.variadicParameters == 1)
+    #expect(facts.summary.definitelyCallableParameters == 1)
+    #expect(facts.summary.definitelyNonCallableParameters == 2)
+    #expect(facts.summary.parametersWithUnknownCallability == 0)
 }
 
 @Test func parameterSyntaxFactsUseSwiftOperatorAndSubscriptLabelSemantics() throws {
@@ -1983,10 +2016,12 @@ import Testing
         "struct Service {",
         "    func send(required: Int, optional: Int = 0, values: Int..., completion: () -> Void, failure: () -> Void) {}",
         "    func choose(first: () -> Void = {}, second: () -> Void = {}) {}",
+        "    func finish(animated: Bool = true, completion: (() -> Void)? = nil) {}",
         "}",
         "func use(service: Service) {",
         "    service.send(required: 1, values: 2, 3) {} failure: {}",
         "    service.choose {}",
+        "    service.finish {}",
         "}"
     ]
     try (lines.joined(separator: "\n") + "\n").write(
@@ -2023,6 +2058,14 @@ import Testing
     let choose = symbol("usr-choose", "choose(first:second:)", "instanceMethod")
     let first = symbol("usr-first", "first", "parameter")
     let second = symbol("usr-second", "second", "parameter")
+    let finish = symbol("usr-finish", "finish(animated:completion:)", "instanceMethod")
+    let animated = symbol("usr-animated", "animated", "parameter")
+    let finishCompletion = symbol(
+        "usr-finish-completion",
+        "completion",
+        "parameter"
+    )
+    let bool = symbol("usr-bool", "Bool", "struct")
 
     let occurrences = [
         testOccurrence(send, path: file.path, line: 2, token: "send", roles: ["definition"]),
@@ -2069,7 +2112,7 @@ import Testing
         testOccurrence(
             send,
             path: file.path,
-            line: 6,
+            line: 7,
             token: "send",
             roles: ["reference", "call"]
         ),
@@ -2093,14 +2136,42 @@ import Testing
         testOccurrence(
             choose,
             path: file.path,
-            line: 7,
+            line: 8,
             token: "choose",
+            roles: ["reference", "call"]
+        ),
+        testOccurrence(finish, path: file.path, line: 4, token: "finish", roles: ["definition"]),
+        testOccurrence(
+            animated,
+            path: file.path,
+            line: 4,
+            token: "animated",
+            roles: ["definition"],
+            relations: [childOf(finish)]
+        ),
+        testOccurrence(bool, path: file.path, line: 4, token: "Bool", roles: ["reference"]),
+        testOccurrence(
+            finishCompletion,
+            path: file.path,
+            line: 4,
+            token: "completion",
+            roles: ["definition"],
+            relations: [childOf(finish)]
+        ),
+        testOccurrence(
+            finish,
+            path: file.path,
+            line: 9,
+            token: "finish",
             roles: ["reference", "call"]
         )
     ]
     let snapshot = IndexSnapshot(
         sourceFiles: [file.path],
-        symbols: [send, required, optional, values, completion, failure, choose, first, second],
+        symbols: [
+            send, required, optional, values, completion, failure,
+            choose, first, second, finish, animated, finishCompletion, bool
+        ],
         occurrences: occurrences
     )
     let indexedFacts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [file])
@@ -2123,8 +2194,8 @@ import Testing
         callableUSR: send.usr,
         location: IndexedSourceLocation(
             path: file.path,
-            line: 6,
-            utf8Column: utf8Column(of: "send", in: lines[5])
+            line: 7,
+            utf8Column: utf8Column(of: "send", in: lines[6])
         )
     )
     let sendBindings = try #require(bindingFacts.bindingsByAnchor[sendAnchor])
@@ -2137,19 +2208,31 @@ import Testing
     ])
     #expect(sendBindings.arguments.map(\.parameterOrdinal) == [0, 2, 2, 3, 4])
 
+    let finishAnchor = ParameterCallSiteAnchor(
+        callableUSR: finish.usr,
+        location: IndexedSourceLocation(
+            path: file.path,
+            line: 9,
+            utf8Column: utf8Column(of: "finish", in: lines[8])
+        )
+    )
+    let finishBindings = try #require(bindingFacts.bindingsByAnchor[finishAnchor])
+    #expect(finishBindings.arguments.map(\.parameterUSR) == [finishCompletion.usr])
+    #expect(finishBindings.arguments.map(\.parameterOrdinal) == [1])
+
     let summary = bindingFacts.summary
-    #expect(summary.componentsWithNamedExternalLabels == 2)
-    #expect(summary.namedExternalLabelParameters == 7)
-    #expect(summary.indexedCallAnchors == 2)
-    #expect(summary.syntaxResolvedCallAnchors == 2)
-    #expect(summary.bindingResolvedCallAnchors == 1)
+    #expect(summary.componentsWithNamedExternalLabels == 3)
+    #expect(summary.namedExternalLabelParameters == 9)
+    #expect(summary.indexedCallAnchors == 3)
+    #expect(summary.syntaxResolvedCallAnchors == 3)
+    #expect(summary.bindingResolvedCallAnchors == 2)
     #expect(summary.bindingUnresolvedCallAnchors == 1)
-    #expect(summary.boundArguments == 5)
+    #expect(summary.boundArguments == 6)
     #expect(summary.boundNamedLabelTokens == 3)
     #expect(summary.ambiguousCallAnchors == 1)
     #expect(summary.unmatchedCallAnchors == 0)
-    #expect(summary.componentsWithAllIndexedCallsBound == 1)
-    #expect(summary.namedParametersInComponentsWithAllIndexedCallsBound == 5)
+    #expect(summary.componentsWithAllIndexedCallsBound == 2)
+    #expect(summary.namedParametersInComponentsWithAllIndexedCallsBound == 7)
     #expect(summary.componentsWithoutIndexedCalls == 0)
     #expect(summary.namedParametersInComponentsWithoutIndexedCalls == 0)
     #expect(summary.unresolvedByReason == [
@@ -2160,8 +2243,8 @@ import Testing
             callableUSR: choose.usr,
             callableName: choose.name,
             path: file.path,
-            line: 7,
-            utf8Column: utf8Column(of: "choose", in: lines[6]),
+            line: 8,
+            utf8Column: utf8Column(of: "choose", in: lines[7]),
             reason: "call argument-to-parameter ordinal mapping is ambiguous"
         )
     ])
