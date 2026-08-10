@@ -173,6 +173,253 @@ import Testing
     #expect(loaded.occurrences == snapshot.occurrences)
 }
 
+@Test func indexedSemanticFactsDeriveOwnershipAndRuntimeContractsFromIndexRelations() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("SemanticFacts.swift")
+    let lines = [
+        "protocol Service { func run() }",
+        "struct LocalModel {}",
+        "extension LocalModel { func localHelper() {} }",
+        "extension String { struct ExternalNested { func externalHelper() {} } }",
+        "@objc class LocalObjCModel: NSObject {}",
+        "extension LocalObjCModel { func localObjCHelper() {} }",
+        "@objcMembers class RuntimeOwner { struct RuntimeNested { var value: Int { 0 } } }",
+        "func compilerDynamicallyDispatched() {}",
+        "@IBOutlet var outlet: AnyObject?",
+        "class RuntimeOverride { override func run() {} }",
+        "class LocalSwiftSubclass: RuntimeOwner {}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(
+        _ usr: String,
+        _ name: String,
+        _ kind: String,
+        language: String = "swift",
+        propertiesRaw: UInt64 = 0
+    ) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: language,
+            propertiesRaw: propertiesRaw,
+            properties: propertiesRaw == 0 ? "[]" : "[indexed]"
+        )
+    }
+    func relation(_ symbol: SymbolRecord, _ role: String) -> RelationRecord {
+        RelationRecord(usr: symbol.usr, name: symbol.name, rolesRaw: 0, roles: [role])
+    }
+
+    let service = symbol("s:6Sample7ServiceP", "Service", "protocol")
+    let requirement = symbol("s:6Sample7ServiceP3runyyF", "run()", "instanceMethod")
+    let localModel = symbol("s:6Sample10LocalModelV", "LocalModel", "struct")
+    let localExtension = symbol("s:e:local-model", "LocalModel", "extension")
+    let localHelper = symbol("s:6Sample10LocalModelV11localHelperyyF", "localHelper()", "instanceMethod")
+    let string = symbol("s:SS", "String", "struct")
+    let externalExtension = symbol("s:e:string", "String", "extension")
+    let externalNested = symbol("s:external-nested", "ExternalNested", "struct")
+    let externalHelper = symbol("s:external-helper", "externalHelper()", "instanceMethod")
+    let localObjCModel = symbol("c:@M@Sample@objc(cs)LocalObjCModel", "LocalObjCModel", "class")
+    let localObjCExtension = symbol("s:e:local-objc-model", "LocalObjCModel", "extension")
+    let localObjCHelper = symbol("s:local-objc-helper", "localObjCHelper()", "instanceMethod")
+    let runtimeOwner = symbol("c:@M@Sample@objc(cs)RuntimeOwner", "RuntimeOwner", "class")
+    let runtimeNested = symbol("s:runtime-nested", "RuntimeNested", "struct")
+    let runtimeValue = symbol("s:runtime-value", "value", "instanceProperty")
+    let dynamicEntry = symbol("s:dynamic-entry", "compilerDynamicallyDispatched()", "function")
+    let outlet = symbol("s:outlet", "outlet", "variable", propertiesRaw: 1 << 4)
+    let runtimeBaseMethod = symbol("c:@M@Sample@objc(cs)RuntimeBase(im)run", "run()", "instanceMethod")
+    let runtimeOverride = symbol("s:runtime-override", "run()", "instanceMethod")
+    let localSwiftSubclass = symbol("s:6Sample18LocalSwiftSubclassC", "LocalSwiftSubclass", "class")
+
+    let occurrences = [
+        testOccurrence(service, path: file.path, line: 1, token: "Service", roles: ["definition"]),
+        testOccurrence(
+            requirement,
+            path: file.path,
+            line: 1,
+            token: "run",
+            roles: ["definition", "childOf"],
+            relations: [relation(service, "childOf")]
+        ),
+        testOccurrence(localModel, path: file.path, line: 2, token: "LocalModel", roles: ["definition"]),
+        testOccurrence(
+            localModel,
+            path: file.path,
+            line: 3,
+            token: "LocalModel",
+            roles: ["reference", "extendedBy"],
+            relations: [relation(localExtension, "extendedBy")]
+        ),
+        testOccurrence(localExtension, path: file.path, line: 3, token: "LocalModel", roles: ["definition"]),
+        testOccurrence(
+            localHelper,
+            path: file.path,
+            line: 3,
+            token: "localHelper",
+            roles: ["definition", "childOf"],
+            relations: [relation(localExtension, "childOf")]
+        ),
+        testOccurrence(
+            string,
+            path: file.path,
+            line: 4,
+            token: "String",
+            roles: ["reference", "extendedBy"],
+            relations: [relation(externalExtension, "extendedBy")]
+        ),
+        testOccurrence(externalExtension, path: file.path, line: 4, token: "String", roles: ["definition"]),
+        testOccurrence(
+            externalNested,
+            path: file.path,
+            line: 4,
+            token: "ExternalNested",
+            roles: ["definition", "childOf"],
+            relations: [relation(externalExtension, "childOf")]
+        ),
+        testOccurrence(
+            externalHelper,
+            path: file.path,
+            line: 4,
+            token: "externalHelper",
+            roles: ["definition", "childOf"],
+            relations: [relation(externalNested, "childOf")]
+        ),
+        testOccurrence(localObjCModel, path: file.path, line: 5, token: "LocalObjCModel", roles: ["definition"]),
+        testOccurrence(
+            localObjCModel,
+            path: file.path,
+            line: 6,
+            token: "LocalObjCModel",
+            roles: ["reference", "extendedBy"],
+            relations: [relation(localObjCExtension, "extendedBy")]
+        ),
+        testOccurrence(localObjCExtension, path: file.path, line: 6, token: "LocalObjCModel", roles: ["definition"]),
+        testOccurrence(
+            localObjCHelper,
+            path: file.path,
+            line: 6,
+            token: "localObjCHelper",
+            roles: ["definition", "childOf"],
+            relations: [relation(localObjCExtension, "childOf")]
+        ),
+        testOccurrence(runtimeOwner, path: file.path, line: 7, token: "RuntimeOwner", roles: ["definition"]),
+        testOccurrence(
+            runtimeNested,
+            path: file.path,
+            line: 7,
+            token: "RuntimeNested",
+            roles: ["definition", "childOf"],
+            relations: [relation(runtimeOwner, "childOf")]
+        ),
+        testOccurrence(
+            runtimeValue,
+            path: file.path,
+            line: 7,
+            token: "value",
+            roles: ["definition", "childOf"],
+            relations: [relation(runtimeNested, "childOf")]
+        ),
+        testOccurrence(
+            dynamicEntry,
+            path: file.path,
+            line: 8,
+            token: "compilerDynamicallyDispatched",
+            roles: ["definition", "dynamic"]
+        ),
+        testOccurrence(outlet, path: file.path, line: 9, token: "outlet", roles: ["definition"]),
+        OccurrenceRecord(
+            symbol: runtimeOverride,
+            path: file.path,
+            line: 10,
+            utf8Column: utf8Column(of: "run", in: lines[9]),
+            moduleName: "Sample",
+            isSystem: false,
+            rolesRaw: 1,
+            roles: ["definition", "overrideOf"],
+            rolesDescription: "[definition|overrideOf]",
+            symbolProvider: "swift",
+            relations: [relation(runtimeBaseMethod, "overrideOf")]
+        ),
+        testOccurrence(
+            localSwiftSubclass,
+            path: file.path,
+            line: 11,
+            token: "LocalSwiftSubclass",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            runtimeOwner,
+            path: file.path,
+            line: 11,
+            token: "RuntimeOwner",
+            roles: ["reference", "baseOf"],
+            relations: [relation(localSwiftSubclass, "baseOf")]
+        )
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [
+            service, requirement, localModel, localExtension, localHelper, string,
+            externalExtension, externalNested, externalHelper, localObjCModel,
+            localObjCExtension, localObjCHelper, runtimeOwner, runtimeNested,
+            runtimeValue, dynamicEntry, outlet, runtimeBaseMethod, runtimeOverride,
+            localSwiftSubclass
+        ],
+        occurrences: occurrences
+    )
+    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+
+    #expect(facts.protocolRequirementUSRs == [requirement.usr])
+    #expect(facts.externallyOwnedUSRs.contains(externalExtension.usr))
+    #expect(facts.externallyOwnedUSRs.contains(externalNested.usr))
+    #expect(facts.externallyOwnedUSRs.contains(externalHelper.usr))
+    #expect(!facts.externallyOwnedUSRs.contains(localExtension.usr))
+    #expect(!facts.externallyOwnedUSRs.contains(localHelper.usr))
+    #expect(!facts.externallyOwnedUSRs.contains(localObjCExtension.usr))
+    #expect(!facts.externallyOwnedUSRs.contains(localObjCHelper.usr))
+    #expect(facts.runtimeSensitiveUSRs.contains(runtimeOwner.usr))
+    #expect(!facts.runtimeSensitiveUSRs.contains(runtimeNested.usr))
+    #expect(!facts.runtimeSensitiveUSRs.contains(runtimeValue.usr))
+    #expect(!facts.runtimeSensitiveUSRs.contains(dynamicEntry.usr))
+    #expect(facts.runtimeSensitiveUSRs.contains(outlet.usr))
+    #expect(facts.runtimeSensitiveUSRs.contains(runtimeBaseMethod.usr))
+    #expect(facts.runtimeSensitiveUSRs.contains(runtimeOverride.usr))
+    #expect(!facts.runtimeSensitiveUSRs.contains(localSwiftSubclass.usr))
+
+    let groups = Dictionary(uniqueKeysWithValues: snapshot.groupsByUSR.map { ($0.usr, $0) })
+    let analyzer = SafetyAnalyzer(sourceRoot: directory)
+    let requirementDecision = analyzer.analyze(
+        group: try #require(groups[requirement.usr]),
+        sourceCache: cache,
+        indexedFacts: facts
+    )
+    let externalDecision = analyzer.analyze(
+        group: try #require(groups[externalHelper.usr]),
+        sourceCache: cache,
+        indexedFacts: facts
+    )
+    let localDecision = analyzer.analyze(
+        group: try #require(groups[localHelper.usr]),
+        sourceCache: cache,
+        indexedFacts: facts
+    )
+    let runtimeDecision = analyzer.analyze(
+        group: try #require(groups[runtimeOverride.usr]),
+        sourceCache: cache,
+        indexedFacts: facts,
+        overrideRelatedUSRs: [runtimeBaseMethod.usr, runtimeOverride.usr],
+        coordinatedRelatedUSRs: [runtimeBaseMethod.usr, runtimeOverride.usr]
+    )
+
+    #expect(requirementDecision.reasons.contains("protocol members require relation-aware witness renaming"))
+    #expect(externalDecision.reasons.contains("extensions on external Swift or Objective-C owners are not self-contained"))
+    #expect(localDecision.allowed)
+    #expect(runtimeDecision.reasons.contains("runtime-reflected or externally linked declaration according to IndexStore semantics"))
+}
+
 @Test func renamePlanCacheRequiresMatchingToolAndInputs() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -616,7 +863,7 @@ import Testing
     #expect(variableDecision.oldName == "globalCount")
 }
 
-@Test func safetyAnalyzerStillDeniesRuntimeExposedPublicDeclarations() throws {
+@Test func safetyAnalyzerConsumesIndexedRuntimeFactsForPublicDeclarations() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = directory.appendingPathComponent("Sample.swift")
@@ -631,6 +878,9 @@ import Testing
     ]
     try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
+    let runtimeSensitiveUSRs: Set<String> = [
+        "usr-runtime-model", "usr-inherited-exposure", "usr-explicit", "usr-dynamic"
+    ]
 
     func decision(
         usr: String,
@@ -661,7 +911,8 @@ import Testing
         )
         return SafetyAnalyzer(sourceRoot: directory).analyze(
             group: USROccurrenceGroup(usr: usr, symbol: symbol, occurrences: [occurrence]),
-            sourceCache: cache
+            sourceCache: cache,
+            indexedFacts: IndexedSemanticFacts(runtimeSensitiveUSRs: runtimeSensitiveUSRs)
         )
     }
 
@@ -685,6 +936,160 @@ import Testing
         $0.reasons.contains { $0.contains("runtime-reflected") }
     })
     #expect(objcUSRClass.reasons.contains { $0.contains("Objective-C-compatible USR") })
+}
+
+@Test func indexedSemanticFactsDoNotInferRuntimeDispatchFromOverrideSyntax() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Sample.swift")
+    let lines = [
+        "class Base { func run() {} }",
+        "class Child: Base { override func run() {} }"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [file.path])
+
+    let base = SymbolRecord(
+        usr: "s:6Sample4BaseC3runyyF",
+        name: "run()",
+        kind: "instanceMethod",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let child = SymbolRecord(
+        usr: "s:6Sample5ChildC3runyyF",
+        name: "run()",
+        kind: "instanceMethod",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let baseOccurrence = testOccurrence(
+        base,
+        path: file.path,
+        line: 1,
+        token: "run",
+        roles: ["definition"]
+    )
+    let childOccurrence = OccurrenceRecord(
+        symbol: child,
+        path: file.path,
+        line: 2,
+        utf8Column: utf8Column(of: "run", in: lines[1]),
+        moduleName: "Sample",
+        isSystem: false,
+        rolesRaw: 1,
+        roles: ["definition", "overrideOf"],
+        rolesDescription: "[definition|overrideOf]",
+        symbolProvider: "swift",
+        relations: [
+            RelationRecord(
+                usr: base.usr,
+                name: base.name,
+                rolesRaw: 1 << 11,
+                roles: ["overrideOf"]
+            )
+        ]
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [base, child],
+        occurrences: [baseOccurrence, childOccurrence]
+    )
+    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
+        group: USROccurrenceGroup(usr: child.usr, symbol: child, occurrences: [childOccurrence]),
+        sourceCache: cache,
+        indexedFacts: facts,
+        overrideRelatedUSRs: [base.usr, child.usr],
+        coordinatedRelatedUSRs: [base.usr, child.usr]
+    )
+
+    #expect(!facts.runtimeSensitiveUSRs.contains(child.usr))
+    #expect(decision.allowed)
+    #expect(!decision.reasons.contains { $0.contains("runtime-reflected") })
+}
+
+@Test func safetyAnalyzerKeepsNarrowLexicalFallbackForExternalLinkageAttributes() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Sample.swift")
+    let line = "@_cdecl(\"exported_entry\") public func exportedEntry() {}"
+    try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [file.path])
+    let symbol = SymbolRecord(
+        usr: "s:6Sample13exportedEntryyyF",
+        name: "exportedEntry()",
+        kind: "function",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let occurrence = testOccurrence(
+        symbol,
+        path: file.path,
+        line: 1,
+        token: "exportedEntry",
+        roles: ["definition"]
+    )
+    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
+        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+        sourceCache: cache
+    )
+
+    #expect(!decision.allowed)
+    #expect(decision.reasons.contains { $0.contains("externally linked declaration") })
+}
+
+@Test func lexicalRuntimeAttributeFallbackIsLimitedToTheAnnotatedDeclaration() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Sample.swift")
+    let lines = [
+        "@objc(StableRuntimeName)",
+        "public class RuntimeNamed {}",
+        "@IBInspectable public var designedValue: Int { 0 }",
+        "@objc public func exposedToObjectiveC() {}",
+        "public func swiftOnly() {}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func decision(usr: String, name: String, kind: String, line: Int) -> SafetyDecision {
+        let symbol = SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+        let occurrence = testOccurrence(
+            symbol,
+            path: file.path,
+            line: line,
+            token: name,
+            roles: ["definition"]
+        )
+        return SafetyAnalyzer(sourceRoot: directory).analyze(
+            group: USROccurrenceGroup(usr: usr, symbol: symbol, occurrences: [occurrence]),
+            sourceCache: cache
+        )
+    }
+
+    let runtimeNamed = decision(usr: "s:runtime-named", name: "RuntimeNamed", kind: "class", line: 2)
+    let designedValue = decision(usr: "s:designed-value", name: "designedValue", kind: "instanceProperty", line: 3)
+    let exposed = decision(usr: "s:exposed", name: "exposedToObjectiveC", kind: "function", line: 4)
+    let swiftOnly = decision(usr: "s:swift-only", name: "swiftOnly", kind: "function", line: 5)
+
+    #expect(!runtimeNamed.allowed)
+    #expect(!designedValue.allowed)
+    #expect(!exposed.allowed)
+    #expect(swiftOnly.allowed)
+    #expect([runtimeNamed, designedValue, exposed].allSatisfy {
+        $0.reasons.contains { $0.contains("runtime-reflected") }
+    })
 }
 
 @Test func renamePlannerPlansAndPatchesPublicSymbols() throws {
@@ -824,7 +1229,8 @@ import Testing
 
     let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
         group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
-        sourceCache: cache
+        sourceCache: cache,
+        indexedFacts: IndexedSemanticFacts(protocolRequirementUSRs: [symbol.usr])
     )
 
     #expect(decision.allowed == false)
@@ -925,7 +1331,8 @@ import Testing
 
     let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
         group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
-        sourceCache: cache
+        sourceCache: cache,
+        indexedFacts: IndexedSemanticFacts(protocolRequirementUSRs: [symbol.usr])
     )
 
     #expect(decision.allowed == false)
@@ -1592,7 +1999,8 @@ import Testing
 
     let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
         group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
-        sourceCache: cache
+        sourceCache: cache,
+        indexedFacts: IndexedSemanticFacts(externallyOwnedUSRs: [symbol.usr])
     )
 
     #expect(decision.allowed == false)
@@ -1635,7 +2043,8 @@ import Testing
 
     let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
         group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
-        sourceCache: cache
+        sourceCache: cache,
+        indexedFacts: IndexedSemanticFacts(externallyOwnedUSRs: [symbol.usr])
     )
 
     #expect(decision.allowed == false)
@@ -1679,8 +2088,7 @@ import Testing
 
     let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
         group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
-        sourceCache: cache,
-        localNominalTypeNames: ["LocalModel"]
+        sourceCache: cache
     )
 
     #expect(decision.allowed == true)
@@ -1725,7 +2133,7 @@ import Testing
     let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
         group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache,
-        localNominalTypeNames: []
+        indexedFacts: IndexedSemanticFacts(externallyOwnedUSRs: [symbol.usr])
     )
 
     #expect(decision.allowed == false)

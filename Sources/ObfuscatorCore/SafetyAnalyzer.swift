@@ -30,7 +30,6 @@ public struct SafetyAnalyzer: Sendable {
     public let obfuscationRoots: [URL]
     public let allowedKinds: Set<String>
     private let interfaceBuilderClassNames: Set<String>
-    private let declarationContextCache: DeclarationContextCache
 
     public init(
         sourceRoot: URL,
@@ -44,13 +43,12 @@ public struct SafetyAnalyzer: Sendable {
             : obfuscationRoots.map { $0.resolvingSymlinksInPath().standardizedFileURL }
         self.allowedKinds = allowedKinds
         self.interfaceBuilderClassNames = Self.discoverInterfaceBuilderClassNames(under: canonicalSourceRoot)
-        self.declarationContextCache = DeclarationContextCache()
     }
 
     public func analyze(
         group: USROccurrenceGroup,
         sourceCache: SourceFileCache,
-        localNominalTypeNames: Set<String> = [],
+        indexedFacts: IndexedSemanticFacts = IndexedSemanticFacts(),
         overrideRelatedUSRs: Set<String> = [],
         tupleTypealiasRelatedUSRs: Set<String> = [],
         coordinatedRelatedUSRs: Set<String> = [],
@@ -72,6 +70,16 @@ public struct SafetyAnalyzer: Sendable {
         }
         if group.occurrences.isEmpty {
             reasons.append("no occurrences")
+        }
+        if indexedFacts.protocolRequirementUSRs.contains(group.usr),
+           !coordinatedProtocolRequirementUSRs.contains(group.usr) {
+            reasons.append("protocol members require relation-aware witness renaming")
+        }
+        if indexedFacts.externallyOwnedUSRs.contains(group.usr) {
+            reasons.append("extensions on external Swift or Objective-C owners are not self-contained")
+        }
+        if !group.usr.hasPrefix("c:"), indexedFacts.runtimeSensitiveUSRs.contains(group.usr) {
+            reasons.append("runtime-reflected or externally linked declaration according to IndexStore semantics")
         }
         if overrideRelatedUSRs.contains(group.usr), !coordinatedRelatedUSRs.contains(group.usr) {
             reasons.append("override relations require coordinated renaming")
@@ -126,18 +134,9 @@ public struct SafetyAnalyzer: Sendable {
             tokenNames.insert(token.name)
 
             if occurrence.roles.contains("declaration") || occurrence.roles.contains("definition") {
-                let contexts = declarationContexts(source: source, beforeByteOffset: token.byteRange.lowerBound)
-                if group.symbol.kind != "protocol",
-                   !coordinatedProtocolRequirementUSRs.contains(group.usr),
-                   contexts.contains(.protocolBody) {
-                    reasons.append("protocol members require relation-aware witness renaming")
-                }
                 if group.symbol.kind == "typealias",
                    declarationLineLooksGenericTypeParameter(source: source, occurrence: occurrence, token: token) {
                     reasons.append("generic type parameter occurrences are incomplete")
-                }
-                if contexts.contains(where: { isExternalExtensionContext($0, localNominalTypeNames: localNominalTypeNames) }) {
-                    reasons.append("extensions on external Swift or Objective-C owners are not self-contained")
                 }
                 if isLanguageRequiredDeclarationName(token.name) {
                     reasons.append("language-required declaration name \(token.name)")
@@ -150,8 +149,11 @@ public struct SafetyAnalyzer: Sendable {
                    declarationLineLooksStoredProperty(source: source, occurrence: occurrence, token: token) {
                     reasons.append("stored property declarations require memberwise initializer label support")
                 }
-                if contexts.contains(.objectiveCRuntimeBody)
-                    || declarationRequiresStableRuntimeName(source: source, occurrence: occurrence, token: token) {
+                if declarationHasUnindexedRuntimeOrLinkageAttribute(
+                    source: source,
+                    occurrence: occurrence,
+                    token: token
+                ) {
                     reasons.append("runtime-reflected or externally linked declaration at \(occurrence.path):\(occurrence.line)")
                 }
             }
@@ -280,7 +282,7 @@ public struct SafetyAnalyzer: Sendable {
             && declarationKeywords.contains { containsSwiftWord(String(before), word: $0) }
     }
 
-    private func declarationRequiresStableRuntimeName(
+    private func declarationHasUnindexedRuntimeOrLinkageAttribute(
         source: SourceFile,
         occurrence: OccurrenceRecord,
         token: IdentifierToken
@@ -299,18 +301,22 @@ public struct SafetyAnalyzer: Sendable {
         var precedingLine = occurrence.line - 1
         while precedingLine > 0, let line = source.lineText(line: precedingLine) {
             let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmedLine.hasPrefix("@") else {
+            guard isStandaloneAttributeLine(trimmedLine) else {
                 break
             }
             declarationSegments.append(trimmedLine)
             precedingLine -= 1
         }
 
+        // Most runtime contracts are represented semantically by c: USRs,
+        // symbol properties and dispatch relations in IndexedSemanticFacts.
+        // IndexStore does not consistently preserve every declaration attribute
+        // (notably nested @objc names and some private @IB declarations), so the
+        // attributes on this declaration remain a narrow lexical fallback.
         let sensitiveWords = [
-            "dynamic",
-            "override",
             "objc",
             "objcMembers",
+            "dynamic",
             "IBAction",
             "IBOutlet",
             "IBInspectable",
@@ -324,6 +330,17 @@ public struct SafetyAnalyzer: Sendable {
         return declarationSegments.contains { segment in
             sensitiveWords.contains { containsSwiftWord(segment, word: $0) }
         }
+    }
+
+    private func isStandaloneAttributeLine(_ line: String) -> Bool {
+        guard line.hasPrefix("@") else {
+            return false
+        }
+        let declarationWords: Set<String> = [
+            "class", "struct", "enum", "protocol", "extension", "typealias",
+            "func", "var", "let", "subscript", "init", "deinit"
+        ]
+        return declarationWords.isDisjoint(with: swiftIdentifierPathTokens(in: line))
     }
 
     private static func discoverInterfaceBuilderClassNames(under sourceRoot: URL) -> Set<String> {
@@ -366,159 +383,6 @@ public struct SafetyAnalyzer: Sendable {
         }
 
         return classNames
-    }
-
-    private enum SourceDeclarationContext: Equatable {
-        case protocolBody
-        case extensionBody(owner: String)
-        case objectiveCRuntimeBody
-        case otherBody
-    }
-
-    private struct DeclarationContextCheckpoint {
-        let byteOffset: Int
-        let contexts: [SourceDeclarationContext]
-    }
-
-    private struct DeclarationContextIndex {
-        let byteCount: Int
-        let checkpoints: [DeclarationContextCheckpoint]
-
-        func contexts(beforeByteOffset byteOffset: Int) -> [SourceDeclarationContext] {
-            let boundedOffset = min(max(byteOffset, 0), byteCount)
-            var lowerBound = 0
-            var upperBound = checkpoints.count
-            while lowerBound < upperBound {
-                let middle = lowerBound + (upperBound - lowerBound) / 2
-                if checkpoints[middle].byteOffset <= boundedOffset {
-                    lowerBound = middle + 1
-                } else {
-                    upperBound = middle
-                }
-            }
-            return checkpoints[max(0, lowerBound - 1)].contexts
-        }
-    }
-
-    private final class DeclarationContextCache: @unchecked Sendable {
-        private let lock = NSLock()
-        private var indexesByPath: [String: DeclarationContextIndex] = [:]
-
-        func index(
-            for source: SourceFile,
-            makeIndex: () -> DeclarationContextIndex
-        ) -> DeclarationContextIndex {
-            lock.lock()
-            defer { lock.unlock() }
-            if let existing = indexesByPath[source.path] {
-                return existing
-            }
-            let index = makeIndex()
-            indexesByPath[source.path] = index
-            return index
-        }
-    }
-
-    private func declarationContexts(source: SourceFile, beforeByteOffset byteOffset: Int) -> [SourceDeclarationContext] {
-        declarationContextCache.index(for: source) {
-            makeDeclarationContextIndex(source: source)
-        }.contexts(beforeByteOffset: byteOffset)
-    }
-
-    private func makeDeclarationContextIndex(source: SourceFile) -> DeclarationContextIndex {
-        let bytes = [UInt8](source.data)
-        var stack: [SourceDeclarationContext] = []
-        var checkpoints = [DeclarationContextCheckpoint(byteOffset: 0, contexts: [])]
-        var headerStart = 0
-        var index = 0
-
-        while index < bytes.count {
-            let byte = bytes[index]
-            if byte == UInt8(ascii: "/"), index + 1 < bytes.count, bytes[index + 1] == UInt8(ascii: "/") {
-                index += 2
-                while index < bytes.count, bytes[index] != UInt8(ascii: "\n") {
-                    index += 1
-                }
-                continue
-            }
-            if byte == UInt8(ascii: "/"), index + 1 < bytes.count, bytes[index + 1] == UInt8(ascii: "*") {
-                index += 2
-                while index + 1 < bytes.count, !(bytes[index] == UInt8(ascii: "*") && bytes[index + 1] == UInt8(ascii: "/")) {
-                    index += 1
-                }
-                index = min(index + 2, bytes.count)
-                continue
-            }
-            if byte == UInt8(ascii: "\"") {
-                index += 1
-                while index < bytes.count {
-                    if bytes[index] == UInt8(ascii: "\\") {
-                        index = min(index + 2, bytes.count)
-                    } else if bytes[index] == UInt8(ascii: "\"") {
-                        index += 1
-                        break
-                    } else {
-                        index += 1
-                    }
-                }
-                continue
-            }
-
-            if byte == UInt8(ascii: "{") {
-                stack.append(contextFromHeader(String(decoding: source.data[headerStart..<index], as: UTF8.self)))
-                checkpoints.append(DeclarationContextCheckpoint(byteOffset: index + 1, contexts: stack))
-                headerStart = index + 1
-            } else if byte == UInt8(ascii: "}") {
-                if !stack.isEmpty {
-                    stack.removeLast()
-                }
-                checkpoints.append(DeclarationContextCheckpoint(byteOffset: index + 1, contexts: stack))
-                headerStart = index + 1
-            } else if byte == UInt8(ascii: ";") {
-                headerStart = index + 1
-            }
-            index += 1
-        }
-
-        return DeclarationContextIndex(byteCount: bytes.count, checkpoints: checkpoints)
-    }
-
-    private func contextFromHeader(_ header: String) -> SourceDeclarationContext {
-        if containsSwiftWord(header, word: "protocol") {
-            return .protocolBody
-        }
-        if let owner = extensionOwner(in: header) {
-            return .extensionBody(owner: owner)
-        }
-        if containsSwiftWord(header, word: "objcMembers") {
-            return .objectiveCRuntimeBody
-        }
-        return .otherBody
-    }
-
-    private func extensionOwner(in header: String) -> String? {
-        guard let extensionRange = header.range(of: #"\bextension\b"#, options: .regularExpression) else {
-            return nil
-        }
-        let afterExtension = header[extensionRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-        if afterExtension.hasPrefix("[") {
-            return "Array"
-        }
-        if afterExtension.hasPrefix("(") {
-            return "<tuple>"
-        }
-        return swiftIdentifierPathTokens(in: afterExtension).first
-    }
-
-    private func isExternalExtensionContext(
-        _ context: SourceDeclarationContext,
-        localNominalTypeNames: Set<String>
-    ) -> Bool {
-        guard case let .extensionBody(owner) = context else {
-            return false
-        }
-        let rootOwner = owner.split(separator: ".").first.map(String.init) ?? owner
-        return !localNominalTypeNames.contains(rootOwner)
     }
 
     private func containsSwiftWord(_ text: String, word: String) -> Bool {

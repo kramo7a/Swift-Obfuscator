@@ -50,7 +50,10 @@ public struct RenamePlanner {
         let groupsByUSR = Dictionary(uniqueKeysWithValues: groups.map { ($0.usr, $0) })
         var reservedNames = Set(snapshot.symbols.map(\.name)).filter(isPlainSwiftIdentifier)
         reservedNames.formUnion(mappingStore.allEntries().map(\.obfuscatedName))
-        let localNominalTypeNames = Self.localNominalTypeNames(snapshot: snapshot)
+        let indexedFacts = IndexedSemanticFacts(
+            snapshot: snapshot,
+            obfuscationRoots: analyzer.obfuscationRoots
+        )
         let overrideRelatedUSRs = Self.overrideRelatedUSRs(snapshot: snapshot)
         let tupleTypealiasRelatedUSRs = Self.tupleTypealiasRelatedUSRs(
             snapshot: snapshot,
@@ -58,7 +61,7 @@ public struct RenamePlanner {
         )
         let protocolComponents = Self.protocolRenameComponents(
             snapshot: snapshot,
-            analyzer: analyzer
+            indexedFacts: indexedFacts
         )
         let protocolComponentByUSR = Dictionary(uniqueKeysWithValues: protocolComponents.flatMap { component in
             component.memberUSRs.compactMap { usr in
@@ -81,7 +84,7 @@ public struct RenamePlanner {
                     analyzer.analyze(
                         group: componentGroup,
                         sourceCache: sourceCache,
-                        localNominalTypeNames: localNominalTypeNames,
+                        indexedFacts: indexedFacts,
                         overrideRelatedUSRs: overrideRelatedUSRs,
                         tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs,
                         coordinatedRelatedUSRs: coordinationEnabled ? component.memberUSRs : [],
@@ -231,7 +234,7 @@ public struct RenamePlanner {
             let decision = analyzer.analyze(
                 group: group,
                 sourceCache: sourceCache,
-                localNominalTypeNames: localNominalTypeNames,
+                indexedFacts: indexedFacts,
                 overrideRelatedUSRs: overrideRelatedUSRs,
                 tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs
             )
@@ -363,7 +366,7 @@ public struct RenamePlanner {
 
     private static func protocolRenameComponents(
         snapshot: IndexSnapshot,
-        analyzer: SafetyAnalyzer
+        indexedFacts: IndexedSemanticFacts
     ) -> [ProtocolRenameComponent] {
         let groups = snapshot.groupsByUSR
         let groupsByUSR = Dictionary(uniqueKeysWithValues: groups.map { ($0.usr, $0) })
@@ -371,39 +374,8 @@ public struct RenamePlanner {
             snapshot.symbols.map { ($0.usr, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let obfuscationRootPaths = analyzer.obfuscationRoots.map {
-            $0.resolvingSymlinksInPath().standardizedFileURL.path
-        }
-        let selectedDeclarationUSRs = Set(snapshot.occurrences.compactMap { occurrence -> String? in
-            guard occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"),
-                  isPath(occurrence.path, underRootPaths: obfuscationRootPaths) else {
-                return nil
-            }
-            return occurrence.usr
-        })
-
-        let localProtocolUSRs = Set(groups.compactMap { group -> String? in
-            guard group.symbol.kind == "protocol",
-                  !group.usr.hasPrefix("c:"),
-                  selectedDeclarationUSRs.contains(group.usr) else {
-                return nil
-            }
-            return group.usr
-        })
-
-        let localRequirementUSRs = Set(groups.compactMap { group -> String? in
-            guard !isSyntheticAccessorName(group.symbol.name),
-                  selectedDeclarationUSRs.contains(group.usr),
-                  group.occurrences.contains(where: { occurrence in
-                      (occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"))
-                          && occurrence.relations.contains(where: { relation in
-                              relation.roles.contains("childOf")
-                                  && localProtocolUSRs.contains(relation.usr)
-                          })
-                  }) else {
-                return nil
-            }
-            return group.usr
+        let localRequirementUSRs = Set(indexedFacts.protocolRequirementUSRs.filter { usr in
+            groupsByUSR[usr].map { !isSyntheticAccessorName($0.symbol.name) } == true
         })
 
         var adjacency: [String: Set<String>] = [:]
@@ -447,7 +419,7 @@ public struct RenamePlanner {
                 if usr.hasPrefix("c:") || memberGroup.symbol.language.lowercased().contains("objective") {
                     structuralReasons.append("Objective-C requirement or witness is part of the component: \(usr)")
                 }
-                if !selectedDeclarationUSRs.contains(memberGroup.usr) {
+                if !indexedFacts.selectedDeclarationUSRs.contains(memberGroup.usr) {
                     structuralReasons.append("related USR has no declaration inside selected source roots: \(usr)")
                 }
             }
@@ -461,13 +433,6 @@ public struct RenamePlanner {
         }
 
         return components.sorted { $0.key < $1.key }
-    }
-
-    private static func isPath(_ path: String, underRootPaths rootPaths: [String]) -> Bool {
-        let canonicalPath = SourcePathNormalizer.canonicalPath(path)
-        return rootPaths.contains { rootPath in
-            return canonicalPath == rootPath || canonicalPath.hasPrefix(rootPath + "/")
-        }
     }
 
     private static func isSyntheticAccessorName(_ name: String) -> Bool {
@@ -530,19 +495,6 @@ public struct RenamePlanner {
         var result = name
         result.replaceSubrange(letterIndex...letterIndex, with: String(name[letterIndex]).lowercased())
         return result
-    }
-
-    private static func localNominalTypeNames(snapshot: IndexSnapshot) -> Set<String> {
-        let nominalKinds: Set<String> = ["class", "struct", "enum", "protocol"]
-        return Set(snapshot.occurrences.compactMap { occurrence in
-            guard nominalKinds.contains(occurrence.symbol.kind),
-                  !occurrence.isSystem,
-                  occurrence.roles.contains(where: { $0 == "declaration" || $0 == "definition" }),
-                  isPlainSwiftIdentifier(occurrence.symbol.name) else {
-                return nil
-            }
-            return occurrence.symbol.name
-        })
     }
 
     private static func overrideRelatedUSRs(snapshot: IndexSnapshot) -> Set<String> {

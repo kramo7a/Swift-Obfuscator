@@ -24,6 +24,7 @@ Tests use Swift Testing (`@Test` and `#expect`), not XCTest. Full test runs can 
 - `Sources/SwiftObfuscator/main.swift`: CLI parsing, run summary JSON, logging, and command orchestration.
 - `Sources/ObfuscatorCore/ProjectBuilder.swift`: `xcodebuild` invocation and index-store location.
 - `Sources/ObfuscatorCore/IndexReader.swift`: IndexStoreDB snapshot extraction and source file discovery.
+- `Sources/ObfuscatorCore/IndexedSemanticFacts.swift`: compiler-index-derived ownership, extension, protocol, and runtime-dispatch facts.
 - `Sources/ObfuscatorCore/SafetyAnalyzer.swift`: deny-by-default rename eligibility checks.
 - `Sources/ObfuscatorCore/RenamePlanner.swift`: stable name assignment and replacement planning.
 - `Sources/ObfuscatorCore/SourcePatcher.swift`: validation and source rewriting/copying.
@@ -55,6 +56,8 @@ incorrect argument label in call (have 'name:', expected '_oe:')
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 
 Safety decisions must stay project-agnostic. Do not add hardcoded allow/deny lists of concrete SDK, framework, or target-project type names such as `String`, `Array`, `UXColor`, or app-specific symbols. If a rule needs to distinguish local code from external code, derive that from IndexStore/source semantics for the current target, such as local declarations, symbol providers, relations, roles, or selected source roots.
+
+Never reconstruct semantic declaration context by scanning Swift braces or parsing declaration headers in `SafetyAnalyzer`. Ownership, protocol requirements, extension targets, override/base relationships, and runtime-dispatch ancestry must come from IndexStoreDB symbol kinds, properties, roles, relations, USR provenance, and declarations inside the selected source roots. Source text is limited to validating exact identifier tokens and byte ranges, plus narrowly documented lexical facts that IndexStoreDB does not expose; every such fallback requires a focused regression test.
 
 ## Working Conventions
 
