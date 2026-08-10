@@ -15,6 +15,7 @@ public struct ParameterCallSiteAnchor: Hashable, Sendable {
 public enum ParameterCallSyntaxKind: String, Codable, Hashable, Sendable {
     case functionCall
     case subscriptCall
+    case attributeCall
 }
 
 public enum ParameterCallArgumentSyntaxRole: Hashable, Sendable {
@@ -49,6 +50,7 @@ public struct ParameterCallSiteSyntaxFactsSummary: Codable, Equatable, Sendable 
     public let unresolvedCallAnchors: Int
     public let resolvedFunctionCalls: Int
     public let resolvedSubscriptCalls: Int
+    public let resolvedAttributeCalls: Int
     public let parenthesizedArguments: Int
     public let namedParenthesizedArgumentTokens: Int
     public let unlabeledParenthesizedArguments: Int
@@ -93,6 +95,7 @@ public struct ParameterCallSiteSyntaxFactsSummary: Codable, Equatable, Sendable 
         self.unresolvedCallAnchors = unresolvedReasonsByAnchor.count
         self.resolvedFunctionCalls = roles.count { $0.kind == .functionCall }
         self.resolvedSubscriptCalls = roles.count { $0.kind == .subscriptCall }
+        self.resolvedAttributeCalls = roles.count { $0.kind == .attributeCall }
         self.parenthesizedArguments = roles.reduce(0) { count, role in
             count + role.arguments.count {
                 if case .parenthesized = $0 { return true }
@@ -342,6 +345,28 @@ private final class ParameterCallSyntaxVisitor: SyntaxVisitor {
                 syntaxRange(node.leftSquare)
             ],
             hasExplicitArgumentDelimiters: true,
+            arguments: arguments.roles,
+            structuralReasons: arguments.reasons
+        ))
+        return .visitChildren
+    }
+
+    override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
+        guard let rawArguments = node.arguments,
+              case .argumentList(let argumentList) = rawArguments else {
+            return .visitChildren
+        }
+        let arguments = argumentRoles(
+            parenthesized: argumentList,
+            trailingClosure: nil,
+            additionalTrailingClosures: []
+        )
+        candidates.append(CallSyntaxCandidate(
+            kind: .attributeCall,
+            callByteRange: syntaxRange(node),
+            calleeByteRange: syntaxRange(node.attributeName),
+            anchorByteRanges: [syntaxRange(node.attributeName)],
+            hasExplicitArgumentDelimiters: node.leftParen != nil && node.rightParen != nil,
             arguments: arguments.roles,
             structuralReasons: arguments.reasons
         ))

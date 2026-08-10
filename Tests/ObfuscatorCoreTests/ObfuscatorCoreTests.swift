@@ -1519,6 +1519,7 @@ import Testing
         "    consume<Int>(value: 3)",
         "    _ = box[index: 0]",
         "    box.perform(value: 4) {} failure: {}",
+        "    @Wrapper(value: 5) var wrapped = 0",
         "}"
     ]
     try (lines.joined(separator: "\n") + "\n").write(
@@ -1600,6 +1601,12 @@ import Testing
             callToken: "perform"
         ),
         component(
+            usr: "usr-wrapper-init",
+            labels: ["value"],
+            callLine: 11,
+            callToken: "Wrapper"
+        ),
+        component(
             usr: "usr-bad-anchor",
             labels: ["value"],
             callLine: 7,
@@ -1614,21 +1621,22 @@ import Testing
 
     let facts = ParameterCallSiteSyntaxFacts(components: components, sourceCache: cache)
     let summary = facts.summary
-    #expect(summary.componentsWithNamedExternalLabels == 7)
-    #expect(summary.namedExternalLabelParameters == 11)
-    #expect(summary.indexedCallAnchors == 6)
-    #expect(summary.resolvedCallAnchors == 5)
+    #expect(summary.componentsWithNamedExternalLabels == 8)
+    #expect(summary.namedExternalLabelParameters == 12)
+    #expect(summary.indexedCallAnchors == 7)
+    #expect(summary.resolvedCallAnchors == 6)
     #expect(summary.unresolvedCallAnchors == 1)
     #expect(summary.resolvedFunctionCalls == 4)
     #expect(summary.resolvedSubscriptCalls == 1)
-    #expect(summary.parenthesizedArguments == 5)
-    #expect(summary.namedParenthesizedArgumentTokens == 5)
+    #expect(summary.resolvedAttributeCalls == 1)
+    #expect(summary.parenthesizedArguments == 6)
+    #expect(summary.namedParenthesizedArgumentTokens == 6)
     #expect(summary.unlabeledParenthesizedArguments == 0)
     #expect(summary.firstTrailingClosures == 2)
     #expect(summary.additionalTrailingClosureLabelTokens == 1)
     #expect(summary.callsWithoutExplicitArgumentDelimiters == 0)
-    #expect(summary.componentsWithAllIndexedCallsResolved == 5)
-    #expect(summary.namedParametersInComponentsWithAllIndexedCallsResolved == 9)
+    #expect(summary.componentsWithAllIndexedCallsResolved == 6)
+    #expect(summary.namedParametersInComponentsWithAllIndexedCallsResolved == 10)
     #expect(summary.componentsWithoutIndexedCalls == 1)
     #expect(summary.namedParametersInComponentsWithoutIndexedCalls == 1)
     #expect(summary.componentsWithNonCallReferences == 1)

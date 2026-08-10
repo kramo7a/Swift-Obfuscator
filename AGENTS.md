@@ -83,7 +83,8 @@ lowerCamelCase spelling.
 
 For external argument labels, IndexStoreDB call occurrences provide callable
 identity and the exact semantic call anchor. SwiftParser may map that anchor to
-compiler syntax and expose label byte ranges, but it must never infer a call
+function, subscript, or user-defined attribute syntax and expose label byte
+ranges, but it must never infer a call
 target from source spelling, overload order, or a text search. Unmatched or
 multiply matched anchors fail closed and remain individually reproducible in
 the machine-readable report.
