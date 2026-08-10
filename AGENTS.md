@@ -151,6 +151,16 @@ Replacement application must remain byte-offset based against the exact files th
 
 
 
+Enum-case planning is owner-component based. Derive case ownership from
+IndexStoreDB `childOf` relations and distinguish a raw type from protocol
+conformances through semantic `baseOf` symbol kinds; never hardcode concrete raw
+types or decode a USR. Raw-value, Codable/serialization, Objective-C/runtime,
+external-owner, out-of-root, reflection, and persistence/network spelling
+contracts must be classified before enabling case renames. The absence of a raw
+type or Codable conformance is only a structural candidate fact, not proof that
+the case spelling is unobservable. Associated-value declarations, patterns,
+constructor references, and their parameter labels form one atomic component.
+
 Safety decisions must stay project-agnostic. Do not add hardcoded allow/deny lists of concrete SDK, framework, or target-project type names such as `String`, `Array`, `UXColor`, or app-specific symbols. If a rule needs to distinguish local code from external code, derive that from IndexStore/source semantics for the current target, such as local declarations, symbol providers, relations, roles, or selected source roots.
 
 Never reconstruct semantic declaration context by scanning Swift braces or parsing declaration headers in `SafetyAnalyzer`. Ownership, protocol requirements, extension targets, override/base relationships, and runtime-dispatch ancestry must come from IndexStoreDB symbol kinds, properties, roles, relations, USR provenance, and declarations inside the selected source roots. Source text is limited to validating exact identifier tokens and byte ranges, plus narrowly documented lexical facts that IndexStoreDB does not expose; every such fallback requires a focused regression test.

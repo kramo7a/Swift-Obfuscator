@@ -6529,6 +6529,140 @@ import Testing
     }
 }
 
+@Test func enumCaseComponentFactsUseIndexedOwnersAndSemanticContracts() throws {
+    let root = URL(fileURLWithPath: "/tmp/enum-case-component-facts", isDirectory: true)
+    let insidePath = root.appendingPathComponent("Enums.swift").path
+    let outsidePath = "/tmp/enum-case-component-facts-outside.swift"
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func relation(_ symbol: SymbolRecord, _ role: String) -> RelationRecord {
+        RelationRecord(usr: symbol.usr, name: symbol.name, rolesRaw: 0, roles: [role])
+    }
+    func occurrence(
+        _ symbol: SymbolRecord,
+        path: String = insidePath,
+        roles: [String],
+        relations: [RelationRecord] = []
+    ) -> OccurrenceRecord {
+        OccurrenceRecord(
+            symbol: symbol,
+            path: path,
+            line: 1,
+            utf8Column: 1,
+            moduleName: "EnumFacts",
+            isSystem: false,
+            rolesRaw: 0,
+            roles: roles,
+            rolesDescription: roles.joined(separator: ","),
+            symbolProvider: "swift",
+            relations: relations
+        )
+    }
+
+    let plainOwner = symbol("s:plain-owner", "Plain", "enum")
+    let plainCase = symbol("s:plain-case", "ready", "enumConstant")
+    let payloadCase = symbol("s:payload-case", "payload(value:)", "enumConstant")
+    let payloadParameter = symbol("s:payload-parameter", "value", "parameter")
+    let rawOwner = symbol("s:raw-owner", "Raw", "enum")
+    let rawCase = symbol("s:raw-case", "wire", "enumConstant")
+    let rawType = symbol("s:raw-type", "WireValue", "struct")
+    let serializedOwner = symbol("s:serialized-owner", "Serialized", "enum")
+    let serializedCase = symbol("s:serialized-case", "stored", "enumConstant")
+    let decodable = symbol("s:Se", "Decodable", "protocol")
+    let runtimeOwner = symbol("c:@E@Runtime", "Runtime", "enum")
+    let runtimeCase = symbol("c:@E@Runtime@RuntimeCase", "runtime", "enumConstant")
+
+    let snapshot = IndexSnapshot(
+        sourceFiles: [insidePath, outsidePath],
+        symbols: [
+            plainOwner, plainCase, payloadCase, payloadParameter,
+            rawOwner, rawCase, rawType,
+            serializedOwner, serializedCase, decodable,
+            runtimeOwner, runtimeCase
+        ],
+        occurrences: [
+            occurrence(plainOwner, roles: ["definition"]),
+            occurrence(plainCase, roles: ["definition"], relations: [
+                relation(plainOwner, "childOf")
+            ]),
+            occurrence(plainCase, path: outsidePath, roles: ["reference"]),
+            occurrence(payloadCase, roles: ["definition"], relations: [
+                relation(plainOwner, "childOf")
+            ]),
+            occurrence(payloadParameter, roles: ["definition"], relations: [
+                relation(payloadCase, "childOf")
+            ]),
+            occurrence(rawOwner, roles: ["definition"]),
+            occurrence(rawType, roles: ["reference", "baseOf"], relations: [
+                relation(rawOwner, "baseOf")
+            ]),
+            occurrence(rawCase, roles: ["definition"], relations: [
+                relation(rawOwner, "childOf")
+            ]),
+            occurrence(serializedOwner, roles: ["definition"]),
+            occurrence(decodable, roles: ["reference", "implicit", "baseOf"], relations: [
+                relation(serializedOwner, "baseOf")
+            ]),
+            occurrence(serializedCase, roles: ["definition"], relations: [
+                relation(serializedOwner, "childOf")
+            ]),
+            occurrence(runtimeOwner, roles: ["definition"]),
+            occurrence(runtimeCase, roles: ["definition"], relations: [
+                relation(runtimeOwner, "childOf")
+            ])
+        ]
+    )
+    let indexedFacts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [root])
+    let facts = EnumCaseComponentFacts(
+        snapshot: snapshot,
+        indexedFacts: indexedFacts,
+        obfuscationRoots: [root]
+    )
+
+    #expect(facts.summary.explicitEnumCases == 5)
+    #expect(facts.summary.resolvedEnumCases == 5)
+    #expect(facts.summary.unresolvedEnumCases == 0)
+    #expect(facts.summary.ownerComponents == 4)
+    #expect(facts.summary.rawTypeOwnerComponents == 1)
+    #expect(facts.summary.rawTypeCases == 1)
+    #expect(facts.summary.serializationSensitiveOwnerComponents == 1)
+    #expect(facts.summary.serializationSensitiveCases == 1)
+    #expect(facts.summary.runtimeSensitiveOwnerComponents == 1)
+    #expect(facts.summary.runtimeSensitiveCases == 1)
+    #expect(facts.summary.ownerComponentsWithOccurrencesOutsideSelectedRoots == 1)
+    #expect(facts.summary.casesWithOccurrencesOutsideSelectedRoots == 2)
+    #expect(facts.summary.associatedValueCases == 1)
+    #expect(facts.summary.associatedValueParameters == 1)
+    #expect(facts.summary.casesWithoutRawSerializationOrRuntimeContracts == 2)
+
+    let plain = try #require(facts.components.first { $0.ownerUSR == plainOwner.usr })
+    #expect(plain.caseUSRs == [payloadCase.usr, plainCase.usr].sorted())
+    #expect(plain.associatedValueParameterUSRs == [payloadParameter.usr])
+    #expect(plain.hasOccurrencesOutsideSelectedRoots)
+
+    let raw = try #require(facts.components.first { $0.ownerUSR == rawOwner.usr })
+    #expect(raw.rawTypeUSRs == [rawType.usr])
+    #expect(!raw.isSerializationSensitive)
+
+    let serialized = try #require(
+        facts.components.first { $0.ownerUSR == serializedOwner.usr }
+    )
+    #expect(serialized.protocolConformanceUSRs == [decodable.usr])
+    #expect(serialized.isSerializationSensitive)
+
+    let runtime = try #require(facts.components.first { $0.ownerUSR == runtimeOwner.usr })
+    #expect(runtime.isRuntimeSensitive)
+}
+
 private func utf8Column(of needle: String, in line: String) -> Int {
     let range = line.range(of: needle)!
     return line[..<range.lowerBound].utf8.count + 1

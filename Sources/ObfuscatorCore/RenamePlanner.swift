@@ -22,6 +22,7 @@ public struct RenamePlan: Codable, Sendable {
     public let parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary
     public let parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary
     public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
+    public let enumCaseComponentFacts: EnumCaseComponentFactsSummary
 
     public init(
         entries: [RenamePlanEntry],
@@ -36,7 +37,8 @@ public struct RenamePlan: Codable, Sendable {
         parameterCallableReferenceBindingFacts: ParameterCallableReferenceBindingFactsSummary = .empty,
         parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary = .empty,
         parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary = .empty,
-        parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty
+        parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty,
+        enumCaseComponentFacts: EnumCaseComponentFactsSummary = .empty
     ) {
         self.entries = entries
         self.denied = denied
@@ -51,6 +53,7 @@ public struct RenamePlan: Codable, Sendable {
         self.parameterExternalLabelComponentFacts = parameterExternalLabelComponentFacts
         self.parameterExternalLabelRenameOutcome = parameterExternalLabelRenameOutcome
         self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
+        self.enumCaseComponentFacts = enumCaseComponentFacts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -67,6 +70,7 @@ public struct RenamePlan: Codable, Sendable {
         case parameterExternalLabelComponentFacts
         case parameterExternalLabelRenameOutcome
         case parameterLocalBindingOutcome
+        case enumCaseComponentFacts
     }
 
     public init(from decoder: Decoder) throws {
@@ -114,6 +118,10 @@ public struct RenamePlan: Codable, Sendable {
             ParameterLocalBindingOutcomeSummary.self,
             forKey: .parameterLocalBindingOutcome
         ) ?? .empty
+        enumCaseComponentFacts = try container.decodeIfPresent(
+            EnumCaseComponentFactsSummary.self,
+            forKey: .enumCaseComponentFacts
+        ) ?? .empty
     }
 
     public var replacements: [SourceReplacement] {
@@ -155,6 +163,11 @@ public struct RenamePlanner {
         reservedNames.formUnion(mappingStore.allEntries().map(\.obfuscatedName))
         let indexedFacts = IndexedSemanticFacts(
             snapshot: snapshot,
+            obfuscationRoots: analyzer.obfuscationRoots
+        )
+        let enumCaseComponentFacts = EnumCaseComponentFacts(
+            snapshot: snapshot,
+            indexedFacts: indexedFacts,
             obfuscationRoots: analyzer.obfuscationRoots
         )
         let parameterSyntaxFacts = ParameterSyntaxFacts(
@@ -693,7 +706,8 @@ public struct RenamePlanner {
                 entries: entries,
                 decisions: denied,
                 groupsByUSR: groupsByUSR
-            )
+            ),
+            enumCaseComponentFacts: enumCaseComponentFacts.summary
         )
     }
 
