@@ -918,6 +918,264 @@ import Testing
     #expect(summary.enumCaseParameters == 1)
 }
 
+@Test func parameterSyntaxFactsResolveExactRolesWithoutDeclarationTextScanning() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Parameters.swift")
+    let lines = [
+        "struct Sample {",
+        "    var stored: Int = 0 {",
+        "        willSet(nextValue) { _ = nextValue }",
+        "    }",
+        "    func outer(external local: Int) {",
+        "        func nested(_ nestedValue: Int, wire inner: Int = 1) {",
+        "            _ = local + nestedValue + inner",
+        "        }",
+        "    }",
+        "    subscript(offset index: Int) -> Int { index }",
+        "}",
+        "enum Event { case payload(label value: Int, _: String, Bool) }",
+        "let closure = { (closureValue: Int) in closureValue }"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+
+    let accessor = symbol("usr-accessor", "willSet:stored", "instanceMethod")
+    let nextValue = symbol("usr-next-value", "nextValue", "parameter")
+    let outer = symbol("usr-outer", "outer(external:)", "instanceMethod")
+    let local = symbol("usr-local", "local", "parameter")
+    let nestedValue = symbol("usr-nested-value", "nestedValue", "parameter")
+    let inner = symbol("usr-inner", "inner", "parameter")
+    let subscriptDeclaration = symbol("usr-subscript", "subscript(offset:)", "instanceProperty")
+    let index = symbol("usr-index", "index", "parameter")
+    let enumCase = symbol("usr-enum-case", "payload(label:_:_:)", "enumConstant")
+    let value = symbol("usr-value", "value", "parameter")
+    let omittedValue = symbol("usr-omitted-value", "_", "parameter")
+    let sourceNameAbsent = symbol("usr-source-name-absent", "_", "parameter")
+    let closureOwner = symbol("usr-closure-owner", "closure", "variable")
+    let closureValue = symbol("usr-closure-value", "closureValue", "parameter")
+
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(
+            usr: owner.usr,
+            name: owner.name,
+            rolesRaw: 0,
+            roles: ["childOf"]
+        )
+    }
+
+    let occurrences = [
+        testOccurrence(accessor, path: file.path, line: 2, token: "stored", roles: ["definition"]),
+        testOccurrence(
+            nextValue,
+            path: file.path,
+            line: 3,
+            token: "nextValue",
+            roles: ["definition"],
+            relations: [childOf(accessor)]
+        ),
+        testOccurrence(outer, path: file.path, line: 5, token: "outer", roles: ["definition"]),
+        testOccurrence(
+            local,
+            path: file.path,
+            line: 5,
+            token: "local",
+            roles: ["definition"],
+            relations: [childOf(outer)]
+        ),
+        testOccurrence(
+            nestedValue,
+            path: file.path,
+            line: 6,
+            token: "nestedValue",
+            roles: ["definition"],
+            relations: [childOf(outer)]
+        ),
+        testOccurrence(
+            inner,
+            path: file.path,
+            line: 6,
+            token: "inner",
+            roles: ["definition"],
+            relations: [childOf(outer)]
+        ),
+        testOccurrence(
+            subscriptDeclaration,
+            path: file.path,
+            line: 10,
+            token: "subscript",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            index,
+            path: file.path,
+            line: 10,
+            token: "index",
+            roles: ["definition"],
+            relations: [childOf(subscriptDeclaration)]
+        ),
+        testOccurrence(enumCase, path: file.path, line: 12, token: "payload", roles: ["definition"]),
+        testOccurrence(
+            value,
+            path: file.path,
+            line: 12,
+            token: "value",
+            roles: ["definition"],
+            relations: [childOf(enumCase)]
+        ),
+        testOccurrence(
+            omittedValue,
+            path: file.path,
+            line: 12,
+            token: "_",
+            roles: ["definition"],
+            relations: [childOf(enumCase)]
+        ),
+        testOccurrence(
+            sourceNameAbsent,
+            path: file.path,
+            line: 12,
+            token: "Bool",
+            roles: ["definition"],
+            relations: [childOf(enumCase)]
+        ),
+        testOccurrence(
+            closureOwner,
+            path: file.path,
+            line: 13,
+            token: "closure",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            closureValue,
+            path: file.path,
+            line: 13,
+            token: "closureValue",
+            roles: ["definition"],
+            relations: [childOf(closureOwner)]
+        )
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [
+            accessor, nextValue, outer, local, nestedValue, inner,
+            subscriptDeclaration, index, enumCase, value, omittedValue, sourceNameAbsent,
+            closureOwner, closureValue
+        ],
+        occurrences: occurrences
+    )
+
+    let facts = ParameterSyntaxFacts(
+        snapshot: snapshot,
+        sourceCache: cache,
+        obfuscationRoots: [file]
+    )
+    #expect(facts.unresolvedReasonsByUSR.isEmpty)
+    #expect(facts.rolesByUSR.count == 9)
+
+    let outerRoles = try #require(facts.rolesByUSR[local.usr])
+    #expect(outerRoles.kind == .function)
+    #expect(outerRoles.localBinding?.name == "local")
+    #expect(outerRoles.syntaxOwnerToken?.name == "outer")
+    #expect(outerRoles.syntaxOwnerMatchesIndexedOwner)
+    if case .named(let label) = outerRoles.externalLabel {
+        #expect(label.name == "external")
+        #expect(label.byteRange != outerRoles.localBinding?.byteRange)
+    } else {
+        Issue.record("Expected a named external label")
+    }
+
+    let nestedRoles = try #require(facts.rolesByUSR[nestedValue.usr])
+    #expect(nestedRoles.kind == .function)
+    #expect(nestedRoles.localBinding?.name == "nestedValue")
+    #expect(nestedRoles.syntaxOwnerToken?.name == "nested")
+    #expect(nestedRoles.isNestedLocalFunctionParameter)
+    if case .omitted(let label) = nestedRoles.externalLabel {
+        #expect(label.name == "_")
+    } else {
+        Issue.record("Expected an omitted external label")
+    }
+
+    let innerRoles = try #require(facts.rolesByUSR[inner.usr])
+    #expect(innerRoles.isNestedLocalFunctionParameter)
+    #expect(innerRoles.localBinding?.name == "inner")
+    if case .named(let label) = innerRoles.externalLabel {
+        #expect(label.name == "wire")
+    } else {
+        Issue.record("Expected a named nested-function label")
+    }
+
+    let accessorRoles = try #require(facts.rolesByUSR[nextValue.usr])
+    #expect(accessorRoles.kind == .accessor)
+    #expect(accessorRoles.externalLabel == .none)
+    #expect(accessorRoles.localBinding?.name == "nextValue")
+    #expect(!accessorRoles.isNestedLocalFunctionParameter)
+
+    let subscriptRoles = try #require(facts.rolesByUSR[index.usr])
+    #expect(subscriptRoles.kind == .subscriptDeclaration)
+    #expect(subscriptRoles.localBinding?.name == "index")
+
+    let enumRoles = try #require(facts.rolesByUSR[value.usr])
+    #expect(enumRoles.kind == .enumCase)
+    #expect(enumRoles.localBinding?.name == "value")
+    let omittedEnumRoles = try #require(facts.rolesByUSR[omittedValue.usr])
+    #expect(omittedEnumRoles.kind == .enumCase)
+    #expect(omittedEnumRoles.localBinding == nil)
+    if case .omitted(let label) = omittedEnumRoles.externalLabel {
+        #expect(label.name == "_")
+    } else {
+        Issue.record("Expected an omitted enum associated-value label")
+    }
+    let sourceNameAbsentRoles = try #require(facts.rolesByUSR[sourceNameAbsent.usr])
+    #expect(sourceNameAbsentRoles.kind == .enumCase)
+    #expect(sourceNameAbsentRoles.externalLabel == .none)
+    #expect(sourceNameAbsentRoles.localBinding == nil)
+    #expect(sourceNameAbsentRoles.indexedDeclarationAnchor.name == "Bool")
+
+    let closureRoles = try #require(facts.rolesByUSR[closureValue.usr])
+    #expect(closureRoles.kind == .closure)
+    #expect(closureRoles.externalLabel == .none)
+    #expect(closureRoles.localBinding?.name == "closureValue")
+
+    let summary = facts.summary
+    #expect(summary.explicitParameters == 9)
+    #expect(summary.resolvedParameters == 9)
+    #expect(summary.unresolvedParameters == 0)
+    #expect(summary.functionParameters == 3)
+    #expect(summary.initializerParameters == 0)
+    #expect(summary.subscriptParameters == 1)
+    #expect(summary.enumCaseParameters == 3)
+    #expect(summary.accessorBindings == 1)
+    #expect(summary.closureParameters == 1)
+    #expect(summary.nestedLocalFunctionParameters == 2)
+    #expect(summary.namedExternalLabels == 4)
+    #expect(summary.omittedExternalLabels == 2)
+    #expect(summary.parametersWithoutExternalLabels == 3)
+    #expect(summary.localBindings == 7)
+    #expect(summary.parametersWithoutLocalBindings == 2)
+    #expect(summary.parametersWithoutSourceNames == 1)
+    #expect(summary.sharedLabelAndBindingTokens == 0)
+    #expect(summary.distinctLabelAndBindingTokens == 5)
+}
+
 @Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

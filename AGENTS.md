@@ -26,6 +26,7 @@ Tests use Swift Testing (`@Test` and `#expect`), not XCTest. Full test runs can 
 - `Sources/ObfuscatorCore/IndexReader.swift`: IndexStoreDB snapshot extraction and source file discovery.
 - `Sources/ObfuscatorCore/IndexedSemanticFacts.swift`: compiler-index-derived ownership, extension, protocol, and runtime-dispatch facts.
 - `Sources/ObfuscatorCore/ParameterRenameComponent.swift`: indexed callable/parameter ownership, ordering, external-label, local-binding, and call-anchor facts.
+- `Sources/ObfuscatorCore/ParameterSyntaxFacts.swift`: SwiftParser-backed exact parameter declaration roles and byte ranges for facts that IndexStoreDB does not expose.
 - `Sources/ObfuscatorCore/SafetyAnalyzer.swift`: deny-by-default rename eligibility checks.
 - `Sources/ObfuscatorCore/RenamePlanner.swift`: stable name assignment and replacement planning.
 - `Sources/ObfuscatorCore/SourcePatcher.swift`: validation and source rewriting/copying.
@@ -59,6 +60,14 @@ separate roles even when they share one declaration token. Build callable
 components from IndexStoreDB `childOf` ownership, callable symbol names, and
 occurrence roles. Do not infer parameter ownership or signature boundaries by
 scanning source braces or declaration text.
+
+When IndexStoreDB cannot distinguish nested local functions, accessor bindings,
+or anonymous enum payloads, use the pinned SwiftParser/SwiftSyntax syntax tree
+and match it back to the exact indexed declaration anchor. Do not replace this
+with ordering assumptions such as treating the first N parameters as belonging
+to the outer callable. A parameter USR whose source role is `_` or an anonymous
+payload type is not a renameable local binding even though it remains visible in
+coverage-denominator diagnostics.
 
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 

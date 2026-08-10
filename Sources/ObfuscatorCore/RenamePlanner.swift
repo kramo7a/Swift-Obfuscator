@@ -14,19 +14,22 @@ public struct RenamePlan: Codable, Sendable {
     public let conflicts: [String]
     public let supportReplacements: [SourceReplacement]
     public let parameterFacts: ParameterFactsSummary
+    public let parameterSyntaxFacts: ParameterSyntaxFactsSummary
 
     public init(
         entries: [RenamePlanEntry],
         denied: [SafetyDecision],
         conflicts: [String],
         supportReplacements: [SourceReplacement] = [],
-        parameterFacts: ParameterFactsSummary = .empty
+        parameterFacts: ParameterFactsSummary = .empty,
+        parameterSyntaxFacts: ParameterSyntaxFactsSummary = .empty
     ) {
         self.entries = entries
         self.denied = denied
         self.conflicts = conflicts
         self.supportReplacements = supportReplacements
         self.parameterFacts = parameterFacts
+        self.parameterSyntaxFacts = parameterSyntaxFacts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -35,6 +38,7 @@ public struct RenamePlan: Codable, Sendable {
         case conflicts
         case supportReplacements
         case parameterFacts
+        case parameterSyntaxFacts
     }
 
     public init(from decoder: Decoder) throws {
@@ -49,6 +53,10 @@ public struct RenamePlan: Codable, Sendable {
         parameterFacts = try container.decodeIfPresent(
             ParameterFactsSummary.self,
             forKey: .parameterFacts
+        ) ?? .empty
+        parameterSyntaxFacts = try container.decodeIfPresent(
+            ParameterSyntaxFactsSummary.self,
+            forKey: .parameterSyntaxFacts
         ) ?? .empty
     }
 
@@ -91,6 +99,11 @@ public struct RenamePlanner {
         reservedNames.formUnion(mappingStore.allEntries().map(\.obfuscatedName))
         let indexedFacts = IndexedSemanticFacts(
             snapshot: snapshot,
+            obfuscationRoots: analyzer.obfuscationRoots
+        )
+        let parameterSyntaxFacts = ParameterSyntaxFacts(
+            snapshot: snapshot,
+            sourceCache: sourceCache,
             obfuscationRoots: analyzer.obfuscationRoots
         )
         let codingKeyComponents = Self.codingKeyPreservationComponents(
@@ -422,7 +435,8 @@ public struct RenamePlanner {
             denied: denied.sorted { ($0.symbolName, $0.usr) < ($1.symbolName, $1.usr) },
             conflicts: conflicts,
             supportReplacements: supportReplacements,
-            parameterFacts: indexedFacts.parameterFactsSummary
+            parameterFacts: indexedFacts.parameterFactsSummary,
+            parameterSyntaxFacts: parameterSyntaxFacts.summary
         )
     }
 
