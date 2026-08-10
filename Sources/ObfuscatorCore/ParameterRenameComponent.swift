@@ -18,6 +18,12 @@ public enum ParameterExternalLabel: Hashable, Sendable {
     case unavailable
 }
 
+public enum ParameterOwnerCategory: String, Codable, Hashable, Sendable {
+    case callable
+    case subscriptDeclaration
+    case enumCase
+}
+
 public struct ParameterRenameMember: Hashable, Sendable {
     public let parameterUSR: String
     public let ordinal: Int
@@ -36,10 +42,11 @@ public struct ParameterRenameComponent: Hashable, Sendable {
     public let callableUSR: String
     public let callableName: String
     public let callableKind: String
+    public let ownerCategory: ParameterOwnerCategory
     public let members: [ParameterRenameMember]
     public let declarationLocations: [IndexedSourceLocation]
     public let callLocations: [IndexedSourceLocation]
-    public let functionReferenceLocations: [IndexedSourceLocation]
+    public let nonCallReferenceLocations: [IndexedSourceLocation]
     public let hasOccurrenceOutsideSelectedRoots: Bool
     public let isProtocolRequirement: Bool
     public let isOverrideRelated: Bool
@@ -66,11 +73,16 @@ public struct ParameterFactsSummary: Codable, Equatable, Sendable {
     public let unavailableExternalLabels: Int
     public let callAnchors: Int
     public let functionReferenceAnchors: Int
+    public let enumCaseReferenceAnchors: Int
     public let componentsWithOccurrencesOutsideSelectedRoots: Int
     public let protocolRequirementComponents: Int
     public let overrideRelatedComponents: Int
     public let runtimeSensitiveComponents: Int
     public let externallyOwnedComponents: Int
+    public let subscriptComponents: Int
+    public let subscriptParameters: Int
+    public let enumCaseComponents: Int
+    public let enumCaseParameters: Int
 
     public static let empty = ParameterFactsSummary(
         explicitParameters: 0,
@@ -103,9 +115,16 @@ public struct ParameterFactsSummary: Codable, Equatable, Sendable {
             $0.externalLabel == .unavailable
         }
         self.callAnchors = components.reduce(0) { $0 + $1.callLocations.count }
-        self.functionReferenceAnchors = components.reduce(0) {
-            $0 + $1.functionReferenceLocations.count
-        }
+        self.functionReferenceAnchors = components
+            .filter { $0.ownerCategory != .enumCase }
+            .reduce(0) {
+                $0 + $1.nonCallReferenceLocations.count
+            }
+        self.enumCaseReferenceAnchors = components
+            .filter { $0.ownerCategory == .enumCase }
+            .reduce(0) {
+                $0 + $1.nonCallReferenceLocations.count
+            }
         self.componentsWithOccurrencesOutsideSelectedRoots = components.count {
             $0.hasOccurrenceOutsideSelectedRoots
         }
@@ -113,6 +132,16 @@ public struct ParameterFactsSummary: Codable, Equatable, Sendable {
         self.overrideRelatedComponents = components.count(where: \.isOverrideRelated)
         self.runtimeSensitiveComponents = components.count(where: \.isRuntimeSensitive)
         self.externallyOwnedComponents = components.count(where: \.isExternallyOwned)
+        self.subscriptComponents = components.count {
+            $0.ownerCategory == .subscriptDeclaration
+        }
+        self.subscriptParameters = components
+            .filter { $0.ownerCategory == .subscriptDeclaration }
+            .reduce(0) { $0 + $1.members.count }
+        self.enumCaseComponents = components.count { $0.ownerCategory == .enumCase }
+        self.enumCaseParameters = components
+            .filter { $0.ownerCategory == .enumCase }
+            .reduce(0) { $0 + $1.members.count }
     }
 }
 
@@ -126,9 +155,6 @@ enum ParameterRenameComponentBuilder {
         runtimeSensitiveUSRs: Set<String>,
         externallyOwnedUSRs: Set<String>
     ) -> [ParameterRenameComponent] {
-        let callableKinds: Set<String> = [
-            "function", "instanceMethod", "staticMethod", "classMethod", "constructor", "subscript"
-        ]
         let occurrencesByUSR = Dictionary(grouping: snapshot.occurrences) { $0.usr }
         var parametersByCallableUSR: [String: Set<String>] = [:]
 
@@ -141,7 +167,7 @@ enum ParameterRenameComponentBuilder {
             }
             let callableOwners = Set(occurrence.relations.compactMap { relation -> String? in
                 guard relation.roles.contains("childOf"),
-                      callableKinds.contains(symbolsByUSR[relation.usr]?.kind ?? "") else {
+                      symbolsByUSR[relation.usr].flatMap(ownerCategory) != nil else {
                     return nil
                 }
                 return relation.usr
@@ -153,7 +179,8 @@ enum ParameterRenameComponentBuilder {
         }
 
         return parametersByCallableUSR.compactMap { callableUSR, parameterUSRs in
-            guard let callable = symbolsByUSR[callableUSR] else {
+            guard let callable = symbolsByUSR[callableUSR],
+                  let ownerCategory = ownerCategory(for: callable) else {
                 return nil
             }
             let orderedParameters = parameterUSRs.compactMap { parameterUSR -> (
@@ -241,10 +268,11 @@ enum ParameterRenameComponentBuilder {
                 callableUSR: callableUSR,
                 callableName: callable.name,
                 callableKind: callable.kind,
+                ownerCategory: ownerCategory,
                 members: members,
                 declarationLocations: declarationLocations,
                 callLocations: uniqueLocations(calls),
-                functionReferenceLocations: uniqueLocations(functionReferences),
+                nonCallReferenceLocations: uniqueLocations(functionReferences),
                 hasOccurrenceOutsideSelectedRoots: callableOccurrences.contains {
                     !isPath($0.path, underRootPaths: rootPaths)
                 },
@@ -282,6 +310,23 @@ enum ParameterRenameComponentBuilder {
         return rawLabels.map { label in
             label == "_" ? .omitted : .named(String(label))
         }
+    }
+
+    private static func ownerCategory(for symbol: SymbolRecord) -> ParameterOwnerCategory? {
+        let callableKinds: Set<String> = [
+            "function", "instanceMethod", "staticMethod", "classMethod", "constructor"
+        ]
+        if callableKinds.contains(symbol.kind) {
+            return .callable
+        }
+        if symbol.kind == "enumConstant" {
+            return .enumCase
+        }
+        let propertyKinds: Set<String> = ["instanceProperty", "staticProperty", "classProperty"]
+        if propertyKinds.contains(symbol.kind), symbol.name.hasPrefix("subscript(") {
+            return .subscriptDeclaration
+        }
+        return nil
     }
 
     private static func uniqueLocations(_ occurrences: [OccurrenceRecord]) -> [IndexedSourceLocation] {

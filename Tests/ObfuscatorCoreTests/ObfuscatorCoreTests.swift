@@ -691,7 +691,9 @@ import Testing
         "        _ = loadController + localWorkspaceID",
         "    }",
         "}",
-        "func broken(one: Int) {}"
+        "func broken(one: Int) {}",
+        "enum Event { case received(payload: Int) }",
+        "struct Table { subscript(offset index: Int) -> Int { index } }"
     ]
     try (lines.joined(separator: "\n") + "\n").write(
         to: selectedFile,
@@ -728,6 +730,10 @@ import Testing
     let localWorkspaceID = symbol("usr-workspace-id", "localWorkspaceID")
     let broken = symbol("usr-broken", "broken(one:two:)", "function")
     let brokenParameter = symbol("usr-broken-parameter", "one")
+    let enumCase = symbol("usr-enum-case", "received(payload:)", "enumConstant")
+    let payload = symbol("usr-payload", "payload")
+    let subscriptDeclaration = symbol("usr-subscript", "subscript(offset:)", "instanceProperty")
+    let index = symbol("usr-index", "index")
 
     func childOf(_ callable: SymbolRecord) -> RelationRecord {
         RelationRecord(
@@ -805,19 +811,41 @@ import Testing
             token: "one",
             roles: ["definition"],
             relations: [childOf(broken)]
+        ),
+        occurrence(enumCase, line: 12, token: "received", roles: ["definition"]),
+        occurrence(
+            payload,
+            line: 12,
+            token: "payload",
+            roles: ["definition"],
+            relations: [childOf(enumCase)]
+        ),
+        occurrence(
+            subscriptDeclaration,
+            line: 13,
+            token: "subscript",
+            roles: ["definition"]
+        ),
+        occurrence(
+            index,
+            line: 13,
+            token: "index",
+            roles: ["definition"],
+            relations: [childOf(subscriptDeclaration)]
         )
     ]
     let snapshot = IndexSnapshot(
         sourceFiles: [selectedFile.path, outsideFile.path],
         symbols: [
             combine, hidden, local, shorthand, initializer, loadController,
-            localWorkspaceID, broken, brokenParameter
+            localWorkspaceID, broken, brokenParameter, enumCase, payload,
+            subscriptDeclaration, index
         ],
         occurrences: occurrences
     )
 
     let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [selectedFile])
-    #expect(facts.parameterRenameComponents.count == 3)
+    #expect(facts.parameterRenameComponents.count == 5)
 
     let combineComponent = try #require(
         facts.parameterRenameComponents.first { $0.callableUSR == combine.usr }
@@ -831,7 +859,7 @@ import Testing
     ])
     #expect(combineComponent.members.map { $0.referenceLocations.map(\.line) } == [[2], [2], [2]])
     #expect(combineComponent.callLocations.map(\.line) == [4])
-    #expect(combineComponent.functionReferenceLocations.map(\.line) == [5])
+    #expect(combineComponent.nonCallReferenceLocations.map(\.line) == [5])
     #expect(combineComponent.hasOccurrenceOutsideSelectedRoots)
 
     let initializerComponent = try #require(
@@ -852,24 +880,42 @@ import Testing
         "callable index name does not expose exactly 1 external argument label(s)"
     ])
 
+    let enumCaseComponent = try #require(
+        facts.parameterRenameComponents.first { $0.callableUSR == enumCase.usr }
+    )
+    #expect(enumCaseComponent.ownerCategory == .enumCase)
+    #expect(enumCaseComponent.members.map(\.externalLabel) == [.named("payload")])
+
+    let subscriptComponent = try #require(
+        facts.parameterRenameComponents.first { $0.callableUSR == subscriptDeclaration.usr }
+    )
+    #expect(subscriptComponent.ownerCategory == .subscriptDeclaration)
+    #expect(subscriptComponent.members.map(\.localBinding) == ["index"])
+    #expect(subscriptComponent.members.map(\.externalLabel) == [.named("offset")])
+
     let summary = facts.parameterFactsSummary
-    #expect(summary.explicitParameters == 6)
-    #expect(summary.modeledParameters == 6)
+    #expect(summary.explicitParameters == 8)
+    #expect(summary.modeledParameters == 8)
     #expect(summary.unmodeledParameters == 0)
-    #expect(summary.components == 3)
-    #expect(summary.structurallyCompleteComponents == 2)
-    #expect(summary.structurallyCompleteParameters == 5)
+    #expect(summary.components == 5)
+    #expect(summary.structurallyCompleteComponents == 4)
+    #expect(summary.structurallyCompleteParameters == 7)
     #expect(summary.omittedExternalLabels == 1)
-    #expect(summary.sharedLabelAndBindingParameters == 2)
-    #expect(summary.distinctLabelAndBindingParameters == 2)
+    #expect(summary.sharedLabelAndBindingParameters == 3)
+    #expect(summary.distinctLabelAndBindingParameters == 3)
     #expect(summary.unavailableExternalLabels == 1)
     #expect(summary.callAnchors == 1)
     #expect(summary.functionReferenceAnchors == 1)
+    #expect(summary.enumCaseReferenceAnchors == 0)
     #expect(summary.componentsWithOccurrencesOutsideSelectedRoots == 1)
     #expect(summary.protocolRequirementComponents == 0)
     #expect(summary.overrideRelatedComponents == 0)
     #expect(summary.runtimeSensitiveComponents == 0)
     #expect(summary.externallyOwnedComponents == 0)
+    #expect(summary.subscriptComponents == 1)
+    #expect(summary.subscriptParameters == 1)
+    #expect(summary.enumCaseComponents == 1)
+    #expect(summary.enumCaseParameters == 1)
 }
 
 @Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {
