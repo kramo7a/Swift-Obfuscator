@@ -1972,6 +1972,201 @@ import Testing
     #expect(labelNames == ["failure", "first", "index", "value", "сallSettingsSource"])
 }
 
+@Test func parameterCallArgumentBindingsResolveDefaultsVariadicsAndTrailingClosures() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("ArgumentBindings.swift")
+    let lines = [
+        "struct Service {",
+        "    func send(required: Int, optional: Int = 0, values: Int..., completion: () -> Void, failure: () -> Void) {}",
+        "    func choose(first: () -> Void = {}, second: () -> Void = {}) {}",
+        "}",
+        "func use(service: Service) {",
+        "    service.send(required: 1, values: 2, 3) {} failure: {}",
+        "    service.choose {}",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])
+    }
+
+    let send = symbol(
+        "usr-send",
+        "send(required:optional:values:completion:failure:)",
+        "instanceMethod"
+    )
+    let required = symbol("usr-required", "required", "parameter")
+    let optional = symbol("usr-optional", "optional", "parameter")
+    let values = symbol("usr-binding-values", "values", "parameter")
+    let completion = symbol("usr-completion", "completion", "parameter")
+    let failure = symbol("usr-failure", "failure", "parameter")
+    let choose = symbol("usr-choose", "choose(first:second:)", "instanceMethod")
+    let first = symbol("usr-first", "first", "parameter")
+    let second = symbol("usr-second", "second", "parameter")
+
+    let occurrences = [
+        testOccurrence(send, path: file.path, line: 2, token: "send", roles: ["definition"]),
+        testOccurrence(
+            required,
+            path: file.path,
+            line: 2,
+            token: "required",
+            roles: ["definition"],
+            relations: [childOf(send)]
+        ),
+        testOccurrence(
+            optional,
+            path: file.path,
+            line: 2,
+            token: "optional",
+            roles: ["definition"],
+            relations: [childOf(send)]
+        ),
+        testOccurrence(
+            values,
+            path: file.path,
+            line: 2,
+            token: "values",
+            roles: ["definition"],
+            relations: [childOf(send)]
+        ),
+        testOccurrence(
+            completion,
+            path: file.path,
+            line: 2,
+            token: "completion",
+            roles: ["definition"],
+            relations: [childOf(send)]
+        ),
+        testOccurrence(
+            failure,
+            path: file.path,
+            line: 2,
+            token: "failure",
+            roles: ["definition"],
+            relations: [childOf(send)]
+        ),
+        testOccurrence(
+            send,
+            path: file.path,
+            line: 6,
+            token: "send",
+            roles: ["reference", "call"]
+        ),
+        testOccurrence(choose, path: file.path, line: 3, token: "choose", roles: ["definition"]),
+        testOccurrence(
+            first,
+            path: file.path,
+            line: 3,
+            token: "first",
+            roles: ["definition"],
+            relations: [childOf(choose)]
+        ),
+        testOccurrence(
+            second,
+            path: file.path,
+            line: 3,
+            token: "second",
+            roles: ["definition"],
+            relations: [childOf(choose)]
+        ),
+        testOccurrence(
+            choose,
+            path: file.path,
+            line: 7,
+            token: "choose",
+            roles: ["reference", "call"]
+        )
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [send, required, optional, values, completion, failure, choose, first, second],
+        occurrences: occurrences
+    )
+    let indexedFacts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [file])
+    let parameterSyntaxFacts = ParameterSyntaxFacts(
+        snapshot: snapshot,
+        sourceCache: cache,
+        obfuscationRoots: [file]
+    )
+    let callSiteSyntaxFacts = ParameterCallSiteSyntaxFacts(
+        components: indexedFacts.parameterRenameComponents,
+        sourceCache: cache
+    )
+    let bindingFacts = ParameterCallArgumentBindingFacts(
+        components: indexedFacts.parameterRenameComponents,
+        parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
+        callSiteSyntaxFacts: callSiteSyntaxFacts
+    )
+
+    let sendAnchor = ParameterCallSiteAnchor(
+        callableUSR: send.usr,
+        location: IndexedSourceLocation(
+            path: file.path,
+            line: 6,
+            utf8Column: utf8Column(of: "send", in: lines[5])
+        )
+    )
+    let sendBindings = try #require(bindingFacts.bindingsByAnchor[sendAnchor])
+    #expect(sendBindings.arguments.map(\.parameterUSR) == [
+        required.usr,
+        values.usr,
+        values.usr,
+        completion.usr,
+        failure.usr
+    ])
+    #expect(sendBindings.arguments.map(\.parameterOrdinal) == [0, 2, 2, 3, 4])
+
+    let summary = bindingFacts.summary
+    #expect(summary.componentsWithNamedExternalLabels == 2)
+    #expect(summary.namedExternalLabelParameters == 7)
+    #expect(summary.indexedCallAnchors == 2)
+    #expect(summary.syntaxResolvedCallAnchors == 2)
+    #expect(summary.bindingResolvedCallAnchors == 1)
+    #expect(summary.bindingUnresolvedCallAnchors == 1)
+    #expect(summary.boundArguments == 5)
+    #expect(summary.boundNamedLabelTokens == 3)
+    #expect(summary.ambiguousCallAnchors == 1)
+    #expect(summary.unmatchedCallAnchors == 0)
+    #expect(summary.componentsWithAllIndexedCallsBound == 1)
+    #expect(summary.namedParametersInComponentsWithAllIndexedCallsBound == 5)
+    #expect(summary.componentsWithoutIndexedCalls == 0)
+    #expect(summary.namedParametersInComponentsWithoutIndexedCalls == 0)
+    #expect(summary.unresolvedByReason == [
+        "call argument-to-parameter ordinal mapping is ambiguous": 1
+    ])
+    #expect(summary.unresolvedAnchors == [
+        UnresolvedParameterCallArgumentBindingFact(
+            callableUSR: choose.usr,
+            callableName: choose.name,
+            path: file.path,
+            line: 7,
+            utf8Column: utf8Column(of: "choose", in: lines[6]),
+            reason: "call argument-to-parameter ordinal mapping is ambiguous"
+        )
+    ])
+}
+
 @Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

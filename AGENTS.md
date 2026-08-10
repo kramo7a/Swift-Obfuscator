@@ -97,7 +97,11 @@ target from source spelling, overload order, or a text search. Unmatched or
 multiply matched anchors fail closed and remain individually reproducible in
 the machine-readable report. Once a compiler syntax token is anchored, its raw
 UTF-8 range is authoritative for Unicode spelling; do not replace it with an
-ASCII-only text scanner.
+ASCII-only text scanner. Argument-to-parameter matching must enumerate only
+monotonic assignments supported by declaration labels, defaults, variadics,
+and trailing-closure syntax. Accept a call only when that deliberately relaxed
+model has one assignment; zero or multiple assignments fail closed with the
+exact indexed call anchor in the machine-readable report.
 
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 

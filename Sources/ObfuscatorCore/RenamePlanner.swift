@@ -16,6 +16,7 @@ public struct RenamePlan: Codable, Sendable {
     public let parameterFacts: ParameterFactsSummary
     public let parameterSyntaxFacts: ParameterSyntaxFactsSummary
     public let parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary
+    public let parameterCallArgumentBindingFacts: ParameterCallArgumentBindingFactsSummary
     public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
 
     public init(
@@ -26,6 +27,7 @@ public struct RenamePlan: Codable, Sendable {
         parameterFacts: ParameterFactsSummary = .empty,
         parameterSyntaxFacts: ParameterSyntaxFactsSummary = .empty,
         parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary = .empty,
+        parameterCallArgumentBindingFacts: ParameterCallArgumentBindingFactsSummary = .empty,
         parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty
     ) {
         self.entries = entries
@@ -35,6 +37,7 @@ public struct RenamePlan: Codable, Sendable {
         self.parameterFacts = parameterFacts
         self.parameterSyntaxFacts = parameterSyntaxFacts
         self.parameterCallSiteSyntaxFacts = parameterCallSiteSyntaxFacts
+        self.parameterCallArgumentBindingFacts = parameterCallArgumentBindingFacts
         self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
     }
 
@@ -46,6 +49,7 @@ public struct RenamePlan: Codable, Sendable {
         case parameterFacts
         case parameterSyntaxFacts
         case parameterCallSiteSyntaxFacts
+        case parameterCallArgumentBindingFacts
         case parameterLocalBindingOutcome
     }
 
@@ -69,6 +73,10 @@ public struct RenamePlan: Codable, Sendable {
         parameterCallSiteSyntaxFacts = try container.decodeIfPresent(
             ParameterCallSiteSyntaxFactsSummary.self,
             forKey: .parameterCallSiteSyntaxFacts
+        ) ?? .empty
+        parameterCallArgumentBindingFacts = try container.decodeIfPresent(
+            ParameterCallArgumentBindingFactsSummary.self,
+            forKey: .parameterCallArgumentBindingFacts
         ) ?? .empty
         parameterLocalBindingOutcome = try container.decodeIfPresent(
             ParameterLocalBindingOutcomeSummary.self,
@@ -125,6 +133,11 @@ public struct RenamePlanner {
         let parameterCallSiteSyntaxFacts = ParameterCallSiteSyntaxFacts(
             components: indexedFacts.parameterRenameComponents,
             sourceCache: sourceCache
+        )
+        let parameterCallArgumentBindingFacts = ParameterCallArgumentBindingFacts(
+            components: indexedFacts.parameterRenameComponents,
+            parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
+            callSiteSyntaxFacts: parameterCallSiteSyntaxFacts
         )
         let codingKeyComponents = Self.codingKeyPreservationComponents(
             indexedFacts: indexedFacts,
@@ -498,6 +511,7 @@ public struct RenamePlanner {
             parameterFacts: indexedFacts.parameterFactsSummary,
             parameterSyntaxFacts: parameterSyntaxFacts.summary,
             parameterCallSiteSyntaxFacts: parameterCallSiteSyntaxFacts.summary,
+            parameterCallArgumentBindingFacts: parameterCallArgumentBindingFacts.summary,
             parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary(
                 candidateUSRs: parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs,
                 entries: entries,
