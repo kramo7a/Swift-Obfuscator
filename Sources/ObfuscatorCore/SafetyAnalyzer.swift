@@ -149,10 +149,14 @@ public struct SafetyAnalyzer: Sendable {
             let isExternalLabelOnlyUnderscore = isSupportedExternalLabelParameter
                 && externalLabelOnlyParameterUSRs.contains(group.usr)
                 && token.name == "_"
+            let isCompilerValidatedParameterToken = isSupportedParameter
+                && isPlainSwiftArgumentLabel(token.name)
             if token.isBackticked {
                 reasons.append("backticked identifier \(token.name)")
             }
-            if !isExternalLabelOnlyUnderscore && !isPlainSwiftIdentifier(token.name) {
+            if !isExternalLabelOnlyUnderscore
+                && !isCompilerValidatedParameterToken
+                && !isPlainSwiftIdentifier(token.name) {
                 reasons.append("non-plain identifier \(token.name)")
             }
             tokenNames.insert(token.name)

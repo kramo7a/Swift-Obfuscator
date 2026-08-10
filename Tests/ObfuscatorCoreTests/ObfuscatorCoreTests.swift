@@ -2843,6 +2843,103 @@ import Testing
     #expect(patched.contains("route(\(entry.newName): 1)"))
 }
 
+@Test func renamePlannerCoordinatesContextualKeywordParameterBindings() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("ContextualKeyword.swift")
+    let lines = [
+        "func configure(prefix: Int) {",
+        "    _ = prefix",
+        "}",
+        "configure(prefix: 1)"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    let configure = SymbolRecord(
+        usr: "usr-contextual-configure",
+        name: "configure(prefix:)",
+        kind: "function",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let prefix = SymbolRecord(
+        usr: "usr-contextual-prefix",
+        name: "prefix",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let childOfConfigure = RelationRecord(
+        usr: configure.usr,
+        name: configure.name,
+        rolesRaw: 0,
+        roles: ["childOf"]
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [configure, prefix],
+        occurrences: [
+            testOccurrence(
+                configure,
+                path: file.path,
+                line: 1,
+                token: "configure",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                configure,
+                path: file.path,
+                line: 4,
+                token: "configure",
+                roles: ["reference", "call"]
+            ),
+            testOccurrence(
+                prefix,
+                path: file.path,
+                line: 1,
+                token: "prefix",
+                roles: ["definition"],
+                relations: [childOfConfigure]
+            ),
+            testOccurrence(
+                prefix,
+                path: file.path,
+                line: 2,
+                token: "prefix",
+                roles: ["reference", "read"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == prefix.usr })
+    #expect(entry.oldName == "prefix")
+    #expect(entry.newName.first?.isLowercase == true)
+    #expect(entry.replacements.count == 3)
+    #expect(plan.parameterExternalLabelRenameOutcome.renamedParameterUSRs == 1)
+    #expect(plan.parameterExternalLabelRenameOutcome.deniedParameterUSRs == 0)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(entry.replacements)
+    let runner = CommandRunner()
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
 @Test func externalLabelComponentFailsClosedForShorthandClosureShadowing() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
