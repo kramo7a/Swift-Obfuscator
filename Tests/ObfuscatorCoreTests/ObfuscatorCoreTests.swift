@@ -2940,7 +2940,7 @@ import Testing
     )
 }
 
-@Test func externalLabelComponentFailsClosedForShorthandClosureShadowing() throws {
+@Test func externalLabelComponentResolvesShorthandClosureShadowingScope() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
         isDirectory: true
@@ -2948,8 +2948,13 @@ import Testing
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = directory.appendingPathComponent("ClosureShadow.swift")
     let lines = [
+        "func work(_ action: (Int) -> Void) { action(0) }",
         "func compute(state: Int, commands: (Int) -> Void) {",
+        "    func nested(state: Int) { commands(state) }",
         "    work { state in commands(state) }",
+        "    work { [state = state] _ in commands(state) }",
+        "    nested(state: state)",
+        "    commands(state)",
         "}",
         "compute(state: 1, commands: { _ in })"
     ]
@@ -2992,21 +2997,21 @@ import Testing
             testOccurrence(
                 compute,
                 path: file.path,
-                line: 1,
+                line: 2,
                 token: "compute",
                 roles: ["definition"]
             ),
             testOccurrence(
                 compute,
                 path: file.path,
-                line: 4,
+                line: 9,
                 token: "compute",
                 roles: ["reference", "call"]
             ),
             testOccurrence(
                 state,
                 path: file.path,
-                line: 1,
+                line: 2,
                 token: "state",
                 roles: ["definition"],
                 relations: [childOfCompute()]
@@ -3014,7 +3019,7 @@ import Testing
             testOccurrence(
                 commands,
                 path: file.path,
-                line: 1,
+                line: 2,
                 token: "commands",
                 roles: ["definition"],
                 relations: [childOfCompute()]
@@ -3024,14 +3029,45 @@ import Testing
 
     var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    #expect(!plan.entries.contains { $0.usr == state.usr || $0.usr == commands.usr })
-    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 1)
-    #expect(plan.parameterExternalLabelComponentFacts.deniedAtomicComponents == 1)
-    #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
-        "unsafeLocalBindingScope": 1
-    ])
-    #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 0)
+    let computeEntry = try #require(plan.entries.first { $0.usr == compute.usr })
+    let stateEntry = try #require(plan.entries.first { $0.usr == state.usr })
+    let commandsEntry = try #require(plan.entries.first { $0.usr == commands.usr })
+    #expect(stateEntry.replacements.count == 5)
+    #expect(commandsEntry.replacements.count == 6)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 0)
+    #expect(plan.parameterExternalLabelComponentFacts.eligibleAtomicComponents == 1)
+    #expect(plan.parameterExternalLabelComponentFacts.blockerComponents.isEmpty)
+    #expect(plan.parameterExternalLabelRenameOutcome.renamedAtomicComponents == 1)
+    #expect(plan.parameterExternalLabelRenameOutcome.renamedParameterUSRs == 2)
     #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains(
+        "func nested(state: Int) { \(commandsEntry.newName)(state) }"
+    ))
+    #expect(patched.contains(
+        "work { state in \(commandsEntry.newName)(state) }"
+    ))
+    #expect(patched.contains(
+        "work { [state = \(stateEntry.newName)] _ in "
+            + "\(commandsEntry.newName)(state) }"
+    ))
+    #expect(patched.contains(
+        "nested(state: \(stateEntry.newName))"
+    ))
+    #expect(patched.contains(
+        "\(commandsEntry.newName)(\(stateEntry.newName))"
+    ))
+    #expect(patched.contains(
+        "\(computeEntry.newName)(\(stateEntry.newName): 1, "
+            + "\(commandsEntry.newName): { _ in })"
+    ))
+
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
 }
 
 @Test func externalLabelComponentPreservesDynamicMemberLookupLabel() throws {

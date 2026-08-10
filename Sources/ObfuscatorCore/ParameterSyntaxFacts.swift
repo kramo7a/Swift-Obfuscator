@@ -526,11 +526,18 @@ private struct ImplicitBindingScope {
     let bodyRange: Range<Int>
 }
 
+private struct BindingDeclaration {
+    let token: SourceTokenRange
+    /// Exact lexical range in which this declaration shadows an outer binding.
+    /// `nil` means the scope has not been modeled and must remain fail-closed.
+    let shadowScope: Range<Int>?
+}
+
 private final class ParameterSyntaxVisitor: SyntaxVisitor {
     let source: SourceFile
     var candidates: [ParameterSyntaxCandidate] = []
     var declarationReferences: [SourceTokenRange] = []
-    var bindingDeclarations: [SourceTokenRange] = []
+    var bindingDeclarations: [BindingDeclaration] = []
     var implicitBindingScopes: [ImplicitBindingScope] = []
 
     init(source: SourceFile) {
@@ -546,7 +553,10 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         }
         let localBinding = indexedAnchor.name == "_" ? nil : indexedAnchor
         if let localBinding {
-            bindingDeclarations.append(localBinding)
+            bindingDeclarations.append(BindingDeclaration(
+                token: localBinding,
+                shadowScope: owner.bodyRange
+            ))
         }
         let trailingClosureType = trailingClosureType(of: node.type)
         candidates.append(ParameterSyntaxCandidate(
@@ -594,7 +604,10 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         }
         let localBinding = indexedAnchor.name == "_" ? nil : indexedAnchor
         if let localBinding {
-            bindingDeclarations.append(localBinding)
+            bindingDeclarations.append(BindingDeclaration(
+                token: localBinding,
+                shadowScope: nil
+            ))
         }
         let trailingClosureType = trailingClosureType(of: node.type)
         candidates.append(ParameterSyntaxCandidate(
@@ -617,7 +630,10 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             return .visitChildren
         }
         let owner = accessorOwner(of: node)
-        bindingDeclarations.append(indexedAnchor)
+        bindingDeclarations.append(BindingDeclaration(
+            token: indexedAnchor,
+            shadowScope: owner?.bodyRange
+        ))
         candidates.append(ParameterSyntaxCandidate(
             kind: .accessor,
             indexedAnchor: indexedAnchor,
@@ -638,10 +654,13 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             return .visitChildren
         }
         let localBinding = indexedAnchor.name == "_" ? nil : indexedAnchor
-        if let localBinding {
-            bindingDeclarations.append(localBinding)
-        }
         let owner = closureOwner(of: node)
+        if let localBinding {
+            bindingDeclarations.append(BindingDeclaration(
+                token: localBinding,
+                shadowScope: owner?.bodyRange
+            ))
+        }
         let trailingClosureType = trailingClosureType(of: node.type)
         candidates.append(ParameterSyntaxCandidate(
             kind: .closure,
@@ -665,7 +684,10 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
               localBinding.name != "_" else {
             return .visitChildren
         }
-        bindingDeclarations.append(localBinding)
+        bindingDeclarations.append(BindingDeclaration(
+            token: localBinding,
+            shadowScope: enclosingClosureBodyRange(of: node)
+        ))
         return .visitChildren
     }
 
@@ -678,7 +700,10 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
 
     override func visit(_ node: IdentifierPatternSyntax) -> SyntaxVisitorContinueKind {
         if let token = sourceToken(node.identifier) {
-            bindingDeclarations.append(token)
+            bindingDeclarations.append(BindingDeclaration(
+                token: token,
+                shadowScope: nil
+            ))
         }
         return .visitChildren
     }
@@ -690,7 +715,10 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         if node.initializer == nil {
             declarationReferences.append(token)
         } else {
-            bindingDeclarations.append(token)
+            bindingDeclarations.append(BindingDeclaration(
+                token: token,
+                shadowScope: enclosingClosureBodyRange(of: node)
+            ))
         }
         return .visitChildren
     }
@@ -734,16 +762,31 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                   let bodyRange = candidates[index].bodyRange else {
                 continue
             }
+            let matchingBindings = bindingDeclarations.filter {
+                $0.token.name == localBinding.name
+                    && bodyRange.contains($0.token.byteRange.lowerBound)
+            }
+            let scopedBindings = matchingBindings.filter { binding in
+                guard let scope = binding.shadowScope else {
+                    return false
+                }
+                return bodyRange.contains(scope.lowerBound)
+                    && scope.upperBound <= bodyRange.upperBound
+            }
+            let shadowScopes = scopedBindings.compactMap(\.shadowScope)
             candidates[index].localBindingReferences = Array(Set(
-                declarationReferences.filter {
-                    $0.name == localBinding.name
-                        && bodyRange.contains($0.byteRange.lowerBound)
+                declarationReferences.filter { reference in
+                    reference.name == localBinding.name
+                        && bodyRange.contains(reference.byteRange.lowerBound)
+                        && !shadowScopes.contains(where: {
+                            $0.contains(reference.byteRange.lowerBound)
+                        })
                 }
             )).sorted { $0.byteRange.lowerBound < $1.byteRange.lowerBound }
+            let scopedTokens = Set(scopedBindings.map(\.token))
             candidates[index].shadowingBindingDeclarations = Array(Set(
-                bindingDeclarations.filter {
-                    $0.name == localBinding.name
-                        && bodyRange.contains($0.byteRange.lowerBound)
+                matchingBindings.compactMap { binding in
+                    scopedTokens.contains(binding.token) ? nil : binding.token
                 }
             )).sorted { $0.byteRange.lowerBound < $1.byteRange.lowerBound }
             candidates[index].implicitShadowingBindingNames = Set(
@@ -864,6 +907,19 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             if let closure = current.as(ClosureExprSyntax.self),
                let token = sourceToken(closure.leftBrace) {
                 return (token, syntaxRange(closure.statements))
+            }
+            ancestor = current.parent
+        }
+        return nil
+    }
+
+    private func enclosingClosureBodyRange(
+        of node: some SyntaxProtocol
+    ) -> Range<Int>? {
+        var ancestor = Syntax(node).parent
+        while let current = ancestor {
+            if let closure = current.as(ClosureExprSyntax.self) {
+                return syntaxRange(closure.statements)
             }
             ancestor = current.parent
         }
