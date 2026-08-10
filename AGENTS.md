@@ -123,6 +123,18 @@ label (`_` included) before any binding is accepted. Subscript arguments use
 the same default/variadic/trailing-closure ordinal matcher as ordinary calls;
 do not add a second relaxed positional heuristic for reference occurrences.
 
+External-label renames must be planned as atomic components, never as
+same-spelling groups. A standalone callable is one component; a callable with
+protocol or override relations belongs to the complete connected IndexStoreDB
+relation graph. Every related callable must have a declaration and a complete
+parameter component inside the selected source roots, and external labels must
+agree by parameter ordinal. A runtime/Objective-C node, an external or
+out-of-root relation edge, an out-of-root occurrence, unsafe local-binding
+scope, or any unresolved call/reference binding denies the entire component.
+All parameter USRs at one eligible ordinal receive one coordinated replacement
+name across declarations, body references, calls, full-name references, and
+subscript labels.
+
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 
 

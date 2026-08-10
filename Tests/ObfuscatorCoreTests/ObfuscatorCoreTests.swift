@@ -2280,6 +2280,206 @@ import Testing
     #expect(subscriptBinding.subscriptArguments.map(\.parameterOrdinal) == [0])
 }
 
+@Test func parameterExternalLabelComponentsRequireClosedRelationGraphs() throws {
+    var nextOffset = 0
+
+    func token(_ name: String) -> SourceTokenRange {
+        defer { nextOffset += name.utf8.count + 1 }
+        return SourceTokenRange(
+            path: "/tmp/ParameterExternalLabelComponents.swift",
+            name: name,
+            byteRange: nextOffset..<(nextOffset + name.utf8.count)
+        )
+    }
+
+    func component(
+        usr: String,
+        label: String,
+        isProtocolRequirement: Bool = false,
+        isOverrideRelated: Bool = false,
+        isRuntimeSensitive: Bool = false
+    ) -> ParameterRenameComponent {
+        ParameterRenameComponent(
+            callableUSR: usr,
+            callableName: "call(\(label):)",
+            callableKind: "instanceMethod",
+            ownerCategory: .callable,
+            members: [ParameterRenameMember(
+                parameterUSR: "\(usr)-parameter",
+                ordinal: 0,
+                localBinding: label,
+                externalLabel: .named(label),
+                declarationLocations: [],
+                referenceLocations: []
+            )],
+            declarationLocations: [],
+            callLocations: [],
+            nonCallReferenceLocations: [],
+            hasOccurrenceOutsideSelectedRoots: false,
+            isProtocolRequirement: isProtocolRequirement,
+            isOverrideRelated: isOverrideRelated,
+            isRuntimeSensitive: isRuntimeSensitive,
+            isExternallyOwned: false,
+            structuralReasons: []
+        )
+    }
+
+    let standalone = component(usr: "usr-standalone", label: "value")
+    let requirement = component(
+        usr: "usr-requirement",
+        label: "value",
+        isProtocolRequirement: true,
+        isOverrideRelated: true
+    )
+    let witness = component(
+        usr: "usr-witness",
+        label: "value",
+        isOverrideRelated: true
+    )
+    let externalOverride = component(
+        usr: "usr-external-override",
+        label: "value",
+        isOverrideRelated: true
+    )
+    let runtime = component(
+        usr: "c:objc-runtime-method",
+        label: "value",
+        isRuntimeSensitive: true
+    )
+    let mismatchedBase = component(
+        usr: "usr-mismatched-base",
+        label: "value",
+        isOverrideRelated: true
+    )
+    let mismatchedChild = component(
+        usr: "usr-mismatched-child",
+        label: "other",
+        isOverrideRelated: true
+    )
+    let components = [
+        standalone,
+        requirement,
+        witness,
+        externalOverride,
+        runtime,
+        mismatchedBase,
+        mismatchedChild
+    ]
+
+    var parameterRoles: [String: ParameterDeclarationSyntaxRoles] = [:]
+    for component in components {
+        let label = try #require(component.members.first?.externalLabel)
+        guard case .named(let name) = label else {
+            Issue.record("Expected named test parameter")
+            continue
+        }
+        let sourceToken = token(name)
+        let parameterUSR = try #require(component.members.first?.parameterUSR)
+        parameterRoles[parameterUSR] = ParameterDeclarationSyntaxRoles(
+            parameterUSR: parameterUSR,
+            kind: .function,
+            indexedDeclarationAnchor: sourceToken,
+            externalLabel: .named(sourceToken),
+            localBinding: sourceToken,
+            hasDefaultValue: false,
+            isVariadic: false,
+            trailingClosureCompatibility: .definitelyNonCallable,
+            localBindingReferences: [],
+            shadowingBindingDeclarations: [],
+            implicitShadowingBindingNames: [],
+            syntaxOwnerToken: nil,
+            indexedOwnerUSR: component.callableUSR,
+            syntaxOwnerMatchesIndexedOwner: true
+        )
+    }
+
+    let selectedUSRs = Set(components.map(\.callableUSR))
+    let indexedFacts = IndexedSemanticFacts(
+        selectedDeclarationUSRs: selectedUSRs,
+        protocolRequirementUSRs: [requirement.callableUSR],
+        runtimeSensitiveUSRs: [runtime.callableUSR],
+        overrideRelationNeighbors: [
+            requirement.callableUSR: [witness.callableUSR],
+            witness.callableUSR: [requirement.callableUSR],
+            externalOverride.callableUSR: ["s:external-base"],
+            "s:external-base": [externalOverride.callableUSR],
+            mismatchedBase.callableUSR: [mismatchedChild.callableUSR],
+            mismatchedChild.callableUSR: [mismatchedBase.callableUSR]
+        ],
+        parameterRenameComponents: components
+    )
+    let cache = try SourceFileCache(paths: [])
+    let callSyntaxFacts = ParameterCallSiteSyntaxFacts(
+        components: components,
+        sourceCache: cache
+    )
+    let callBindingFacts = ParameterCallArgumentBindingFacts(
+        components: components,
+        parameterRolesByUSR: parameterRoles,
+        callSiteSyntaxFacts: callSyntaxFacts
+    )
+    let referenceSyntaxFacts = ParameterCallableReferenceSyntaxFacts(
+        components: components,
+        sourceCache: cache
+    )
+    let referenceBindingFacts = ParameterCallableReferenceBindingFacts(
+        components: components,
+        parameterRolesByUSR: parameterRoles,
+        syntaxFacts: referenceSyntaxFacts
+    )
+    let facts = ParameterExternalLabelComponentFacts(
+        indexedFacts: indexedFacts,
+        parameterRolesByUSR: parameterRoles,
+        callBindingFacts: callBindingFacts,
+        callableReferenceBindingFacts: referenceBindingFacts
+    )
+
+    let summary = facts.summary
+    #expect(summary.atomicComponents == 5)
+    #expect(summary.sourceCallableComponents == 7)
+    #expect(summary.namedExternalLabelParameters == 7)
+    #expect(summary.eligibleAtomicComponents == 2)
+    #expect(summary.eligibleSourceCallableComponents == 3)
+    #expect(summary.eligibleNamedExternalLabelParameters == 3)
+    #expect(summary.deniedAtomicComponents == 3)
+    #expect(summary.deniedSourceCallableComponents == 4)
+    #expect(summary.deniedNamedExternalLabelParameters == 4)
+    #expect(summary.standaloneAtomicComponents == 2)
+    #expect(summary.eligibleStandaloneAtomicComponents == 1)
+    #expect(summary.relatedAtomicComponents == 3)
+    #expect(summary.eligibleRelatedAtomicComponents == 1)
+    #expect(summary.protocolRelatedAtomicComponents == 1)
+    #expect(summary.eligibleProtocolRelatedAtomicComponents == 1)
+    #expect(summary.overrideRelatedAtomicComponents == 3)
+    #expect(summary.eligibleOverrideRelatedAtomicComponents == 1)
+    #expect(summary.blockerComponents == [
+        "inconsistentRelatedSignature": 1,
+        "objectiveCRuntimeDispatch": 1,
+        "relationLeavesSelectedSourceRoots": 1
+    ])
+    #expect(Set(summary.eligibleComponents.map(\.key)) == [
+        standalone.callableUSR,
+        requirement.callableUSR
+    ])
+
+    let closedProtocol = try #require(facts.components.first { component in
+        component.relatedCallableUSRs == [requirement.callableUSR, witness.callableUSR]
+    })
+    #expect(closedProtocol.isEligible)
+    #expect(closedProtocol.ordinalComponents.count == 1)
+    #expect(closedProtocol.ordinalComponents[0].originalLabel == "value")
+    #expect(closedProtocol.ordinalComponents[0].parameterUSRs == [
+        requirement.members[0].parameterUSR,
+        witness.members[0].parameterUSR
+    ])
+
+    let externalComponent = try #require(facts.components.first {
+        $0.relatedCallableUSRs.contains("s:external-base")
+    })
+    #expect(!externalComponent.isEligible)
+    #expect(externalComponent.blockers == [.relationLeavesSelectedSourceRoots])
+}
+
 @Test func parameterCallArgumentBindingsResolveDefaultsVariadicsAndTrailingClosures() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
