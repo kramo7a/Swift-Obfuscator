@@ -117,6 +117,11 @@ Bare references contribute no label replacement; full-name and subscript label
 tokens must be ordinal-bound before rename. Unavailable or multiply matched
 syntax fails closed. Keep call and non-call-reference anchors as distinct
 semantic types even when their stored fields happen to match.
+Full-name references must expose exactly one compiler token per declaration
+parameter in ordinal order, and every token must equal the indexed external
+label (`_` included) before any binding is accepted. Subscript arguments use
+the same default/variadic/trailing-closure ordinal matcher as ordinary calls;
+do not add a second relaxed positional heuristic for reference occurrences.
 
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 

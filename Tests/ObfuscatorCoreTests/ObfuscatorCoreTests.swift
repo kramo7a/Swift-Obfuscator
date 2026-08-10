@@ -2021,6 +2021,7 @@ import Testing
         "    let bare = service.convert",
         "    let full = service.convert(value:)",
         "    _ = service[label: 1]",
+        "    let mismatched = service.convert(other:)",
         "}"
     ]
     try (lines.joined(separator: "\n") + "\n").write(
@@ -2092,28 +2093,33 @@ import Testing
         name: "invalid(value:)",
         references: [location(line: 2, token: "value")]
     )
+    let mismatched = component(
+        usr: "usr-mismatched-reference",
+        name: "mismatched(value:)",
+        references: [location(line: 9, token: "convert")]
+    )
 
     let facts = ParameterCallableReferenceSyntaxFacts(
-        components: [convert, subscriptComponent, invalid],
+        components: [convert, subscriptComponent, mismatched, invalid],
         sourceCache: cache
     )
     let summary = facts.summary
-    #expect(summary.componentsWithNamedExternalLabels == 3)
-    #expect(summary.namedExternalLabelParameters == 3)
-    #expect(summary.componentsWithIndexedReferences == 3)
-    #expect(summary.namedParametersInComponentsWithIndexedReferences == 3)
-    #expect(summary.indexedReferenceAnchors == 4)
-    #expect(summary.resolvedReferenceAnchors == 3)
+    #expect(summary.componentsWithNamedExternalLabels == 4)
+    #expect(summary.namedExternalLabelParameters == 4)
+    #expect(summary.componentsWithIndexedReferences == 4)
+    #expect(summary.namedParametersInComponentsWithIndexedReferences == 4)
+    #expect(summary.indexedReferenceAnchors == 5)
+    #expect(summary.resolvedReferenceAnchors == 4)
     #expect(summary.unresolvedReferenceAnchors == 1)
     #expect(summary.resolvedBareReferences == 1)
-    #expect(summary.resolvedFullNameReferences == 1)
-    #expect(summary.fullNameArgumentTokens == 1)
-    #expect(summary.namedFullNameArgumentTokens == 1)
+    #expect(summary.resolvedFullNameReferences == 2)
+    #expect(summary.fullNameArgumentTokens == 2)
+    #expect(summary.namedFullNameArgumentTokens == 2)
     #expect(summary.resolvedSubscriptCalls == 1)
     #expect(summary.subscriptArguments == 1)
     #expect(summary.namedSubscriptArgumentLabelTokens == 1)
-    #expect(summary.componentsWithAllIndexedReferencesResolved == 2)
-    #expect(summary.namedParametersInComponentsWithAllIndexedReferencesResolved == 2)
+    #expect(summary.componentsWithAllIndexedReferencesResolved == 3)
+    #expect(summary.namedParametersInComponentsWithAllIndexedReferencesResolved == 3)
     #expect(summary.unresolvedByReason == [
         "compiler callable reference syntax unavailable at indexed anchor": 1
     ])
@@ -2155,6 +2161,123 @@ import Testing
     } else {
         Issue.record("Expected a named subscript argument")
     }
+
+    let source = try #require(cache.file(for: file.path))
+    func sourceToken(line: Int, token: String) throws -> SourceTokenRange {
+        let column = utf8Column(of: token, in: lines[line - 1])
+        let byteOffset = try #require(source.byteOffset(line: line, utf8Column: column))
+        let identifier = try #require(source.identifierToken(atByteOffset: byteOffset))
+        return SourceTokenRange(
+            path: file.path,
+            name: identifier.name,
+            byteRange: identifier.byteRange,
+            isBackticked: identifier.isBackticked
+        )
+    }
+
+    func parameterRole(
+        component: ParameterRenameComponent,
+        kind: ParameterDeclarationSyntaxKind,
+        externalLabel: SourceTokenRange,
+        localBinding: SourceTokenRange
+    ) -> ParameterDeclarationSyntaxRoles {
+        ParameterDeclarationSyntaxRoles(
+            parameterUSR: component.members[0].parameterUSR,
+            kind: kind,
+            indexedDeclarationAnchor: localBinding,
+            externalLabel: .named(externalLabel),
+            localBinding: localBinding,
+            hasDefaultValue: false,
+            isVariadic: false,
+            trailingClosureCompatibility: .definitelyNonCallable,
+            localBindingReferences: [],
+            shadowingBindingDeclarations: [],
+            implicitShadowingBindingNames: [],
+            syntaxOwnerToken: nil,
+            indexedOwnerUSR: component.callableUSR,
+            syntaxOwnerMatchesIndexedOwner: true
+        )
+    }
+
+    let convertParameterToken = try sourceToken(line: 2, token: "value")
+    let subscriptLabelToken = try sourceToken(line: 3, token: "label")
+    let subscriptBindingToken = try sourceToken(line: 3, token: "value")
+    let parameterRoles = [
+        convert.members[0].parameterUSR: parameterRole(
+            component: convert,
+            kind: .function,
+            externalLabel: convertParameterToken,
+            localBinding: convertParameterToken
+        ),
+        subscriptComponent.members[0].parameterUSR: parameterRole(
+            component: subscriptComponent,
+            kind: .subscriptDeclaration,
+            externalLabel: subscriptLabelToken,
+            localBinding: subscriptBindingToken
+        ),
+        invalid.members[0].parameterUSR: parameterRole(
+            component: invalid,
+            kind: .function,
+            externalLabel: convertParameterToken,
+            localBinding: convertParameterToken
+        ),
+        mismatched.members[0].parameterUSR: parameterRole(
+            component: mismatched,
+            kind: .function,
+            externalLabel: convertParameterToken,
+            localBinding: convertParameterToken
+        )
+    ]
+    let bindingFacts = ParameterCallableReferenceBindingFacts(
+        components: [convert, subscriptComponent, mismatched, invalid],
+        parameterRolesByUSR: parameterRoles,
+        syntaxFacts: facts
+    )
+    let bindingSummary = bindingFacts.summary
+    #expect(bindingSummary.componentsWithNamedExternalLabels == 4)
+    #expect(bindingSummary.namedExternalLabelParameters == 4)
+    #expect(bindingSummary.componentsWithIndexedReferences == 4)
+    #expect(bindingSummary.namedParametersInComponentsWithIndexedReferences == 4)
+    #expect(bindingSummary.indexedReferenceAnchors == 5)
+    #expect(bindingSummary.syntaxResolvedReferenceAnchors == 4)
+    #expect(bindingSummary.bindingResolvedReferenceAnchors == 3)
+    #expect(bindingSummary.bindingUnresolvedReferenceAnchors == 2)
+    #expect(bindingSummary.boundBareReferences == 1)
+    #expect(bindingSummary.boundFullNameReferences == 1)
+    #expect(bindingSummary.boundFullNameArgumentTokens == 1)
+    #expect(bindingSummary.boundNamedFullNameLabelTokens == 1)
+    #expect(bindingSummary.boundSubscriptCalls == 1)
+    #expect(bindingSummary.boundSubscriptArguments == 1)
+    #expect(bindingSummary.boundNamedSubscriptLabelTokens == 1)
+    #expect(bindingSummary.componentsWithAllIndexedReferencesBound == 2)
+    #expect(bindingSummary.namedParametersInComponentsWithAllIndexedReferencesBound == 2)
+    #expect(bindingSummary.fullNameSignatureMismatches == 1)
+    #expect(bindingSummary.ambiguousSubscriptCalls == 0)
+    #expect(bindingSummary.unmatchedSubscriptCalls == 0)
+    #expect(bindingSummary.unresolvedByReason == [
+        "callable reference syntax unresolved: compiler callable reference syntax unavailable at indexed anchor": 1,
+        "full-name argument tokens do not match declaration parameter roles": 1
+    ])
+
+    let bareBinding = try #require(bindingFacts.bindingsByAnchor[bareAnchor])
+    #expect(bareBinding.kind == .bareReference)
+    #expect(bareBinding.fullNameArguments.isEmpty)
+    #expect(bareBinding.subscriptArguments.isEmpty)
+
+    let fullNameBinding = try #require(bindingFacts.bindingsByAnchor[fullNameAnchor])
+    #expect(fullNameBinding.kind == .fullNameReference)
+    #expect(fullNameBinding.fullNameArguments.map(\.parameterUSR) == [
+        convert.members[0].parameterUSR
+    ])
+    #expect(fullNameBinding.fullNameArguments.map(\.parameterOrdinal) == [0])
+    #expect(fullNameBinding.fullNameArguments.map(\.token.name) == ["value"])
+
+    let subscriptBinding = try #require(bindingFacts.bindingsByAnchor[subscriptAnchor])
+    #expect(subscriptBinding.kind == .subscriptCall)
+    #expect(subscriptBinding.subscriptArguments.map(\.parameterUSR) == [
+        subscriptComponent.members[0].parameterUSR
+    ])
+    #expect(subscriptBinding.subscriptArguments.map(\.parameterOrdinal) == [0])
 }
 
 @Test func parameterCallArgumentBindingsResolveDefaultsVariadicsAndTrailingClosures() throws {
