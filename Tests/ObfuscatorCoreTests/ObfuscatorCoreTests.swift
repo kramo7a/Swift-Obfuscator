@@ -3399,8 +3399,9 @@ import Testing
     #expect(plan.denied.first?.reasons.contains { $0.contains("no declaration or definition occurrence inside selected source roots") } == true)
 }
 
-@Test func coverageCohortKeepsFixedEngineeringDenominatorAndExcludesSyntheticAccessors() throws {
+@Test func coverageCohortUsesExplicitSourceSurfaceIndependentOfRenameEligibility() throws {
     let path = "/tmp/CoverageSample.swift"
+    let outsidePath = "/tmp/OutsideSelection.swift"
     let renamedProperty = SymbolRecord(
         usr: "usr-renamed-property",
         name: "renamedValue",
@@ -3441,6 +3442,14 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
+    let enumCase = SymbolRecord(
+        usr: "usr-enum-case",
+        name: "ready",
+        kind: "enumConstant",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
     let runtimeProperty = SymbolRecord(
         usr: "c:objc-runtime-property",
         name: "runtimeValue",
@@ -3449,26 +3458,66 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
+    let constructor = SymbolRecord(
+        usr: "usr-constructor",
+        name: "init(value:)",
+        kind: "constructor",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let compilerDerivedProperty = SymbolRecord(
+        usr: "usr-compiler-derived-property",
+        name: "$value",
+        kind: "instanceProperty",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let outsideProperty = SymbolRecord(
+        usr: "usr-outside-property",
+        name: "outsideValue",
+        kind: "instanceProperty",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
 
-    func occurrence(_ symbol: SymbolRecord, relation: RelationRecord? = nil) -> OccurrenceRecord {
+    func occurrence(
+        _ symbol: SymbolRecord,
+        path occurrencePath: String? = nil,
+        roles: [String] = ["declaration"],
+        relation: RelationRecord? = nil
+    ) -> OccurrenceRecord {
         OccurrenceRecord(
             symbol: symbol,
-            path: path,
+            path: occurrencePath ?? path,
             line: 1,
             utf8Column: 1,
             moduleName: "CoverageSample",
             isSystem: false,
             rolesRaw: 1,
-            roles: ["declaration"],
-            rolesDescription: "declaration",
+            roles: roles,
+            rolesDescription: roles.joined(separator: ","),
             symbolProvider: "swift",
             relations: relation.map { [$0] } ?? []
         )
     }
 
     let snapshot = IndexSnapshot(
-        sourceFiles: [path],
-        symbols: [renamedProperty, deniedProperty, getter, setter, parameter, runtimeProperty],
+        sourceFiles: [path, outsidePath],
+        symbols: [
+            renamedProperty,
+            deniedProperty,
+            getter,
+            setter,
+            parameter,
+            enumCase,
+            runtimeProperty,
+            constructor,
+            compilerDerivedProperty,
+            outsideProperty
+        ],
         occurrences: [
             occurrence(renamedProperty),
             occurrence(deniedProperty),
@@ -3480,7 +3529,11 @@ import Testing
             )),
             occurrence(setter),
             occurrence(parameter),
-            occurrence(runtimeProperty)
+            occurrence(enumCase),
+            occurrence(runtimeProperty),
+            occurrence(constructor),
+            occurrence(compilerDerivedProperty, roles: ["definition", "implicit"]),
+            occurrence(outsideProperty, path: outsidePath)
         ]
     )
     let plan = RenamePlan(
@@ -3530,12 +3583,44 @@ import Testing
                 reasons: ["unsupported symbol kind parameter"]
             ),
             SafetyDecision(
+                usr: enumCase.usr,
+                symbolName: enumCase.name,
+                kind: enumCase.kind,
+                allowed: false,
+                oldName: enumCase.name,
+                reasons: ["unsupported symbol kind enumConstant"]
+            ),
+            SafetyDecision(
                 usr: runtimeProperty.usr,
                 symbolName: runtimeProperty.name,
                 kind: runtimeProperty.kind,
                 allowed: false,
                 oldName: runtimeProperty.name,
                 reasons: ["Objective-C-compatible USR requires a stable runtime name"]
+            ),
+            SafetyDecision(
+                usr: constructor.usr,
+                symbolName: constructor.name,
+                kind: constructor.kind,
+                allowed: false,
+                oldName: "init",
+                reasons: ["unsupported symbol kind constructor"]
+            ),
+            SafetyDecision(
+                usr: compilerDerivedProperty.usr,
+                symbolName: compilerDerivedProperty.name,
+                kind: compilerDerivedProperty.kind,
+                allowed: false,
+                oldName: compilerDerivedProperty.name,
+                reasons: ["implicit occurrence at \(path):1:1"]
+            ),
+            SafetyDecision(
+                usr: outsideProperty.usr,
+                symbolName: outsideProperty.name,
+                kind: outsideProperty.kind,
+                allowed: false,
+                oldName: outsideProperty.name,
+                reasons: ["no declaration or definition occurrence inside selected source roots"]
             )
         ],
         conflicts: []
@@ -3543,16 +3628,27 @@ import Testing
 
     let cohort = try CoverageAnalyzer.makeBaselineCohort(
         identifier: "fixture@1",
-        expectedCount: 2,
+        expectedCount: 5,
         snapshot: snapshot,
-        plan: plan
+        plan: plan,
+        selectedSourceFiles: [path]
     )
     let report = try CoverageAnalyzer.makeReport(cohort: cohort, snapshot: snapshot, plan: plan)
 
-    #expect(cohort.members.map(\.usr) == [deniedProperty.usr, renamedProperty.usr].sorted())
-    #expect(cohort.denominator == 2)
+    #expect(cohort.population == .explicitSourceSurface)
+    #expect(cohort.members.map(\.usr) == [
+        deniedProperty.usr,
+        enumCase.usr,
+        parameter.usr,
+        renamedProperty.usr,
+        runtimeProperty.usr
+    ].sorted())
+    #expect(cohort.denominator == 5)
     #expect(report.renamed == 1)
-    #expect(report.denied == 1)
+    #expect(report.denied == 4)
+    #expect(report.bySymbolKind.first { $0.kind == "parameter" }?.denominator == 1)
+    #expect(report.bySymbolKind.first { $0.kind == "parameter" }?.renamed == 0)
+    #expect(report.bySymbolKind.first { $0.kind == "enumConstant" }?.denominator == 1)
     #expect(report.syntheticAccessors.total == 2)
     #expect(report.syntheticAccessors.getters == 1)
     #expect(report.syntheticAccessors.setters == 1)
@@ -3564,13 +3660,14 @@ import Testing
     do {
         _ = try CoverageAnalyzer.makeBaselineCohort(
             identifier: "fixture@1",
-            expectedCount: 3,
+            expectedCount: 6,
             snapshot: snapshot,
-            plan: plan
+            plan: plan,
+            selectedSourceFiles: [path]
         )
         Issue.record("Expected fixed denominator validation to fail")
     } catch let error as CoverageReportError {
-        #expect(error.localizedDescription.contains("expected 3"))
+        #expect(error.localizedDescription.contains("expected 6"))
     }
 }
 

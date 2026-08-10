@@ -427,7 +427,8 @@ struct SwiftObfuscatorCLI {
                         identifier: identifier,
                         expectedCount: expectedCount,
                         snapshot: snapshotForCoverage,
-                        plan: plan
+                        plan: plan,
+                        selectedSourceFiles: selectedSourceFiles
                     )
                     try cohort.save(to: createCoverageCohortPath, fileManager: fileManager)
                     output.write("Immutable coverage cohort saved: \(createCoverageCohortPath.path)", visibility: .quiet)

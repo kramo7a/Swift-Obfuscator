@@ -28,6 +28,11 @@ public enum CoverageDenialCategory: String, Codable, CaseIterable, Sendable {
 public enum CoverageCohortBaselineStatus: String, Codable, Sendable {
     case renamed
     case engineeringCandidate
+    case notRenamed
+}
+
+public enum CoverageCohortPopulation: String, Codable, Sendable {
+    case explicitSourceSurface
 }
 
 public struct CoverageCohortMember: Codable, Equatable, Sendable {
@@ -43,6 +48,7 @@ public struct CoverageCohort: Codable, Equatable, Sendable {
 
     public let formatVersion: Int
     public let identifier: String
+    public let population: CoverageCohortPopulation?
     public let denominator: Int
     public let membersSHA256: String
     public let baselineIndexedSymbols: Int
@@ -199,19 +205,29 @@ public enum CoverageReportError: LocalizedError {
 }
 
 public enum CoverageAnalyzer {
+    public static let sourceSurfaceKinds: Set<String> = SafetyAnalyzer.defaultAllowedKinds.union([
+        "parameter",
+        "enumConstant"
+    ])
+
     public static func makeBaselineCohort(
         identifier: String,
         expectedCount: Int? = nil,
         snapshot: IndexSnapshot,
         plan: RenamePlan,
-        allowedKinds: Set<String> = SafetyAnalyzer.defaultAllowedKinds
+        selectedSourceFiles: [String]? = nil
     ) throws -> CoverageCohort {
         let plannedByUSR = Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.usr, $0) })
         let deniedByUSR = Dictionary(uniqueKeysWithValues: plan.denied.map { ($0.usr, $0) })
+        let selectedSourceFiles = Set(
+            (selectedSourceFiles ?? snapshot.sourceFiles).map(SourcePathNormalizer.canonicalPath)
+        )
         var members: [CoverageCohortMember] = []
 
         for group in snapshot.groupsByUSR {
-            if isSyntheticAccessor(group) {
+            guard sourceSurfaceKinds.contains(group.symbol.kind),
+                  !isSyntheticAccessor(group),
+                  hasExplicitDeclaration(group, in: selectedSourceFiles) else {
                 continue
             }
 
@@ -226,21 +242,14 @@ public enum CoverageAnalyzer {
                 continue
             }
 
-            guard allowedKinds.contains(group.symbol.kind),
-                  let decision = deniedByUSR[group.usr] else {
-                continue
-            }
-            let categories = denialCategories(for: decision, group: group)
-            guard !decision.hasReason(startingWith: "no declaration or definition occurrence"),
-                  !isBaselineHardContract(decision) else {
-                continue
-            }
+            let decision = deniedByUSR[group.usr]
+            let categories = decision.map { denialCategories(for: $0, group: group) } ?? []
 
             members.append(CoverageCohortMember(
                 usr: group.usr,
-                originalName: decision.oldName ?? group.symbol.name,
+                originalName: decision?.oldName ?? group.symbol.name,
                 kind: group.symbol.kind,
-                baselineStatus: .engineeringCandidate,
+                baselineStatus: .notRenamed,
                 baselineDenialCategories: sortedCategories(categories)
             ))
         }
@@ -253,13 +262,26 @@ public enum CoverageAnalyzer {
         return CoverageCohort(
             formatVersion: CoverageCohort.currentFormatVersion,
             identifier: identifier,
+            population: .explicitSourceSurface,
             denominator: members.count,
             membersSHA256: CoverageCohort.digest(of: members),
             baselineIndexedSymbols: snapshot.symbols.count,
             baselineIndexedOccurrences: snapshot.occurrences.count,
-            baselineRenamedSymbols: plan.entries.count,
+            baselineRenamedSymbols: members.count { $0.baselineStatus == .renamed },
             members: members
         )
+    }
+
+    private static func hasExplicitDeclaration(
+        _ group: USROccurrenceGroup,
+        in selectedSourceFiles: Set<String>
+    ) -> Bool {
+        group.occurrences.contains { occurrence in
+            !occurrence.isSystem
+                && !occurrence.roles.contains("implicit")
+                && (occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"))
+                && selectedSourceFiles.contains(SourcePathNormalizer.canonicalPath(occurrence.path))
+        }
     }
 
     public static func makeReport(
@@ -472,14 +494,6 @@ public enum CoverageAnalyzer {
         return group.occurrences.flatMap(\.relations).contains { relation in
             relation.roles.contains("overrideOf") || relation.roles.contains("baseOf")
         }
-    }
-
-    private static func isBaselineHardContract(_ decision: SafetyDecision) -> Bool {
-        decision.hasReason(startingWith: "Objective-C-compatible USR")
-            || decision.hasReason(startingWith: "runtime-reflected or externally linked")
-            || decision.hasReason(startingWith: "Interface Builder resource requires stable class name")
-            || decision.hasReason(startingWith: "language-required declaration name")
-            || decision.hasReason(startingWith: "extensions on external Swift or Objective-C owners")
     }
 
     private static func syntheticAccessorSummary(groups: [USROccurrenceGroup], plan: RenamePlan) -> SyntheticAccessorSummary {
