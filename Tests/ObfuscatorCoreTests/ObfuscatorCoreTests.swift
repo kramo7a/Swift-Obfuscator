@@ -1811,7 +1811,7 @@ import Testing
     })
 }
 
-@Test func safetyAnalyzerDeniesStoredPropertiesUntilMemberwiseLabelsAreRewritten() throws {
+@Test func safetyAnalyzerAllowsStoredPropertiesBecauseMemberwiseLabelsAreIndexedByPropertyUSR() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = directory.appendingPathComponent("Sample.swift")
@@ -1846,8 +1846,533 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(decision.allowed == false)
-    #expect(decision.reasons.contains("stored property declarations require memberwise initializer label support"))
+    #expect(decision.allowed)
+    #expect(!decision.reasons.contains { $0.contains("memberwise initializer") })
+}
+
+@Test func renamePlannerPreservesMemberwiseLabelsExplicitInitializerLabelsAndCodableKeys() throws {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let fixture = repositoryRoot
+        .appendingPathComponent("Fixtures/StoredPropertySafety/main.swift")
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let sourceURL = directory.appendingPathComponent("main.swift")
+    try FileManager.default.copyItem(at: fixture, to: sourceURL)
+    let sourceText = try String(contentsOf: sourceURL, encoding: .utf8)
+    let lines = sourceText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let cache = try SourceFileCache(paths: [sourceURL.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func relation(_ target: SymbolRecord, _ roles: [String]) -> RelationRecord {
+        RelationRecord(
+            usr: target.usr,
+            name: target.name,
+            rolesRaw: 0,
+            roles: roles
+        )
+    }
+    func occurrence(
+        _ symbol: SymbolRecord,
+        line: Int,
+        token: String,
+        roles: [String],
+        relations: [RelationRecord] = []
+    ) -> OccurrenceRecord {
+        OccurrenceRecord(
+            symbol: symbol,
+            path: sourceURL.path,
+            line: line,
+            utf8Column: utf8Column(of: token, in: lines[line - 1]),
+            moduleName: "StoredPropertySafety",
+            isSystem: false,
+            rolesRaw: 0,
+            roles: roles,
+            rolesDescription: roles.joined(separator: ","),
+            symbolProvider: "swift",
+            relations: relations
+        )
+    }
+
+    let envelope = symbol("s:fixture-envelope", "Envelope", "struct")
+    let payload = symbol("s:fixture-payload", "MemberwisePayload", "struct")
+    let explicitPayload = symbol("s:fixture-explicit", "ExplicitPayload", "struct")
+    let serverName = symbol("s:fixture-server-name", "serverName", "instanceProperty")
+    let retryCount = symbol("s:fixture-retry-count", "retryCount", "instanceProperty")
+    let diagnosticText = symbol("s:fixture-diagnostic-text", "diagnosticText", "instanceProperty")
+    let storedValue = symbol("s:fixture-stored-value", "storedValue", "instanceProperty")
+    let localValue = symbol("s:fixture-local-value", "localValue", "parameter")
+    let serverNameGetter = symbol("s:fixture-server-name-getter", "getter:serverName", "instanceMethod")
+    let retryCountGetter = symbol("s:fixture-retry-count-getter", "getter:retryCount", "instanceMethod")
+    let diagnosticTextGetter = symbol("s:fixture-diagnostic-text-getter", "getter:diagnosticText", "instanceMethod")
+    let storedValueGetter = symbol("s:fixture-stored-value-getter", "getter:storedValue", "instanceMethod")
+    let wrapperOwner = symbol("s:fixture-wrapper-owner", "WrapperOwner", "struct")
+    let wrappedNumber = symbol("s:fixture-wrapped-number", "wrappedNumber", "instanceProperty")
+    let wrappedNumberGetter = symbol("s:fixture-wrapped-number-getter", "getter:wrappedNumber", "instanceMethod")
+    let projectedWrappedNumber = symbol(
+        "s:fixture-projected-wrapped-number",
+        "$wrappedNumber",
+        "instanceProperty"
+    )
+    let decodable = symbol("s:Se", "Decodable", "protocol")
+    let encodable = symbol("s:SE", "Encodable", "protocol")
+
+    var occurrences: [OccurrenceRecord] = [
+        occurrence(envelope, line: 3, token: "Envelope", roles: ["definition", "canonical"]),
+        occurrence(
+            payload,
+            line: 4,
+            token: "MemberwisePayload",
+            roles: ["definition", "childOf", "canonical"],
+            relations: [relation(envelope, ["childOf"])]
+        ),
+        occurrence(explicitPayload, line: 14, token: "ExplicitPayload", roles: ["definition", "canonical"]),
+        occurrence(
+            serverName,
+            line: 5,
+            token: "serverName",
+            roles: ["definition", "childOf", "canonical"],
+            relations: [relation(payload, ["childOf"])]
+        ),
+        occurrence(
+            retryCount,
+            line: 6,
+            token: "retryCount",
+            roles: ["definition", "childOf", "canonical"],
+            relations: [relation(payload, ["childOf"])]
+        ),
+        occurrence(
+            diagnosticText,
+            line: 8,
+            token: "diagnosticText",
+            roles: ["definition", "childOf", "canonical"],
+            relations: [relation(payload, ["childOf"])]
+        ),
+        occurrence(
+            storedValue,
+            line: 15,
+            token: "storedValue",
+            roles: ["definition", "childOf", "canonical"],
+            relations: [relation(explicitPayload, ["childOf"])]
+        ),
+        occurrence(
+            serverNameGetter,
+            line: 5,
+            token: "serverName",
+            roles: ["definition", "implicit", "childOf", "accessorOf", "canonical"],
+            relations: [relation(serverName, ["childOf", "accessorOf"])]
+        ),
+        occurrence(
+            retryCountGetter,
+            line: 6,
+            token: "retryCount",
+            roles: ["definition", "implicit", "childOf", "accessorOf", "canonical"],
+            relations: [relation(retryCount, ["childOf", "accessorOf"])]
+        ),
+        occurrence(
+            diagnosticTextGetter,
+            line: 8,
+            token: "diagnosticText",
+            roles: ["definition", "childOf", "accessorOf", "canonical"],
+            relations: [relation(diagnosticText, ["childOf", "accessorOf"])]
+        ),
+        occurrence(
+            storedValueGetter,
+            line: 15,
+            token: "storedValue",
+            roles: ["definition", "implicit", "childOf", "accessorOf", "canonical"],
+            relations: [relation(storedValue, ["childOf", "accessorOf"])]
+        ),
+        occurrence(
+            decodable,
+            line: 4,
+            token: "Codable",
+            roles: ["reference", "implicit", "baseOf"],
+            relations: [relation(payload, ["baseOf"])]
+        ),
+        occurrence(
+            encodable,
+            line: 4,
+            token: "Codable",
+            roles: ["reference", "implicit", "baseOf"],
+            relations: [relation(payload, ["baseOf"])]
+        ),
+        occurrence(wrapperOwner, line: 41, token: "WrapperOwner", roles: ["definition", "canonical"]),
+        occurrence(
+            wrappedNumber,
+            line: 42,
+            token: "wrappedNumber",
+            roles: ["definition", "childOf", "canonical"],
+            relations: [relation(wrapperOwner, ["childOf"])]
+        ),
+        occurrence(
+            wrappedNumberGetter,
+            line: 42,
+            token: "wrappedNumber",
+            roles: ["definition", "implicit", "childOf", "accessorOf", "canonical"],
+            relations: [relation(wrappedNumber, ["childOf", "accessorOf"])]
+        ),
+        occurrence(
+            projectedWrappedNumber,
+            line: 42,
+            token: "FixtureBox",
+            roles: ["definition", "implicit", "childOf", "canonical"],
+            relations: [relation(wrapperOwner, ["childOf"])]
+        )
+    ]
+
+    occurrences.append(contentsOf: [
+        occurrence(envelope, line: 22, token: "Envelope", roles: ["reference"]),
+        occurrence(envelope, line: 27, token: "Envelope", roles: ["reference"]),
+        occurrence(payload, line: 22, token: "MemberwisePayload", roles: ["reference", "call"]),
+        occurrence(payload, line: 27, token: "MemberwisePayload", roles: ["reference"]),
+        occurrence(explicitPayload, line: 32, token: "ExplicitPayload", roles: ["reference", "call"]),
+        occurrence(serverName, line: 9, token: "serverName", roles: ["reference", "read"]),
+        occurrence(serverName, line: 22, token: "serverName", roles: ["reference"]),
+        occurrence(serverName, line: 28, token: "serverName", roles: ["reference", "read"]),
+        occurrence(retryCount, line: 9, token: "retryCount", roles: ["reference", "read"]),
+        occurrence(retryCount, line: 22, token: "retryCount", roles: ["reference"]),
+        occurrence(retryCount, line: 29, token: "retryCount", roles: ["reference", "read"]),
+        occurrence(diagnosticText, line: 30, token: "diagnosticText", roles: ["reference", "read"]),
+        occurrence(storedValue, line: 18, token: "storedValue", roles: ["reference", "write"]),
+        occurrence(storedValue, line: 33, token: "storedValue", roles: ["reference", "read"]),
+        occurrence(localValue, line: 17, token: "localValue", roles: ["definition", "childOf"]),
+        occurrence(localValue, line: 18, token: "localValue", roles: ["reference", "read"]),
+        occurrence(localValue, line: 32, token: "externalLabel", roles: ["reference"]),
+        occurrence(wrapperOwner, line: 46, token: "WrapperOwner", roles: ["reference", "call"]),
+        occurrence(wrappedNumber, line: 47, token: "wrappedNumber", roles: ["reference", "read"]),
+        occurrence(
+            projectedWrappedNumber,
+            line: 43,
+            token: "$wrappedNumber",
+            roles: ["reference", "read"]
+        )
+    ])
+
+    let symbols = [
+        envelope, payload, explicitPayload, serverName, retryCount, diagnosticText, storedValue,
+        localValue, serverNameGetter, retryCountGetter, diagnosticTextGetter, storedValueGetter,
+        wrapperOwner, wrappedNumber, wrappedNumberGetter, projectedWrappedNumber, decodable, encodable
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [sourceURL.path],
+        symbols: symbols,
+        occurrences: occurrences
+    )
+    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+    #expect(facts.storedPropertyUSRs == [
+        serverName.usr, retryCount.usr, storedValue.usr, wrappedNumber.usr
+    ])
+    #expect(!facts.storedPropertyUSRs.contains(diagnosticText.usr))
+    #expect(facts.serializationSensitiveOwnerUSRs == [payload.usr])
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    #expect(plan.conflicts.isEmpty)
+    #expect(plan.supportReplacements.count == 2)
+    #expect(plan.entries.contains { $0.usr == serverName.usr })
+    #expect(plan.entries.contains { $0.usr == retryCount.usr })
+    #expect(plan.entries.contains { $0.usr == diagnosticText.usr })
+    #expect(plan.entries.contains { $0.usr == storedValue.usr })
+    #expect(plan.entries.contains { $0.usr == wrappedNumber.usr })
+    #expect(!plan.entries.contains { $0.usr == localValue.usr })
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: sourceURL, encoding: .utf8)
+    let serverNameEntry = try #require(plan.entries.first { $0.usr == serverName.usr })
+    let retryCountEntry = try #require(plan.entries.first { $0.usr == retryCount.usr })
+    #expect(patched.contains("case \(serverNameEntry.newName) = \"serverName\""))
+    #expect(patched.contains("case \(retryCountEntry.newName) = \"retryCount\""))
+    #expect(!patched.contains("case diagnosticText"))
+    #expect(patched.contains("externalLabel: 4"))
+    #expect(patched.contains("externalLabel localValue"))
+    let wrappedNumberEntry = try #require(plan.entries.first { $0.usr == wrappedNumber.usr })
+    #expect(patched.contains("$\(wrappedNumberEntry.newName)"))
+    #expect(!patched.contains("$wrappedNumber"))
+
+    let executable = directory.appendingPathComponent("StoredPropertySafety")
+    let runner = CommandRunner(logDirectory: directory.appendingPathComponent("logs", isDirectory: true))
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", sourceURL.path, "-o", executable.path]
+    )
+    _ = try runner.run(executable: executable.path, arguments: [])
+}
+
+@Test func renamePlannerDeniesSerializedPropertiesWithExistingCustomCodingKeys() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("CustomCodingKeys.swift")
+    let lines = [
+        "struct Schema: Codable {",
+        "    let value: Int",
+        "    enum CodingKeys: String, CodingKey { case value = \"wire_value\" }",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func occurrence(
+        _ symbol: SymbolRecord,
+        line: Int,
+        token: String,
+        roles: [String],
+        relations: [RelationRecord] = []
+    ) -> OccurrenceRecord {
+        OccurrenceRecord(
+            symbol: symbol,
+            path: file.path,
+            line: line,
+            utf8Column: utf8Column(of: token, in: lines[line - 1]),
+            moduleName: "CustomCodingKeys",
+            isSystem: false,
+            rolesRaw: 0,
+            roles: roles,
+            rolesDescription: roles.joined(separator: ","),
+            symbolProvider: "swift",
+            relations: relations
+        )
+    }
+    func childOf(_ symbol: SymbolRecord) -> RelationRecord {
+        RelationRecord(usr: symbol.usr, name: symbol.name, rolesRaw: 0, roles: ["childOf"])
+    }
+    func baseOf(_ symbol: SymbolRecord) -> RelationRecord {
+        RelationRecord(usr: symbol.usr, name: symbol.name, rolesRaw: 0, roles: ["baseOf"])
+    }
+
+    let owner = symbol("s:custom-schema", "Schema", "struct")
+    let property = symbol("s:custom-schema-value", "value", "instanceProperty")
+    let getter = symbol("s:custom-schema-value-getter", "getter:value", "instanceMethod")
+    let codingKeys = symbol("s:custom-schema-coding-keys", "CodingKeys", "enum")
+    let decodable = symbol("s:Se", "Decodable", "protocol")
+    let encodable = symbol("s:SE", "Encodable", "protocol")
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [owner, property, getter, codingKeys, decodable, encodable],
+        occurrences: [
+            occurrence(owner, line: 1, token: "Schema", roles: ["definition", "canonical"]),
+            occurrence(
+                property,
+                line: 2,
+                token: "value",
+                roles: ["definition", "childOf", "canonical"],
+                relations: [childOf(owner)]
+            ),
+            occurrence(
+                getter,
+                line: 2,
+                token: "value",
+                roles: ["definition", "implicit", "childOf", "accessorOf", "canonical"],
+                relations: [RelationRecord(
+                    usr: property.usr,
+                    name: property.name,
+                    rolesRaw: 0,
+                    roles: ["childOf", "accessorOf"]
+                )]
+            ),
+            occurrence(
+                codingKeys,
+                line: 3,
+                token: "CodingKeys",
+                roles: ["definition", "childOf", "canonical"],
+                relations: [childOf(owner)]
+            ),
+            occurrence(
+                decodable,
+                line: 1,
+                token: "Codable",
+                roles: ["reference", "implicit", "baseOf"],
+                relations: [baseOf(owner)]
+            ),
+            occurrence(
+                encodable,
+                line: 1,
+                token: "Codable",
+                roles: ["reference", "implicit", "baseOf"],
+                relations: [baseOf(owner)]
+            )
+        ]
+    )
+    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+    #expect(facts.explicitCodingKeysOwnerUSRs == [owner.usr])
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    #expect(plan.supportReplacements.isEmpty)
+    #expect(!plan.entries.contains { $0.usr == property.usr })
+    #expect(plan.denied.contains { decision in
+        decision.usr == property.usr
+            && decision.reasons.contains("serialized stored property requires explicit key preservation")
+    })
+}
+
+@Test func renamePlannerDeniesSerializedPropertiesWithCustomCodableImplementation() throws {
+    let repositoryRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let fixture = repositoryRoot
+        .appendingPathComponent("Fixtures/ManualCodableSafety/main.swift")
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let sourceURL = directory.appendingPathComponent("main.swift")
+    try FileManager.default.copyItem(at: fixture, to: sourceURL)
+    let sourceText = try String(contentsOf: sourceURL, encoding: .utf8)
+    let lines = sourceText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let cache = try SourceFileCache(paths: [sourceURL.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func relation(_ target: SymbolRecord, _ roles: [String]) -> RelationRecord {
+        RelationRecord(
+            usr: target.usr,
+            name: target.name,
+            rolesRaw: 0,
+            roles: roles
+        )
+    }
+    func occurrence(
+        _ symbol: SymbolRecord,
+        line: Int,
+        token: String,
+        roles: [String],
+        relations: [RelationRecord] = []
+    ) -> OccurrenceRecord {
+        OccurrenceRecord(
+            symbol: symbol,
+            path: sourceURL.path,
+            line: line,
+            utf8Column: utf8Column(of: token, in: lines[line - 1]),
+            moduleName: "ManualCodableSafety",
+            isSystem: false,
+            rolesRaw: 0,
+            roles: roles,
+            rolesDescription: roles.joined(separator: ","),
+            symbolProvider: "swift",
+            relations: relations
+        )
+    }
+
+    let owner = symbol("s:manual-payload", "ManualPayload", "struct")
+    let property = symbol("s:manual-payload-value", "value", "instanceProperty")
+    let getter = symbol("s:manual-payload-value-getter", "getter:value", "instanceMethod")
+    let customDecoder = symbol("s:manual-payload-decoder", "init(from:)", "constructor")
+    let decodingRequirement = symbol("s:Se4fromxs7Decoder_p_tKcfc", "init(from:)", "constructor")
+    let decodable = symbol("s:Se", "Decodable", "protocol")
+    let encodable = symbol("s:SE", "Encodable", "protocol")
+    let snapshot = IndexSnapshot(
+        sourceFiles: [sourceURL.path],
+        symbols: [owner, property, getter, customDecoder, decodingRequirement, decodable, encodable],
+        occurrences: [
+            occurrence(owner, line: 3, token: "ManualPayload", roles: ["definition", "canonical"]),
+            occurrence(owner, line: 12, token: "ManualPayload", roles: ["reference"]),
+            occurrence(
+                property,
+                line: 4,
+                token: "value",
+                roles: ["definition", "childOf", "canonical"],
+                relations: [relation(owner, ["childOf"])]
+            ),
+            occurrence(
+                property,
+                line: 8,
+                token: "value",
+                roles: ["reference", "write"]
+            ),
+            occurrence(
+                property,
+                line: 13,
+                token: "value",
+                roles: ["reference", "read"]
+            ),
+            occurrence(
+                getter,
+                line: 4,
+                token: "value",
+                roles: ["definition", "implicit", "childOf", "accessorOf", "canonical"],
+                relations: [relation(property, ["childOf", "accessorOf"])]
+            ),
+            occurrence(
+                customDecoder,
+                line: 6,
+                token: "init",
+                roles: ["definition", "childOf", "overrideOf", "canonical"],
+                relations: [
+                    relation(decodingRequirement, ["overrideOf"]),
+                    relation(owner, ["childOf"])
+                ]
+            ),
+            occurrence(
+                decodable,
+                line: 3,
+                token: "Codable",
+                roles: ["reference", "implicit", "baseOf"],
+                relations: [relation(owner, ["baseOf"])]
+            ),
+            occurrence(
+                encodable,
+                line: 3,
+                token: "Codable",
+                roles: ["reference", "implicit", "baseOf"],
+                relations: [relation(owner, ["baseOf"])]
+            )
+        ]
+    )
+    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+    #expect(facts.customSerializationImplementationOwnerUSRs == [owner.usr])
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    #expect(plan.supportReplacements.isEmpty)
+    #expect(!plan.entries.contains { $0.usr == property.usr })
+    #expect(plan.denied.contains { decision in
+        decision.usr == property.usr
+            && decision.reasons.contains("serialized stored property requires explicit key preservation")
+    })
+
+    try SourcePatcher().apply(plan.replacements)
+    let executable = directory.appendingPathComponent("ManualCodableSafety")
+    let runner = CommandRunner(logDirectory: directory.appendingPathComponent("logs", isDirectory: true))
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", sourceURL.path, "-o", executable.path]
+    )
+    _ = try runner.run(executable: executable.path, arguments: [])
 }
 
 @Test func safetyAnalyzerAllowsTypeStoredPropertiesWithoutMemberwiseInitializerSupport() throws {
@@ -1918,8 +2443,8 @@ import Testing
         ownerName: "Settings",
         line: 1
     )
-    #expect(structInstanceProperty.allowed == false)
-    #expect(structInstanceProperty.reasons.contains("stored property declarations require memberwise initializer label support"))
+    #expect(structInstanceProperty.allowed)
+    #expect(!structInstanceProperty.reasons.contains { $0.contains("memberwise initializer") })
 
     let classTypeProperty = decision(
         usr: "usr-shared",

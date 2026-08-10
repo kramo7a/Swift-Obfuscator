@@ -12,10 +12,41 @@ public struct RenamePlan: Codable, Sendable {
     public let entries: [RenamePlanEntry]
     public let denied: [SafetyDecision]
     public let conflicts: [String]
+    public let supportReplacements: [SourceReplacement]
+
+    public init(
+        entries: [RenamePlanEntry],
+        denied: [SafetyDecision],
+        conflicts: [String],
+        supportReplacements: [SourceReplacement] = []
+    ) {
+        self.entries = entries
+        self.denied = denied
+        self.conflicts = conflicts
+        self.supportReplacements = supportReplacements
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case entries
+        case denied
+        case conflicts
+        case supportReplacements
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        entries = try container.decode([RenamePlanEntry].self, forKey: .entries)
+        denied = try container.decode([SafetyDecision].self, forKey: .denied)
+        conflicts = try container.decode([String].self, forKey: .conflicts)
+        supportReplacements = try container.decodeIfPresent(
+            [SourceReplacement].self,
+            forKey: .supportReplacements
+        ) ?? []
+    }
 
     public var replacements: [SourceReplacement] {
         var seen: Set<String> = []
-        return entries.flatMap(\.replacements)
+        return (entries.flatMap(\.replacements) + supportReplacements)
             .sorted { lhs, rhs in
                 (lhs.path, lhs.byteOffset, lhs.usr) < (rhs.path, rhs.byteOffset, rhs.usr)
             }
@@ -54,6 +85,21 @@ public struct RenamePlanner {
             snapshot: snapshot,
             obfuscationRoots: analyzer.obfuscationRoots
         )
+        let codingKeyComponents = Self.codingKeyPreservationComponents(
+            indexedFacts: indexedFacts,
+            groupsByUSR: groupsByUSR,
+            sourceCache: sourceCache,
+            obfuscationRoots: analyzer.obfuscationRoots
+        )
+        let serializationKeyPreservedUSRs = Set(
+            codingKeyComponents.flatMap(\.propertyUSRs)
+        )
+        let propertyWrapperComponents = Self.propertyWrapperRenameComponents(
+            indexedFacts: indexedFacts,
+            groupsByUSR: groupsByUSR,
+            sourceCache: sourceCache
+        )
+        let propertyWrapperSupportedUSRs = Set(propertyWrapperComponents.map(\.propertyUSR))
         let tupleTypealiasRelatedUSRs = Self.tupleTypealiasRelatedUSRs(
             snapshot: snapshot,
             sourceCache: sourceCache
@@ -89,7 +135,9 @@ public struct RenamePlanner {
                         coordinatedRelatedUSRs: coordinationEnabled ? component.memberUSRs : [],
                         coordinatedProtocolRequirementUSRs: coordinationEnabled
                             ? component.protocolRequirementUSRs
-                            : []
+                            : [],
+                        serializationKeyPreservedUSRs: serializationKeyPreservedUSRs,
+                        propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs
                     )
                 }
 
@@ -235,7 +283,9 @@ public struct RenamePlanner {
                 sourceCache: sourceCache,
                 indexedFacts: indexedFacts,
                 overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
-                tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs
+                tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs,
+                serializationKeyPreservedUSRs: serializationKeyPreservedUSRs,
+                propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs
             )
             guard decision.allowed, let oldName = decision.oldName else {
                 denied.append(decision)
@@ -349,11 +399,293 @@ public struct RenamePlanner {
             }
         }
 
+        let supportReplacements = Self.codingKeySupportReplacements(
+            components: codingKeyComponents,
+            entries: entries,
+            indexedFacts: indexedFacts,
+            sourceCache: sourceCache
+        ) + Self.propertyWrapperSupportReplacements(
+            components: propertyWrapperComponents,
+            entries: entries
+        )
+
         return RenamePlan(
             entries: entries.sorted { ($0.oldName, $0.usr) < ($1.oldName, $1.usr) },
             denied: denied.sorted { ($0.symbolName, $0.usr) < ($1.symbolName, $1.usr) },
-            conflicts: conflicts
+            conflicts: conflicts,
+            supportReplacements: supportReplacements
         )
+    }
+
+    private struct PropertyWrapperReplacementTemplate: Hashable {
+        let path: String
+        let byteOffset: Int
+        let length: Int
+        let line: Int
+        let utf8Column: Int
+        let oldName: String
+        let derivedPrefix: String
+        let derivedUSR: String
+    }
+
+    private struct PropertyWrapperRenameComponent {
+        let propertyUSR: String
+        let replacements: Set<PropertyWrapperReplacementTemplate>
+    }
+
+    private static func propertyWrapperRenameComponents(
+        indexedFacts: IndexedSemanticFacts,
+        groupsByUSR: [String: USROccurrenceGroup],
+        sourceCache: SourceFileCache
+    ) -> [PropertyWrapperRenameComponent] {
+        var components: [PropertyWrapperRenameComponent] = []
+        for propertyUSR in indexedFacts.propertyWrapperDerivedUSRsByPropertyUSR.keys.sorted() {
+            guard let propertyGroup = groupsByUSR[propertyUSR] else {
+                continue
+            }
+            let propertyName = propertyGroup.symbol.name
+            let derivedUSRs = indexedFacts.propertyWrapperDerivedUSRsByPropertyUSR[propertyUSR] ?? []
+            var templates: Set<PropertyWrapperReplacementTemplate> = []
+            var failed = false
+
+            for derivedUSR in derivedUSRs.sorted() {
+                guard let derivedGroup = groupsByUSR[derivedUSR],
+                      derivedGroup.symbol.name.hasSuffix(propertyName) else {
+                    failed = true
+                    break
+                }
+                let prefix = String(derivedGroup.symbol.name.dropLast(propertyName.count))
+                guard !prefix.isEmpty,
+                      prefix.allSatisfy({ $0 == "$" || $0 == "_" }) else {
+                    failed = true
+                    break
+                }
+
+                for occurrence in derivedGroup.occurrences where !occurrence.roles.contains("implicit") {
+                    guard let source = sourceCache.file(for: occurrence.path),
+                          let byteOffset = source.byteOffset(
+                            line: occurrence.line,
+                            utf8Column: occurrence.utf8Column
+                          ) else {
+                        failed = true
+                        break
+                    }
+                    let oldName = prefix + propertyName
+                    let byteRange = byteOffset..<(byteOffset + oldName.utf8.count)
+                    guard source.text(in: byteRange) == oldName else {
+                        failed = true
+                        break
+                    }
+                    templates.insert(PropertyWrapperReplacementTemplate(
+                        path: source.path,
+                        byteOffset: byteOffset,
+                        length: oldName.utf8.count,
+                        line: occurrence.line,
+                        utf8Column: occurrence.utf8Column,
+                        oldName: oldName,
+                        derivedPrefix: prefix,
+                        derivedUSR: derivedUSR
+                    ))
+                }
+                if failed {
+                    break
+                }
+            }
+
+            if !failed {
+                components.append(PropertyWrapperRenameComponent(
+                    propertyUSR: propertyUSR,
+                    replacements: templates
+                ))
+            }
+        }
+        return components.sorted { $0.propertyUSR < $1.propertyUSR }
+    }
+
+    private static func propertyWrapperSupportReplacements(
+        components: [PropertyWrapperRenameComponent],
+        entries: [RenamePlanEntry]
+    ) -> [SourceReplacement] {
+        let entriesByUSR = Dictionary(uniqueKeysWithValues: entries.map { ($0.usr, $0) })
+        var replacements: Set<SourceReplacement> = []
+        for component in components {
+            guard let entry = entriesByUSR[component.propertyUSR] else {
+                continue
+            }
+            for template in component.replacements {
+                replacements.insert(SourceReplacement(
+                    path: template.path,
+                    byteOffset: template.byteOffset,
+                    length: template.length,
+                    line: template.line,
+                    utf8Column: template.utf8Column,
+                    oldName: template.oldName,
+                    newName: template.derivedPrefix + entry.newName,
+                    usr: template.derivedUSR
+                ))
+            }
+        }
+        return replacements.sorted { lhs, rhs in
+            (lhs.path, lhs.byteOffset, lhs.usr) < (rhs.path, rhs.byteOffset, rhs.usr)
+        }
+    }
+
+    private struct CodingKeyPreservationComponent {
+        let ownerUSR: String
+        let propertyUSRs: [String]
+        let qualifiedOwnerUSRs: [String]
+        let path: String
+        let declarationLine: Int
+    }
+
+    private static func codingKeyPreservationComponents(
+        indexedFacts: IndexedSemanticFacts,
+        groupsByUSR: [String: USROccurrenceGroup],
+        sourceCache: SourceFileCache,
+        obfuscationRoots: [URL]
+    ) -> [CodingKeyPreservationComponent] {
+        var components: [CodingKeyPreservationComponent] = []
+        for ownerUSR in indexedFacts.serializationSensitiveOwnerUSRs.sorted() {
+            guard indexedFacts.symbolsByUSR[ownerUSR]?.kind == "struct",
+                  !indexedFacts.explicitCodingKeysOwnerUSRs.contains(ownerUSR),
+                  !indexedFacts.customSerializationImplementationOwnerUSRs.contains(ownerUSR),
+                  let qualifiedOwnerUSRs = indexedFacts.qualifiedNominalOwnerUSRs(for: ownerUSR),
+                  qualifiedOwnerUSRs.allSatisfy({ usr in
+                    indexedFacts.symbolsByUSR[usr].flatMap { escapedSwiftIdentifier($0.name) } != nil
+                  }),
+                  let ownerGroup = groupsByUSR[ownerUSR] else {
+                continue
+            }
+
+            let propertyUSRs = indexedFacts.directStoredPropertyUSRs(of: ownerUSR).sorted()
+            guard !propertyUSRs.isEmpty,
+                  propertyUSRs.allSatisfy({ usr in
+                    groupsByUSR[usr] != nil
+                        && indexedFacts.symbolsByUSR[usr].flatMap { escapedSwiftIdentifier($0.name) } != nil
+                  }) else {
+                continue
+            }
+
+            let ownerDeclarations = Dictionary(grouping: ownerGroup.occurrences.filter { occurrence in
+                (occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"))
+                    && !occurrence.roles.contains("implicit")
+                    && isPath(occurrence.path, under: obfuscationRoots)
+                    && sourceCache.file(for: occurrence.path) != nil
+            }) { occurrence in
+                "\(SourcePathNormalizer.canonicalPath(occurrence.path)):\(occurrence.line):\(occurrence.utf8Column)"
+            }.values.compactMap(\.first)
+            guard ownerDeclarations.count == 1,
+                  let ownerDeclaration = ownerDeclarations.first else {
+                continue
+            }
+
+            components.append(CodingKeyPreservationComponent(
+                ownerUSR: ownerUSR,
+                propertyUSRs: propertyUSRs,
+                qualifiedOwnerUSRs: qualifiedOwnerUSRs,
+                path: SourcePathNormalizer.canonicalPath(ownerDeclaration.path),
+                declarationLine: ownerDeclaration.line
+            ))
+        }
+        return components.sorted { lhs, rhs in
+            (lhs.path, lhs.declarationLine, lhs.ownerUSR) < (rhs.path, rhs.declarationLine, rhs.ownerUSR)
+        }
+    }
+
+    private static func codingKeySupportReplacements(
+        components: [CodingKeyPreservationComponent],
+        entries: [RenamePlanEntry],
+        indexedFacts: IndexedSemanticFacts,
+        sourceCache: SourceFileCache
+    ) -> [SourceReplacement] {
+        let entriesByUSR = Dictionary(uniqueKeysWithValues: entries.map { ($0.usr, $0) })
+        var chunksByPath: [String: [(ownerUSR: String, line: Int, text: String)]] = [:]
+
+        for component in components {
+            guard !component.propertyUSRs.allSatisfy({ entriesByUSR[$0] == nil }) else {
+                continue
+            }
+
+            let qualifiedOwnerNames = component.qualifiedOwnerUSRs.compactMap { usr -> String? in
+                guard let originalName = indexedFacts.symbolsByUSR[usr]?.name else {
+                    return nil
+                }
+                return escapedSwiftIdentifier(entriesByUSR[usr]?.newName ?? originalName)
+            }
+            guard qualifiedOwnerNames.count == component.qualifiedOwnerUSRs.count else {
+                continue
+            }
+
+            let cases = component.propertyUSRs.compactMap { usr -> (String, String)? in
+                guard let originalName = indexedFacts.symbolsByUSR[usr]?.name,
+                      let caseName = escapedSwiftIdentifier(entriesByUSR[usr]?.newName ?? originalName) else {
+                    return nil
+                }
+                return (originalName, "        case \(caseName) = \"\(originalName)\"")
+            }.sorted { lhs, rhs in
+                (lhs.0, lhs.1) < (rhs.0, rhs.1)
+            }
+            guard cases.count == component.propertyUSRs.count else {
+                continue
+            }
+
+            let text = [
+                "extension \(qualifiedOwnerNames.joined(separator: ".")) {",
+                "    private enum CodingKeys: String, CodingKey {",
+                cases.map(\.1).joined(separator: "\n"),
+                "    }",
+                "}"
+            ].joined(separator: "\n")
+            chunksByPath[component.path, default: []].append((
+                ownerUSR: component.ownerUSR,
+                line: component.declarationLine,
+                text: text
+            ))
+        }
+
+        return chunksByPath.compactMap { path, chunks -> SourceReplacement? in
+            guard let source = sourceCache.file(for: path),
+                  let first = chunks.sorted(by: {
+                    ($0.line, $0.ownerUSR) < ($1.line, $1.ownerUSR)
+                  }).first else {
+                return nil
+            }
+            let sortedChunks = chunks.sorted {
+                ($0.line, $0.ownerUSR) < ($1.line, $1.ownerUSR)
+            }
+            let separator = source.data.last == UInt8(ascii: "\n") ? "\n" : "\n\n"
+            let insertion = separator + sortedChunks.map(\.text).joined(separator: "\n\n") + "\n"
+            return SourceReplacement(
+                path: path,
+                byteOffset: source.data.count,
+                length: 0,
+                line: first.line,
+                utf8Column: 1,
+                oldName: "",
+                newName: insertion,
+                usr: "coding-keys:\(first.ownerUSR)"
+            )
+        }.sorted { lhs, rhs in
+            (lhs.path, lhs.byteOffset, lhs.usr) < (rhs.path, rhs.byteOffset, rhs.usr)
+        }
+    }
+
+    private static func escapedSwiftIdentifier(_ name: String) -> String? {
+        guard !name.isEmpty,
+              !name.contains("`"),
+              !name.contains("\n"),
+              !name.contains("\r") else {
+            return nil
+        }
+        return isPlainSwiftIdentifier(name) ? name : "`\(name)`"
+    }
+
+    private static func isPath(_ path: String, under roots: [URL]) -> Bool {
+        let canonicalPath = SourcePathNormalizer.canonicalPath(path)
+        return roots.contains { root in
+            let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+            return canonicalPath == rootPath || canonicalPath.hasPrefix(rootPath + "/")
+        }
     }
 
     private enum CoordinatedRenameComponentKind {

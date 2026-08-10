@@ -10,6 +10,8 @@ public enum CoverageDenialCategory: String, Codable, CaseIterable, Sendable {
     case noLocalDeclaration
     case externalLanguageContract
     case storedProperty
+    case serializationKeyContract
+    case propertyWrapperContract
     case protocolRequirementWitness
     case overrideBaseComponent
     case nonPlainIdentifier
@@ -419,6 +421,12 @@ public enum CoverageAnalyzer {
             if reason.contains("stored property declarations require memberwise initializer label support") {
                 categories.insert(.storedProperty)
             }
+            if reason.contains("serialized stored property requires explicit key preservation") {
+                categories.insert(.serializationKeyContract)
+            }
+            if reason.contains("property-wrapper derived names require coordinated renaming") {
+                categories.insert(.propertyWrapperContract)
+            }
             if reason.contains("protocol members require relation-aware witness renaming") {
                 categories.insert(.protocolRequirementWitness)
             }
@@ -531,6 +539,8 @@ public enum CoverageAnalyzer {
             .syntheticAccessor,
             .parameter,
             .storedProperty,
+            .serializationKeyContract,
+            .propertyWrapperContract,
             .protocolRequirementWitness,
             .overrideBaseComponent,
             .ambiguousSourceTokens,

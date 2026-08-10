@@ -52,7 +52,9 @@ public struct SafetyAnalyzer: Sendable {
         overrideRelatedUSRs: Set<String> = [],
         tupleTypealiasRelatedUSRs: Set<String> = [],
         coordinatedRelatedUSRs: Set<String> = [],
-        coordinatedProtocolRequirementUSRs: Set<String> = []
+        coordinatedProtocolRequirementUSRs: Set<String> = [],
+        serializationKeyPreservedUSRs: Set<String> = [],
+        propertyWrapperSupportedUSRs: Set<String> = []
     ) -> SafetyDecision {
         var reasons: [String] = []
         var tokenNames: Set<String> = []
@@ -64,6 +66,9 @@ public struct SafetyAnalyzer: Sendable {
         }
         if group.usr.hasPrefix("c:") {
             reasons.append("Objective-C-compatible USR requires a stable runtime name")
+        }
+        if isSyntheticAccessorName(group.symbol.name) {
+            reasons.append("synthetic accessor is derived from its parent declaration")
         }
         if !allowedKinds.contains(group.symbol.kind) {
             reasons.append("unsupported symbol kind \(group.symbol.kind)")
@@ -86,6 +91,10 @@ public struct SafetyAnalyzer: Sendable {
         }
         if tupleTypealiasRelatedUSRs.contains(group.usr) {
             reasons.append("tuple typealias constructor occurrences are incomplete")
+        }
+        if indexedFacts.propertyWrapperDerivedUSRsByPropertyUSR[group.usr] != nil,
+           !propertyWrapperSupportedUSRs.contains(group.usr) {
+            reasons.append("property-wrapper derived names require coordinated renaming")
         }
 
         for occurrence in group.occurrences {
@@ -144,10 +153,11 @@ public struct SafetyAnalyzer: Sendable {
                 if group.symbol.kind == "class", interfaceBuilderClassNames.contains(token.name) {
                     reasons.append("Interface Builder resource requires stable class name \(token.name)")
                 }
-                if !coordinatedProtocolRequirementUSRs.contains(group.usr),
-                   storedPropertyRequiresMemberwiseInitializerSupport(group.symbol.kind),
-                   declarationLineLooksStoredProperty(source: source, occurrence: occurrence, token: token) {
-                    reasons.append("stored property declarations require memberwise initializer label support")
+                if indexedFacts.storedPropertyUSRs.contains(group.usr),
+                   let ownerUSR = indexedFacts.nominalOwnerUSR(of: group.usr),
+                   indexedFacts.serializationSensitiveOwnerUSRs.contains(ownerUSR),
+                   !serializationKeyPreservedUSRs.contains(group.usr) {
+                    reasons.append("serialized stored property requires explicit key preservation")
                 }
                 if declarationHasUnindexedRuntimeOrLinkageAttribute(
                     source: source,
@@ -244,25 +254,9 @@ public struct SafetyAnalyzer: Sendable {
         return names.contains(name)
     }
 
-    private func storedPropertyRequiresMemberwiseInitializerSupport(_ kind: String) -> Bool {
-        // IndexStore's property kinds already encode owner-aware dispatch:
-        // `staticProperty` and `classProperty` are type members and never form
-        // labels in a synthesized instance memberwise initializer.
-        kind == "instanceProperty"
-    }
-
-    private func declarationLineLooksStoredProperty(
-        source: SourceFile,
-        occurrence: OccurrenceRecord,
-        token: IdentifierToken
-    ) -> Bool {
-        guard let line = source.lineText(line: occurrence.line) else {
-            return true
-        }
-        guard let tokenRange = line.range(of: token.name) else {
-            return true
-        }
-        return !line[tokenRange.upperBound...].contains("{")
+    private func isSyntheticAccessorName(_ name: String) -> Bool {
+        let lowercasedName = name.lowercased()
+        return lowercasedName.hasPrefix("getter:") || lowercasedName.hasPrefix("setter:")
     }
 
     private func declarationLineLooksGenericTypeParameter(
