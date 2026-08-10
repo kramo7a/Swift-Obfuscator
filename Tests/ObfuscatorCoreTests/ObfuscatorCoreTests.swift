@@ -1255,6 +1255,187 @@ import Testing
     #expect(summary.enumCaseParametersExcludedFromParameterStage == 3)
 }
 
+@Test func parameterSyntaxFactsUseSwiftOperatorAndSubscriptLabelSemantics() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("ImplicitLabels.swift")
+    let lines = [
+        "struct Sample {",
+        "    static func + (lhs: Sample, rhs: Sample) -> Sample {",
+        "        _ = lhs",
+        "        return rhs",
+        "    }",
+        "    subscript(index: Int) -> Int {",
+        "        index",
+        "    }",
+        "    subscript(label localIndex: Int) -> Int {",
+        "        localIndex",
+        "    }",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])
+    }
+
+    let plus = symbol("usr-plus", "+(_:_:)", "staticMethod")
+    let lhs = symbol("usr-lhs", "lhs", "parameter")
+    let rhs = symbol("usr-rhs", "rhs", "parameter")
+    let defaultSubscript = symbol("usr-default-subscript", "subscript(_:)", "instanceProperty")
+    let index = symbol("usr-index", "index", "parameter")
+    let labeledSubscript = symbol(
+        "usr-labeled-subscript",
+        "subscript(label:)",
+        "instanceProperty"
+    )
+    let localIndex = symbol("usr-local-index", "localIndex", "parameter")
+    let occurrences = [
+        testOccurrence(plus, path: file.path, line: 2, token: "+", roles: ["definition"]),
+        testOccurrence(
+            lhs,
+            path: file.path,
+            line: 2,
+            token: "lhs",
+            roles: ["definition"],
+            relations: [childOf(plus)]
+        ),
+        testOccurrence(
+            rhs,
+            path: file.path,
+            line: 2,
+            token: "rhs",
+            roles: ["definition"],
+            relations: [childOf(plus)]
+        ),
+        testOccurrence(lhs, path: file.path, line: 3, token: "lhs", roles: ["reference"]),
+        testOccurrence(rhs, path: file.path, line: 4, token: "rhs", roles: ["reference"]),
+        testOccurrence(
+            defaultSubscript,
+            path: file.path,
+            line: 6,
+            token: "subscript",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            index,
+            path: file.path,
+            line: 6,
+            token: "index",
+            roles: ["definition"],
+            relations: [childOf(defaultSubscript)]
+        ),
+        testOccurrence(index, path: file.path, line: 7, token: "index", roles: ["reference"]),
+        testOccurrence(
+            labeledSubscript,
+            path: file.path,
+            line: 9,
+            token: "subscript",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            localIndex,
+            path: file.path,
+            line: 9,
+            token: "localIndex",
+            roles: ["definition"],
+            relations: [childOf(labeledSubscript)]
+        ),
+        testOccurrence(
+            localIndex,
+            path: file.path,
+            line: 10,
+            token: "localIndex",
+            roles: ["reference"]
+        )
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [plus, lhs, rhs, defaultSubscript, index, labeledSubscript, localIndex],
+        occurrences: occurrences
+    )
+
+    let facts = ParameterSyntaxFacts(
+        snapshot: snapshot,
+        sourceCache: cache,
+        obfuscationRoots: [file]
+    )
+    #expect(facts.unresolvedReasonsByUSR.isEmpty)
+    #expect(facts.localBindingOnlyCoverageCandidateUSRs == [lhs.usr, rhs.usr, index.usr])
+
+    let lhsRoles = try #require(facts.rolesByUSR[lhs.usr])
+    #expect(lhsRoles.externalLabel == .none)
+    #expect(lhsRoles.localBinding?.name == "lhs")
+    #expect(lhsRoles.syntaxOwnerToken?.name == "+")
+    #expect(lhsRoles.syntaxOwnerMatchesIndexedOwner)
+    #expect(!lhsRoles.isNestedLocalFunctionParameter)
+    let rhsRoles = try #require(facts.rolesByUSR[rhs.usr])
+    #expect(rhsRoles.externalLabel == .none)
+
+    let indexRoles = try #require(facts.rolesByUSR[index.usr])
+    #expect(indexRoles.externalLabel == .none)
+    #expect(indexRoles.localBinding?.name == "index")
+    #expect(indexRoles.syntaxOwnerMatchesIndexedOwner)
+
+    let localIndexRoles = try #require(facts.rolesByUSR[localIndex.usr])
+    if case .named(let label) = localIndexRoles.externalLabel {
+        #expect(label.name == "label")
+    } else {
+        Issue.record("Expected the explicit subscript label to remain named")
+    }
+    #expect(localIndexRoles.localBinding?.name == "localIndex")
+
+    let summary = facts.summary
+    #expect(summary.explicitParameters == 4)
+    #expect(summary.resolvedParameters == 4)
+    #expect(summary.functionParameters == 2)
+    #expect(summary.subscriptParameters == 2)
+    #expect(summary.namedExternalLabels == 1)
+    #expect(summary.omittedExternalLabels == 0)
+    #expect(summary.parametersWithoutExternalLabels == 3)
+    #expect(summary.localBindingOnlyCoverageCandidates == 3)
+    #expect(summary.parametersRequiringExternalLabelCoordination == 1)
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let lhsEntry = try #require(plan.entries.first { $0.usr == lhs.usr })
+    let rhsEntry = try #require(plan.entries.first { $0.usr == rhs.usr })
+    let indexEntry = try #require(plan.entries.first { $0.usr == index.usr })
+    #expect(Set(plan.entries.map(\.usr)) == [lhs.usr, rhs.usr, index.usr])
+    #expect(plan.denied.contains { $0.usr == localIndex.usr })
+    #expect(lhsEntry.replacements.count == 2)
+    #expect(rhsEntry.replacements.count == 2)
+    #expect(indexEntry.replacements.count == 2)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 3)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 3)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains(
+        "static func + (\(lhsEntry.newName): Sample, \(rhsEntry.newName): Sample)"
+    ))
+    #expect(patched.contains("subscript(\(indexEntry.newName): Int)"))
+    #expect(patched.contains("subscript(label localIndex: Int)"))
+}
+
 @Test func renamePlannerRenamesOnlyParametersWhoseExternalLabelIsAlreadyAbsent() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,

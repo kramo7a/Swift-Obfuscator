@@ -79,7 +79,12 @@ Never approximate these references with raw string matching. Any same-spelled
 explicit shadow binding, or implicit Swift binding such as catch `error`, setter
 `newValue`, or observer `oldValue`, must fail closed for the whole parameter
 USR. Generated parameter and other value-binding identifiers must use
-lowerCamelCase spelling.
+lowerCamelCase spelling. Apply Swift's declaration-kind label semantics before
+classifying a parameter: operator-function parameter names and the single name
+in `subscript(index:)` are local bindings with no external label, while a
+two-name `subscript(label local:)` has an explicit external label. Derive these
+roles from the compiler syntax node and its token kind, never from callable
+spelling heuristics.
 
 For external argument labels, IndexStoreDB call occurrences provide callable
 identity and the exact semantic call anchor. SwiftParser may map that anchor to

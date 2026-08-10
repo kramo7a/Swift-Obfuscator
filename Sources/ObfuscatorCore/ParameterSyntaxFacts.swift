@@ -343,29 +343,34 @@ public struct ParameterSyntaxFacts: Sendable {
                 }
             })
             let indexedOwnerUSR = ownerUSRs.count == 1 ? ownerUSRs.first : nil
-            let indexedOwnerTokens = Set(indexedOwnerUSR.flatMap { ownerUSR in
-                occurrencesByUSR[ownerUSR]?.compactMap { occurrence -> SourceTokenRange? in
+            let indexedOwnerAnchors = Set(indexedOwnerUSR.flatMap { ownerUSR in
+                occurrencesByUSR[ownerUSR]?.compactMap { occurrence -> IndexedByteAnchor? in
                     guard !occurrence.roles.contains("implicit"),
                           occurrence.roles.contains("declaration")
                             || occurrence.roles.contains("definition"),
                           Self.isPath(occurrence.path, underRootPaths: rootPaths),
                           let source = sourceCache.file(for: occurrence.path),
-                          let token = source.identifierToken(
+                          let byteOffset = source.byteOffset(
                             line: occurrence.line,
                             utf8Column: occurrence.utf8Column
                           ) else {
                         return nil
                     }
-                    return SourceTokenRange(
+                    return IndexedByteAnchor(
                         path: source.path,
-                        name: token.name,
-                        byteRange: token.byteRange,
-                        isBackticked: token.isBackticked
+                        byteOffset: byteOffset
                     )
                 }
             } ?? [])
-            let syntaxOwnerMatchesIndexedOwner = candidate.ownerToken.map {
-                indexedOwnerTokens.contains($0)
+            let syntaxOwnerMatchesIndexedOwner = candidate.ownerToken.map { token in
+                indexedOwnerAnchors.contains { anchor in
+                    guard anchor.path == token.path else {
+                        return false
+                    }
+                    return token.byteRange.contains(anchor.byteOffset)
+                        || (token.isBackticked
+                            && anchor.byteOffset + 1 == token.byteRange.lowerBound)
+                }
             } ?? false
 
             rolesByUSR[usr] = ParameterDeclarationSyntaxRoles(
@@ -467,7 +472,10 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         candidates.append(ParameterSyntaxCandidate(
             kind: owner.kind,
             indexedAnchor: indexedAnchor,
-            externalLabel: externalLabel(firstName),
+            externalLabel: owner.isOperatorFunction
+                || (owner.kind == .subscriptDeclaration && node.secondName == nil)
+                ? .none
+                : externalLabel(firstName),
             localBinding: localBinding,
             ownerToken: owner.token,
             bodyRange: owner.bodyRange
@@ -640,29 +648,45 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
     ) -> (
         kind: ParameterDeclarationSyntaxKind,
         token: SourceTokenRange,
-        bodyRange: Range<Int>?
+        bodyRange: Range<Int>?,
+        isOperatorFunction: Bool
     )? {
         var ancestor = Syntax(node).parent
         while let current = ancestor {
             if let function = current.as(FunctionDeclSyntax.self),
                let token = sourceToken(function.name) {
-                return (.function, token, syntaxRange(function.body))
+                return (
+                    .function,
+                    token,
+                    syntaxRange(function.body),
+                    isOperatorToken(function.name.tokenKind)
+                )
             }
             if let initializer = current.as(InitializerDeclSyntax.self),
                let token = sourceToken(initializer.initKeyword) {
-                return (.initializer, token, syntaxRange(initializer.body))
+                return (.initializer, token, syntaxRange(initializer.body), false)
             }
             if let subscriptDeclaration = current.as(SubscriptDeclSyntax.self),
                let token = sourceToken(subscriptDeclaration.subscriptKeyword) {
                 return (
                     .subscriptDeclaration,
                     token,
-                    syntaxRange(subscriptDeclaration.accessorBlock)
+                    syntaxRange(subscriptDeclaration.accessorBlock),
+                    false
                 )
             }
             ancestor = current.parent
         }
         return nil
+    }
+
+    private func isOperatorToken(_ kind: TokenKind) -> Bool {
+        switch kind {
+        case .binaryOperator, .prefixOperator, .postfixOperator:
+            return true
+        default:
+            return false
+        }
     }
 
     private func accessorOwner(
@@ -758,4 +782,9 @@ private struct IndexedParameterAnchor: Hashable {
     let path: String
     let byteOffset: Int
     let token: SourceTokenRange?
+}
+
+private struct IndexedByteAnchor: Hashable {
+    let path: String
+    let byteOffset: Int
 }
