@@ -51,6 +51,8 @@ public struct ParameterDeclarationSyntaxRoles: Hashable, Sendable {
     public let indexedDeclarationAnchor: SourceTokenRange
     public let externalLabel: ParameterExternalLabelSyntaxRole
     public let localBinding: SourceTokenRange?
+    public let hasDefaultValue: Bool
+    public let isVariadic: Bool
     public let localBindingReferences: [SourceTokenRange]
     public let shadowingBindingDeclarations: [SourceTokenRange]
     public let implicitShadowingBindingNames: Set<String>
@@ -95,6 +97,8 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
     public let localBindings: Int
     public let parametersWithoutLocalBindings: Int
     public let parametersWithoutSourceNames: Int
+    public let parametersWithDefaultValues: Int
+    public let variadicParameters: Int
     public let sharedLabelAndBindingTokens: Int
     public let distinctLabelAndBindingTokens: Int
     public let localBindingReferenceTokens: Int
@@ -141,6 +145,8 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
         self.parametersWithoutSourceNames = roles.count {
             $0.externalLabel == .none && $0.localBinding == nil
         }
+        self.parametersWithDefaultValues = roles.count(where: \.hasDefaultValue)
+        self.variadicParameters = roles.count(where: \.isVariadic)
         self.sharedLabelAndBindingTokens = roles.count(where: \.sharesLabelAndBindingToken)
         self.distinctLabelAndBindingTokens = roles.count {
             $0.externalLabel.token != nil
@@ -379,6 +385,8 @@ public struct ParameterSyntaxFacts: Sendable {
                 indexedDeclarationAnchor: declarationAnchor.token ?? candidate.indexedAnchor,
                 externalLabel: candidate.externalLabel,
                 localBinding: candidate.localBinding,
+                hasDefaultValue: candidate.hasDefaultValue,
+                isVariadic: candidate.isVariadic,
                 localBindingReferences: candidate.localBindingReferences,
                 shadowingBindingDeclarations: candidate.shadowingBindingDeclarations,
                 implicitShadowingBindingNames: candidate.implicitShadowingBindingNames,
@@ -435,6 +443,8 @@ private struct ParameterSyntaxCandidate {
     let indexedAnchor: SourceTokenRange
     let externalLabel: ParameterExternalLabelSyntaxRole
     let localBinding: SourceTokenRange?
+    let hasDefaultValue: Bool
+    let isVariadic: Bool
     let ownerToken: SourceTokenRange?
     let bodyRange: Range<Int>?
     var localBindingReferences: [SourceTokenRange] = []
@@ -477,6 +487,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                 ? .none
                 : externalLabel(firstName),
             localBinding: localBinding,
+            hasDefaultValue: node.defaultValue != nil,
+            isVariadic: node.ellipsis != nil,
             ownerToken: owner.token,
             bodyRange: owner.bodyRange
         ))
@@ -494,6 +506,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                 indexedAnchor: indexedAnchor,
                 externalLabel: .none,
                 localBinding: nil,
+                hasDefaultValue: node.defaultValue != nil,
+                isVariadic: false,
                 ownerToken: ownerToken(of: node, as: EnumCaseElementSyntax.self, token: \.name),
                 bodyRange: nil
             ))
@@ -512,6 +526,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             indexedAnchor: indexedAnchor,
             externalLabel: externalLabel(firstName),
             localBinding: localBinding,
+            hasDefaultValue: node.defaultValue != nil,
+            isVariadic: false,
             ownerToken: ownerToken(of: node, as: EnumCaseElementSyntax.self, token: \.name),
             bodyRange: nil
         ))
@@ -529,6 +545,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             indexedAnchor: indexedAnchor,
             externalLabel: .none,
             localBinding: indexedAnchor,
+            hasDefaultValue: false,
+            isVariadic: false,
             ownerToken: owner?.token,
             bodyRange: owner?.bodyRange
         ))
@@ -549,6 +567,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             indexedAnchor: indexedAnchor,
             externalLabel: .none,
             localBinding: localBinding,
+            hasDefaultValue: false,
+            isVariadic: node.ellipsis != nil,
             ownerToken: owner?.token,
             bodyRange: owner?.bodyRange
         ))

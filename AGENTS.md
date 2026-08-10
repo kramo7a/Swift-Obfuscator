@@ -84,7 +84,10 @@ classifying a parameter: operator-function parameter names and the single name
 in `subscript(index:)` are local bindings with no external label, while a
 two-name `subscript(label local:)` has an explicit external label. Derive these
 roles from the compiler syntax node and its token kind, never from callable
-spelling heuristics.
+spelling heuristics. Likewise, default-argument and variadic traits must come
+from the matched `FunctionParameterSyntax.defaultValue` and `.ellipsis` nodes;
+they are inputs to argument-to-ordinal matching, not facts inferred from
+callable names or call-site arity.
 
 For external argument labels, IndexStoreDB call occurrences provide callable
 identity and the exact semantic call anchor. SwiftParser may map that anchor to

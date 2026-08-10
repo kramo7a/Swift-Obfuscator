@@ -1195,6 +1195,8 @@ import Testing
     } else {
         Issue.record("Expected a named nested-function label")
     }
+    #expect(innerRoles.hasDefaultValue)
+    #expect(!innerRoles.isVariadic)
 
     let accessorRoles = try #require(facts.rolesByUSR[nextValue.usr])
     #expect(accessorRoles.kind == .accessor)
@@ -1245,6 +1247,8 @@ import Testing
     #expect(summary.localBindings == 7)
     #expect(summary.parametersWithoutLocalBindings == 2)
     #expect(summary.parametersWithoutSourceNames == 1)
+    #expect(summary.parametersWithDefaultValues == 1)
+    #expect(summary.variadicParameters == 0)
     #expect(summary.sharedLabelAndBindingTokens == 0)
     #expect(summary.distinctLabelAndBindingTokens == 5)
     #expect(summary.localBindingReferenceTokens == 6)
@@ -1253,6 +1257,116 @@ import Testing
     #expect(summary.parametersRequiringExternalLabelCoordination == 3)
     #expect(summary.nonEnumParametersWithoutLocalBindings == 0)
     #expect(summary.enumCaseParametersExcludedFromParameterStage == 3)
+}
+
+@Test func parameterSyntaxFactsRecordDefaultAndVariadicTraits() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("ParameterTraits.swift")
+    let lines = [
+        "func configure(_ values: Int..., retries: Int = 3) {",
+        "    _ = values",
+        "    _ = retries",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    let owner = symbol("usr-configure", "configure(_:retries:)", "function")
+    let values = symbol("usr-values", "values", "parameter")
+    let retries = symbol("usr-retries", "retries", "parameter")
+    let childOfOwner = RelationRecord(
+        usr: owner.usr,
+        name: owner.name,
+        rolesRaw: 0,
+        roles: ["childOf"]
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [owner, values, retries],
+        occurrences: [
+            testOccurrence(
+                owner,
+                path: file.path,
+                line: 1,
+                token: "configure",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                values,
+                path: file.path,
+                line: 1,
+                token: "values",
+                roles: ["definition"],
+                relations: [childOfOwner]
+            ),
+            testOccurrence(
+                values,
+                path: file.path,
+                line: 2,
+                token: "values",
+                roles: ["reference"]
+            ),
+            testOccurrence(
+                retries,
+                path: file.path,
+                line: 1,
+                token: "retries",
+                roles: ["definition"],
+                relations: [childOfOwner]
+            ),
+            testOccurrence(
+                retries,
+                path: file.path,
+                line: 3,
+                token: "retries",
+                roles: ["reference"]
+            )
+        ]
+    )
+
+    let facts = ParameterSyntaxFacts(
+        snapshot: snapshot,
+        sourceCache: cache,
+        obfuscationRoots: [file]
+    )
+    let valuesRoles = try #require(facts.rolesByUSR[values.usr])
+    #expect(!valuesRoles.hasDefaultValue)
+    #expect(valuesRoles.isVariadic)
+    if case .omitted(let label) = valuesRoles.externalLabel {
+        #expect(label.name == "_")
+    } else {
+        Issue.record("Expected an explicitly omitted variadic label")
+    }
+
+    let retriesRoles = try #require(facts.rolesByUSR[retries.usr])
+    #expect(retriesRoles.hasDefaultValue)
+    #expect(!retriesRoles.isVariadic)
+    if case .named(let label) = retriesRoles.externalLabel {
+        #expect(label.name == "retries")
+    } else {
+        Issue.record("Expected a named defaulted label")
+    }
+
+    #expect(facts.summary.parametersWithDefaultValues == 1)
+    #expect(facts.summary.variadicParameters == 1)
 }
 
 @Test func parameterSyntaxFactsUseSwiftOperatorAndSubscriptLabelSemantics() throws {
