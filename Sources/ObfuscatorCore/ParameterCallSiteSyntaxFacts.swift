@@ -422,6 +422,14 @@ private final class ParameterCallSyntaxVisitor: SyntaxVisitor {
                 isBackticked: identifier.isBackticked
             )
         }
-        return nil
+        let rawEnd = token.endPositionBeforeTrailingTrivia.utf8Offset
+        guard rawStart < rawEnd, rawEnd <= source.data.count else {
+            return nil
+        }
+        return SourceTokenRange(
+            path: source.path,
+            name: String(decoding: source.data[rawStart..<rawEnd], as: UTF8.self),
+            byteRange: rawStart..<rawEnd
+        )
     }
 }

@@ -1520,6 +1520,7 @@ import Testing
         "    _ = box[index: 0]",
         "    box.perform(value: 4) {} failure: {}",
         "    @Wrapper(value: 5) var wrapped = 0",
+        "    box.show(сallSettingsSource: 6)",
         "}"
     ]
     try (lines.joined(separator: "\n") + "\n").write(
@@ -1607,6 +1608,12 @@ import Testing
             callToken: "Wrapper"
         ),
         component(
+            usr: "usr-unicode-label",
+            labels: ["сallSettingsSource"],
+            callLine: 12,
+            callToken: "show"
+        ),
+        component(
             usr: "usr-bad-anchor",
             labels: ["value"],
             callLine: 7,
@@ -1621,22 +1628,22 @@ import Testing
 
     let facts = ParameterCallSiteSyntaxFacts(components: components, sourceCache: cache)
     let summary = facts.summary
-    #expect(summary.componentsWithNamedExternalLabels == 8)
-    #expect(summary.namedExternalLabelParameters == 12)
-    #expect(summary.indexedCallAnchors == 7)
-    #expect(summary.resolvedCallAnchors == 6)
+    #expect(summary.componentsWithNamedExternalLabels == 9)
+    #expect(summary.namedExternalLabelParameters == 13)
+    #expect(summary.indexedCallAnchors == 8)
+    #expect(summary.resolvedCallAnchors == 7)
     #expect(summary.unresolvedCallAnchors == 1)
-    #expect(summary.resolvedFunctionCalls == 4)
+    #expect(summary.resolvedFunctionCalls == 5)
     #expect(summary.resolvedSubscriptCalls == 1)
     #expect(summary.resolvedAttributeCalls == 1)
-    #expect(summary.parenthesizedArguments == 6)
-    #expect(summary.namedParenthesizedArgumentTokens == 6)
+    #expect(summary.parenthesizedArguments == 7)
+    #expect(summary.namedParenthesizedArgumentTokens == 7)
     #expect(summary.unlabeledParenthesizedArguments == 0)
     #expect(summary.firstTrailingClosures == 2)
     #expect(summary.additionalTrailingClosureLabelTokens == 1)
     #expect(summary.callsWithoutExplicitArgumentDelimiters == 0)
-    #expect(summary.componentsWithAllIndexedCallsResolved == 6)
-    #expect(summary.namedParametersInComponentsWithAllIndexedCallsResolved == 10)
+    #expect(summary.componentsWithAllIndexedCallsResolved == 7)
+    #expect(summary.namedParametersInComponentsWithAllIndexedCallsResolved == 11)
     #expect(summary.componentsWithoutIndexedCalls == 1)
     #expect(summary.namedParametersInComponentsWithoutIndexedCalls == 1)
     #expect(summary.componentsWithNonCallReferences == 1)
@@ -1667,7 +1674,7 @@ import Testing
             }
         }
     })
-    #expect(labelNames == ["failure", "first", "index", "value"])
+    #expect(labelNames == ["failure", "first", "index", "value", "сallSettingsSource"])
 }
 
 @Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {

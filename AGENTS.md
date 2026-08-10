@@ -87,7 +87,9 @@ function, subscript, or user-defined attribute syntax and expose label byte
 ranges, but it must never infer a call
 target from source spelling, overload order, or a text search. Unmatched or
 multiply matched anchors fail closed and remain individually reproducible in
-the machine-readable report.
+the machine-readable report. Once a compiler syntax token is anchored, its raw
+UTF-8 range is authoritative for Unicode spelling; do not replace it with an
+ASCII-only text scanner.
 
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 
