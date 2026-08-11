@@ -987,10 +987,17 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         while let current = ancestor {
             if let optionalBinding = current.as(OptionalBindingConditionSyntax.self) {
                 let kind = optionalBindingKind(of: optionalBinding)
+                let shadowScope: Range<Int>?
+                switch kind {
+                case .ifOptionalBindingCondition:
+                    shadowScope = ifOptionalBindingShadowScope(optionalBinding)
+                case .guardOptionalBindingCondition:
+                    shadowScope = guardOptionalBindingShadowScope(optionalBinding)
+                default:
+                    shadowScope = nil
+                }
                 return (
-                    kind == .ifOptionalBindingCondition
-                        ? ifOptionalBindingShadowScope(optionalBinding)
-                        : nil,
+                    shadowScope,
                     kind
                 )
             }
@@ -1104,6 +1111,52 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                 return start <= end ? start..<end : nil
             }
             if current.is(CodeBlockItemSyntax.self) {
+                return nil
+            }
+            ancestor = current.parent
+        }
+        return nil
+    }
+
+    private func guardOptionalBindingShadowScope(
+        _ binding: OptionalBindingConditionSyntax
+    ) -> Range<Int>? {
+        guard binding.pattern.is(IdentifierPatternSyntax.self),
+              binding.initializer != nil else {
+            return nil
+        }
+        var ancestor = Syntax(binding).parent
+        while let current = ancestor {
+            if let guardStatement = current.as(GuardStmtSyntax.self) {
+                guard let finalBinding = guardStatement.conditions.last?
+                    .condition.as(OptionalBindingConditionSyntax.self),
+                      finalBinding.id == binding.id,
+                      let end = enclosingSequentialScopeEnd(of: guardStatement) else {
+                    return nil
+                }
+                let start = guardStatement.endPositionBeforeTrailingTrivia.utf8Offset
+                return start <= end ? start..<end : nil
+            }
+            if current.is(CodeBlockItemSyntax.self) {
+                return nil
+            }
+            ancestor = current.parent
+        }
+        return nil
+    }
+
+    private func enclosingSequentialScopeEnd(
+        of node: some SyntaxProtocol
+    ) -> Int? {
+        var ancestor = Syntax(node).parent
+        while let current = ancestor {
+            if let closure = current.as(ClosureExprSyntax.self) {
+                return closure.rightBrace.positionAfterSkippingLeadingTrivia.utf8Offset
+            }
+            if let codeBlock = current.as(CodeBlockSyntax.self) {
+                return codeBlock.rightBrace.positionAfterSkippingLeadingTrivia.utf8Offset
+            }
+            if current.is(MemberBlockSyntax.self) || current.is(SourceFileSyntax.self) {
                 return nil
             }
             ancestor = current.parent

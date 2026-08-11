@@ -2197,6 +2197,125 @@ import Testing
     )
 }
 
+@Test func finalExplicitGuardOptionalBindingShadowsOnlyAfterGuard() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("GuardOptionalShadow.swift")
+    let lines = [
+        "func inspect(_ value: Int?) -> Int {",
+        "    guard value != nil, let value = value else {",
+        "        return value ?? 0",
+        "    }",
+        "    return value",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let value = SymbolRecord(
+        usr: "usr-guard-optional-shadow",
+        name: "value",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [value],
+        occurrences: [
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 1,
+                token: "value",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(entry.replacements.count == 4)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 0)
+    #expect(plan.parameterSyntaxFacts.unresolvedShadowingBindingKinds.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("func inspect(_ \(entry.newName): Int?)"))
+    #expect(patched.contains("guard \(entry.newName) != nil, let value = \(entry.newName)"))
+    #expect(patched.contains("return \(entry.newName) ?? 0"))
+    #expect(patched.contains("return value\n}"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
+@Test func nonfinalGuardOptionalBindingShadowFailsClosed() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("GuardOptionalNonfinal.swift")
+    let lines = [
+        "func inspect(_ value: Int?) -> Int {",
+        "    guard let value = value, value > 0 else { return 0 }",
+        "    return value",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let value = SymbolRecord(
+        usr: "usr-guard-optional-nonfinal",
+        name: "value",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [value],
+        occurrences: [
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 1,
+                token: "value",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    #expect(!plan.entries.contains { $0.usr == value.usr })
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 1)
+    #expect(plan.parameterSyntaxFacts.unresolvedShadowingBindingKinds == [
+        "guardOptionalBindingCondition": 1
+    ])
+    #expect(plan.denied.contains { $0.usr == value.usr })
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
 @Test func parameterCallSiteSyntaxFactsResolveCompilerAnchoredLabelsAndCallShapes() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
