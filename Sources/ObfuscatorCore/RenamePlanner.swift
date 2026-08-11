@@ -829,6 +829,14 @@ public struct RenamePlanner {
             }
         }
 
+        // A declaration can participate in more than one denied safety layer.
+        // For example, an enum case that witnesses a protocol requirement is
+        // denied both by the enum-owner component and by the coordinated
+        // protocol graph. Reports and parameter outcome summaries require one
+        // deterministic decision per USR, so preserve every reason while
+        // coalescing the duplicate records before constructing those summaries.
+        denied = Self.coalescedDenials(denied)
+
         let supportReplacements = Self.codingKeySupportReplacements(
             components: codingKeyComponents,
             entries: entries,
@@ -1226,6 +1234,27 @@ public struct RenamePlanner {
     private static func isSyntheticAccessorName(_ name: String) -> Bool {
         let lowercasedName = name.lowercased()
         return lowercasedName.hasPrefix("getter:") || lowercasedName.hasPrefix("setter:")
+    }
+
+    private static func coalescedDenials(
+        _ decisions: [SafetyDecision]
+    ) -> [SafetyDecision] {
+        Dictionary(grouping: decisions, by: \.usr).values.compactMap { duplicates in
+            guard let first = duplicates.sorted(by: {
+                ($0.symbolName, $0.kind, $0.oldName ?? "")
+                    < ($1.symbolName, $1.kind, $1.oldName ?? "")
+            }).first else {
+                return nil
+            }
+            return SafetyDecision(
+                usr: first.usr,
+                symbolName: first.symbolName,
+                kind: first.kind,
+                allowed: false,
+                oldName: first.oldName,
+                reasons: Array(Set(duplicates.flatMap(\.reasons))).sorted()
+            )
+        }
     }
 
     private static func isSemanticOnlyCoordinatedOccurrence(

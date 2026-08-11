@@ -4,9 +4,14 @@ public struct EnumCaseComponentMember: Codable, Equatable, Sendable {
     public let usr: String
     public let name: String
     public let associatedValueParameterUSRs: [String]
+    public let protocolRequirementUSRs: [String]
 
     public var hasAssociatedValues: Bool {
         !associatedValueParameterUSRs.isEmpty
+    }
+
+    public var isProtocolRequirementWitness: Bool {
+        !protocolRequirementUSRs.isEmpty
     }
 }
 
@@ -32,6 +37,14 @@ public struct EnumCaseOwnerComponent: Codable, Equatable, Sendable {
     public var hasRawType: Bool {
         !rawTypeUSRs.isEmpty
     }
+
+    public var hasProtocolConformance: Bool {
+        !protocolConformanceUSRs.isEmpty
+    }
+
+    public var hasProtocolCaseWitness: Bool {
+        members.contains(where: \.isProtocolRequirementWitness)
+    }
 }
 
 public struct UnresolvedEnumCaseComponentFact: Codable, Equatable, Sendable {
@@ -46,6 +59,10 @@ public struct EnumCaseComponentFactsSummary: Codable, Equatable, Sendable {
     public let ownerComponents: Int
     public let rawTypeOwnerComponents: Int
     public let rawTypeCases: Int
+    public let protocolConformanceOwnerComponents: Int
+    public let protocolConformanceCases: Int
+    public let protocolWitnessOwnerComponents: Int
+    public let protocolWitnessCases: Int
     public let serializationSensitiveOwnerComponents: Int
     public let serializationSensitiveCases: Int
     public let runtimeSensitiveOwnerComponents: Int
@@ -67,6 +84,10 @@ public struct EnumCaseComponentFactsSummary: Codable, Equatable, Sendable {
         ownerComponents: 0,
         rawTypeOwnerComponents: 0,
         rawTypeCases: 0,
+        protocolConformanceOwnerComponents: 0,
+        protocolConformanceCases: 0,
+        protocolWitnessOwnerComponents: 0,
+        protocolWitnessCases: 0,
         serializationSensitiveOwnerComponents: 0,
         serializationSensitiveCases: 0,
         runtimeSensitiveOwnerComponents: 0,
@@ -172,7 +193,14 @@ public struct EnumCaseComponentFacts: Sendable {
             membersByOwner[ownerUSR, default: []].append(EnumCaseComponentMember(
                 usr: caseUSR,
                 name: symbol.name,
-                associatedValueParameterUSRs: associatedParametersByCase[caseUSR] ?? []
+                associatedValueParameterUSRs: associatedParametersByCase[caseUSR] ?? [],
+                protocolRequirementUSRs: Array(Set(
+                    (allOccurrencesByUSR[caseUSR] ?? []).flatMap { occurrence in
+                        occurrence.relations.compactMap { relation in
+                            relation.roles.contains("overrideOf") ? relation.usr : nil
+                        }
+                    }
+                )).sorted()
             ))
         }
 
@@ -236,6 +264,14 @@ public struct EnumCaseComponentFacts: Sendable {
             ownerComponents: components.count,
             rawTypeOwnerComponents: components.count(where: \.hasRawType),
             rawTypeCases: caseCount(where: \.hasRawType),
+            protocolConformanceOwnerComponents: components.count(
+                where: \.hasProtocolConformance
+            ),
+            protocolConformanceCases: caseCount(where: \.hasProtocolConformance),
+            protocolWitnessOwnerComponents: components.count(
+                where: \.hasProtocolCaseWitness
+            ),
+            protocolWitnessCases: caseCount(where: \.hasProtocolCaseWitness),
             serializationSensitiveOwnerComponents: components.count {
                 $0.isSerializationSensitive
             },

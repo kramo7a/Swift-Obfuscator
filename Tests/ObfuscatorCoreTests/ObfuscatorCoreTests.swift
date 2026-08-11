@@ -7741,6 +7741,10 @@ import Testing
     #expect(facts.summary.ownerComponents == 4)
     #expect(facts.summary.rawTypeOwnerComponents == 1)
     #expect(facts.summary.rawTypeCases == 1)
+    #expect(facts.summary.protocolConformanceOwnerComponents == 1)
+    #expect(facts.summary.protocolConformanceCases == 1)
+    #expect(facts.summary.protocolWitnessOwnerComponents == 0)
+    #expect(facts.summary.protocolWitnessCases == 0)
     #expect(facts.summary.serializationSensitiveOwnerComponents == 1)
     #expect(facts.summary.serializationSensitiveCases == 1)
     #expect(facts.summary.runtimeSensitiveOwnerComponents == 1)
@@ -7906,9 +7910,9 @@ import Testing
     #expect(facts.summary.unresolvedReferenceOccurrences == 0)
     #expect(facts.summary.casesWithMatchingStringLiterals == 1)
     #expect(facts.summary.casesDirectlyInterpolated == 1)
-    #expect(facts.summary.preliminaryEligibleOwnerComponents == 2)
-    #expect(facts.summary.preliminaryEligibleCases == 3)
-    #expect(facts.summary.preliminaryEligibleSimpleCases == 2)
+    #expect(facts.summary.preliminaryEligibleOwnerComponents == 3)
+    #expect(facts.summary.preliminaryEligibleCases == 4)
+    #expect(facts.summary.preliminaryEligibleSimpleCases == 3)
     #expect(facts.summary.preliminaryEligibleAssociatedValueCases == 1)
     #expect(facts.summary.preliminaryEligibleAssociatedValueParameters == 1)
 
@@ -7940,7 +7944,7 @@ import Testing
     let conformingFacts = try #require(
         facts.components.first { $0.ownerUSR == conforming.usr }
     )
-    #expect(conformingFacts.blockers.contains(.protocolConformance))
+    #expect(conformingFacts.blockers.isEmpty)
 }
 
 @Test func enumCasePlannerCoordinatesInternalAssociatedLabelsWithoutRenamingPatternBindings() throws {
@@ -8396,6 +8400,126 @@ import Testing
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("case \(stableEntry.newName) = \"wire_stable\""))
     #expect(!patched.contains("case stable"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
+@Test func indexedEnumCaseProtocolWitnessRelationsAreExplicit() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("ProtocolEnum.swift")
+    let source = [
+        "protocol Factory {",
+        "    static var idle: Self { get }",
+        "    static func payload(value: Int) -> Self",
+        "}",
+        "enum Witness: Factory {",
+        "    case idle",
+        "    case payload(value: Int)",
+        "}",
+        "enum Ordinary: Equatable {",
+        "    case idle",
+        "    case other",
+        "}"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+    let store = directory.appendingPathComponent("IndexStore", isDirectory: true)
+    let database = directory.appendingPathComponent("IndexDatabase", isDirectory: true)
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: [
+            "swiftc", "-typecheck",
+            "-module-name", "ProtocolEnumFixture",
+            "-index-store-path", store.path,
+            file.path
+        ]
+    )
+    let snapshot = try IndexReader().read(
+        storePath: store,
+        databasePath: database,
+        sourceRoot: directory
+    )
+    func enumCaseDeclaration(line: Int) -> OccurrenceRecord? {
+        snapshot.occurrences.first {
+            $0.line == line
+                && $0.symbol.kind == "enumConstant"
+                && ($0.roles.contains("declaration") || $0.roles.contains("definition"))
+        }
+    }
+    let witnessIdle = try #require(enumCaseDeclaration(line: 6))
+    let witnessPayload = try #require(enumCaseDeclaration(line: 7))
+    let ordinaryIdle = try #require(enumCaseDeclaration(line: 10))
+    #expect(witnessIdle.roles.contains("overrideOf"))
+    #expect(witnessPayload.roles.contains("overrideOf"))
+    #expect(witnessIdle.relations.contains { $0.roles.contains("overrideOf") })
+    #expect(witnessPayload.relations.contains { $0.roles.contains("overrideOf") })
+    #expect(!ordinaryIdle.roles.contains("overrideOf"))
+    #expect(!ordinaryIdle.relations.contains { $0.roles.contains("overrideOf") })
+
+    let cache = try SourceFileCache(paths: [file.path])
+    let indexedFacts = IndexedSemanticFacts(
+        snapshot: snapshot,
+        obfuscationRoots: [directory]
+    )
+    let componentFacts = EnumCaseComponentFacts(
+        snapshot: snapshot,
+        indexedFacts: indexedFacts,
+        obfuscationRoots: [directory]
+    )
+    let witness = try #require(componentFacts.components.first {
+        $0.ownerName == "Witness"
+    })
+    let ordinary = try #require(componentFacts.components.first {
+        $0.ownerName == "Ordinary"
+    })
+    #expect(witness.hasProtocolConformance)
+    #expect(witness.hasProtocolCaseWitness)
+    #expect(witness.members.allSatisfy { $0.isProtocolRequirementWitness })
+    #expect(ordinary.hasProtocolConformance)
+    #expect(!ordinary.hasProtocolCaseWitness)
+    #expect(ordinary.members.allSatisfy { !$0.isProtocolRequirementWitness })
+    #expect(componentFacts.summary.protocolConformanceOwnerComponents == 2)
+    #expect(componentFacts.summary.protocolConformanceCases == 4)
+    #expect(componentFacts.summary.protocolWitnessOwnerComponents == 1)
+    #expect(componentFacts.summary.protocolWitnessCases == 2)
+
+    let syntaxFacts = EnumCaseSyntaxFacts(
+        snapshot: snapshot,
+        semanticFacts: componentFacts,
+        sourceCache: cache,
+        obfuscationRoots: [directory]
+    )
+    let witnessSyntax = try #require(syntaxFacts.components.first {
+        $0.ownerUSR == witness.ownerUSR
+    })
+    let ordinarySyntax = try #require(syntaxFacts.components.first {
+        $0.ownerUSR == ordinary.ownerUSR
+    })
+    #expect(witnessSyntax.blockers.contains(.protocolConformance))
+    #expect(ordinarySyntax.blockers.isEmpty)
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let plannedUSRs = Set(plan.entries.map(\.usr))
+    #expect(Set(ordinary.caseUSRs).isSubset(of: plannedUSRs))
+    #expect(Set(witness.caseUSRs).isDisjoint(with: plannedUSRs))
+    for usr in witness.caseUSRs {
+        let decisions = plan.denied.filter { $0.usr == usr }
+        #expect(decisions.count == 1)
+        #expect(decisions.first?.reasons.contains {
+            $0.contains("enum case blocker: protocolConformance")
+        } == true)
+        #expect(decisions.first?.reasons.contains {
+            $0.contains("protocol members require relation-aware witness renaming")
+        } == true)
+    }
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
     _ = try CommandRunner().run(
         executable: "/usr/bin/xcrun",
         arguments: ["swiftc", "-typecheck", file.path]

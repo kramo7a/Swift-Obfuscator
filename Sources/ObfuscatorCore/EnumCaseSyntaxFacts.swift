@@ -340,7 +340,13 @@ public struct EnumCaseSyntaxFacts: Sendable {
             && !members.allSatisfy(\.hasExplicitRawValue) {
             blockers.insert(.rawType)
         }
-        if !semanticComponent.protocolConformanceUSRs.isEmpty {
+        // A protocol conformance does not by itself make enum case spellings
+        // requirements. IndexStoreDB marks the exceptional case-as-witness
+        // declaration with an explicit overrideOf relation to the requirement.
+        // Keep those owner components denied until requirement and case names
+        // are coordinated; ordinary owner-only conformances do not need a
+        // source-text or protocol-name allowlist.
+        if semanticComponent.hasProtocolCaseWitness {
             blockers.insert(.protocolConformance)
         }
         if semanticComponent.isSerializationSensitive {
