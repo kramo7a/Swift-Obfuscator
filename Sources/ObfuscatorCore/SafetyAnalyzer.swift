@@ -181,22 +181,23 @@ public struct SafetyAnalyzer: Sendable {
                 && isPlainSwiftArgumentLabel(token.name)
             let isCompilerValidatedEnumCaseToken = isSupportedEnumCase
                 && isPlainSwiftArgumentLabel(token.name)
-            if token.isBackticked && !isCompilerValidatedEnumCaseToken {
+            // The indexed project has already proved that an ASCII identifier
+            // token is legal in every recorded declaration/reference context.
+            // This includes contextual spellings and explicitly escaped Swift
+            // keywords. Replacing only the identifier bytes keeps existing
+            // backtick delimiters valid while generated names never require
+            // escaping. Language entities are denied independently by semantic
+            // accessor relations or by the declaration-name check below.
+            let isCompilerAcceptedSourceIdentifier = isPlainSwiftArgumentLabel(token.name)
+            if token.isBackticked
+                && !isCompilerValidatedEnumCaseToken
+                && !isCompilerAcceptedSourceIdentifier {
                 reasons.append("backticked identifier \(token.name)")
             }
-            // The indexed project has already proved that an unescaped ASCII
-            // token is legal in every recorded declaration/reference context.
-            // Replacing it with a generated plain identifier is therefore
-            // safe even when the old spelling is a contextual keyword such as
-            // `get`, `set`, `open`, or `prefix`. Language entities are denied
-            // independently by semantic accessor relations or by the
-            // declaration-name check below.
-            let isCompilerAcceptedUnescapedIdentifier = !token.isBackticked
-                && isPlainSwiftArgumentLabel(token.name)
             if !isExternalLabelOnlyUnderscore
                 && !isCompilerValidatedParameterToken
                 && !isCompilerValidatedEnumCaseToken
-                && !isCompilerAcceptedUnescapedIdentifier {
+                && !isCompilerAcceptedSourceIdentifier {
                 reasons.append("non-plain identifier \(token.name)")
             }
             tokenNames.insert(token.name)

@@ -9297,6 +9297,84 @@ import Testing
     _ = try runner.run(executable: afterExecutable.path, arguments: [])
 }
 
+@Test func plannerRenamesCompilerAcceptedBacktickedDeclarationsAndReferences() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("BacktickedIdentifiers.swift")
+    let source = [
+        "struct `Type` {",
+        "    static let `default` = 4",
+        "    func `do`(_ value: Int) -> Int {",
+        "        value + Self.`default`",
+        "    }",
+        "}",
+        "let sample = `Type`()",
+        "precondition(sample.`do`(3) == 7)"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    let store = directory.appendingPathComponent("IndexStore", isDirectory: true)
+    let database = directory.appendingPathComponent("IndexDatabase", isDirectory: true)
+    let beforeExecutable = directory.appendingPathComponent("Before")
+    let runner = CommandRunner(
+        logDirectory: directory.appendingPathComponent("logs", isDirectory: true)
+    )
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: [
+            "swiftc",
+            "-module-name", "BacktickedIdentifiersFixture",
+            "-index-store-path", store.path,
+            file.path,
+            "-o", beforeExecutable.path
+        ]
+    )
+    _ = try runner.run(executable: beforeExecutable.path, arguments: [])
+
+    let snapshot = try IndexReader().read(
+        storePath: store,
+        databasePath: database,
+        sourceRoot: directory
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        generator: NameGenerator(prefix: "Esc")
+    )
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let typeEntry = try #require(plan.entries.first {
+        $0.kind == "struct" && $0.oldName == "Type"
+    })
+    let defaultEntry = try #require(plan.entries.first {
+        $0.kind == "staticProperty" && $0.oldName == "default"
+    })
+    let doEntry = try #require(plan.entries.first {
+        $0.kind == "instanceMethod" && $0.oldName == "do"
+    })
+    #expect(typeEntry.replacements.count == 2)
+    #expect(defaultEntry.replacements.count == 2)
+    #expect(doEntry.replacements.count == 2)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("struct `\(typeEntry.newName)`"))
+    #expect(patched.contains("static let `\(defaultEntry.newName)`"))
+    #expect(patched.contains("func `\(doEntry.newName)`"))
+    #expect(!patched.contains("`Type`"))
+    #expect(!patched.contains("`default`"))
+    #expect(!patched.contains("`do`"))
+
+    let afterExecutable = directory.appendingPathComponent("After")
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", afterExecutable.path]
+    )
+    _ = try runner.run(executable: afterExecutable.path, arguments: [])
+}
+
 @Test func enumCasePlannerRenamesContextualAndBacktickedCaseTokens() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
