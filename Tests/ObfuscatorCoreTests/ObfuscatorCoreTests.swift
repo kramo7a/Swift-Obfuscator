@@ -2260,7 +2260,7 @@ import Testing
     )
 }
 
-@Test func nonfinalGuardOptionalBindingShadowFailsClosed() throws {
+@Test func nonfinalExplicitGuardOptionalBindingUsesDisjointShadowScopes() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
         isDirectory: true
@@ -2282,6 +2282,66 @@ import Testing
     let cache = try SourceFileCache(paths: [file.path])
     let value = SymbolRecord(
         usr: "usr-guard-optional-nonfinal",
+        name: "value",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [value],
+        occurrences: [
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 1,
+                token: "value",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(entry.replacements.count == 2)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 0)
+    #expect(plan.parameterSyntaxFacts.unresolvedShadowingBindingKinds.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("func inspect(_ \(entry.newName): Int?)"))
+    #expect(patched.contains("guard let value = \(entry.newName), value > 0"))
+    #expect(patched.contains("return value\n}"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
+@Test func shorthandGuardOptionalBindingShadowFailsClosed() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("GuardOptionalShorthand.swift")
+    let lines = [
+        "func inspect(_ value: Int?) -> Int {",
+        "    guard let value else { return 0 }",
+        "    return value",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let value = SymbolRecord(
+        usr: "usr-guard-optional-shorthand",
         name: "value",
         kind: "parameter",
         language: "swift",

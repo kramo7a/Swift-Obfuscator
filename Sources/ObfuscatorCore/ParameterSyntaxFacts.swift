@@ -546,9 +546,29 @@ private struct ImplicitBindingScope {
 private struct BindingDeclaration {
     let token: SourceTokenRange
     let kind: BindingDeclarationKind
-    /// Exact lexical range in which this declaration shadows an outer binding.
+    /// Exact lexical ranges in which this declaration shadows an outer binding.
     /// `nil` means the scope has not been modeled and must remain fail-closed.
-    let shadowScope: Range<Int>?
+    let shadowScopes: [Range<Int>]?
+
+    init(
+        token: SourceTokenRange,
+        kind: BindingDeclarationKind,
+        shadowScope: Range<Int>?
+    ) {
+        self.token = token
+        self.kind = kind
+        self.shadowScopes = shadowScope.map { [$0] }
+    }
+
+    init(
+        token: SourceTokenRange,
+        kind: BindingDeclarationKind,
+        shadowScopes: [Range<Int>]?
+    ) {
+        self.token = token
+        self.kind = kind
+        self.shadowScopes = shadowScopes
+    }
 }
 
 private enum BindingDeclarationKind: String {
@@ -750,7 +770,7 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             bindingDeclarations.append(BindingDeclaration(
                 token: token,
                 kind: facts.kind,
-                shadowScope: facts.shadowScope
+                shadowScopes: facts.shadowScopes
             ))
         }
         return .visitChildren
@@ -816,13 +836,15 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                     && bodyRange.contains($0.token.byteRange.lowerBound)
             }
             let scopedBindings = matchingBindings.filter { binding in
-                guard let scope = binding.shadowScope else {
+                guard let scopes = binding.shadowScopes, !scopes.isEmpty else {
                     return false
                 }
-                return bodyRange.contains(scope.lowerBound)
-                    && scope.upperBound <= bodyRange.upperBound
+                return scopes.allSatisfy { scope in
+                    bodyRange.lowerBound <= scope.lowerBound
+                        && scope.upperBound <= bodyRange.upperBound
+                }
             }
-            let shadowScopes = scopedBindings.compactMap(\.shadowScope)
+            let shadowScopes = scopedBindings.flatMap { $0.shadowScopes ?? [] }
             candidates[index].localBindingReferences = Array(Set(
                 declarationReferences.filter { reference in
                     reference.name == localBinding.name
@@ -981,25 +1003,22 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
 
     private func identifierPatternBindingFacts(
         of node: IdentifierPatternSyntax
-    ) -> (shadowScope: Range<Int>?, kind: BindingDeclarationKind) {
+    ) -> (shadowScopes: [Range<Int>]?, kind: BindingDeclarationKind) {
         var ancestor = Syntax(node).parent
         var patternBinding: PatternBindingSyntax?
         while let current = ancestor {
             if let optionalBinding = current.as(OptionalBindingConditionSyntax.self) {
                 let kind = optionalBindingKind(of: optionalBinding)
-                let shadowScope: Range<Int>?
+                let shadowScopes: [Range<Int>]?
                 switch kind {
                 case .ifOptionalBindingCondition:
-                    shadowScope = ifOptionalBindingShadowScope(optionalBinding)
+                    shadowScopes = ifOptionalBindingShadowScope(optionalBinding).map { [$0] }
                 case .guardOptionalBindingCondition:
-                    shadowScope = guardOptionalBindingShadowScope(optionalBinding)
+                    shadowScopes = guardOptionalBindingShadowScopes(optionalBinding)
                 default:
-                    shadowScope = nil
+                    shadowScopes = nil
                 }
-                return (
-                    shadowScope,
-                    kind
-                )
+                return (shadowScopes, kind)
             }
             if current.is(MatchingPatternConditionSyntax.self) {
                 return (nil, .matchingPatternCondition)
@@ -1009,7 +1028,7 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             }
             if current.is(SwitchCaseItemSyntax.self) {
                 return (
-                    switchCasePatternShadowScope(of: node),
+                    switchCasePatternShadowScope(of: node).map { [$0] },
                     .switchCasePattern
                 )
             }
@@ -1059,12 +1078,12 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             if let closure = current.as(ClosureExprSyntax.self) {
                 let start = variableDeclaration.endPositionBeforeTrailingTrivia.utf8Offset
                 let end = closure.rightBrace.positionAfterSkippingLeadingTrivia.utf8Offset
-                return (start <= end ? start..<end : nil, .simpleLocalVariable)
+                return (start <= end ? [start..<end] : nil, .simpleLocalVariable)
             }
             if let codeBlock = current.as(CodeBlockSyntax.self) {
                 let start = variableDeclaration.endPositionBeforeTrailingTrivia.utf8Offset
                 let end = codeBlock.rightBrace.positionAfterSkippingLeadingTrivia.utf8Offset
-                return (start <= end ? start..<end : nil, .simpleLocalVariable)
+                return (start <= end ? [start..<end] : nil, .simpleLocalVariable)
             }
             if current.is(MemberBlockSyntax.self) || current.is(SourceFileSyntax.self) {
                 return (nil, .memberOrSourceVariable)
@@ -1118,9 +1137,9 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         return nil
     }
 
-    private func guardOptionalBindingShadowScope(
+    private func guardOptionalBindingShadowScopes(
         _ binding: OptionalBindingConditionSyntax
-    ) -> Range<Int>? {
+    ) -> [Range<Int>]? {
         guard binding.pattern.is(IdentifierPatternSyntax.self),
               binding.initializer != nil else {
             return nil
@@ -1128,14 +1147,17 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         var ancestor = Syntax(binding).parent
         while let current = ancestor {
             if let guardStatement = current.as(GuardStmtSyntax.self) {
-                guard let finalBinding = guardStatement.conditions.last?
-                    .condition.as(OptionalBindingConditionSyntax.self),
-                      finalBinding.id == binding.id,
-                      let end = enclosingSequentialScopeEnd(of: guardStatement) else {
+                guard let end = enclosingSequentialScopeEnd(of: guardStatement) else {
                     return nil
                 }
-                let start = guardStatement.endPositionBeforeTrailingTrivia.utf8Offset
-                return start <= end ? start..<end : nil
+                let conditionStart = binding.endPositionBeforeTrailingTrivia.utf8Offset
+                let conditionEnd = guardStatement.body.leftBrace
+                    .positionAfterSkippingLeadingTrivia.utf8Offset
+                let sequentialStart = guardStatement.endPositionBeforeTrailingTrivia.utf8Offset
+                guard conditionStart <= conditionEnd, sequentialStart <= end else {
+                    return nil
+                }
+                return [conditionStart..<conditionEnd, sequentialStart..<end]
             }
             if current.is(CodeBlockItemSyntax.self) {
                 return nil
