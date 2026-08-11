@@ -562,7 +562,10 @@ private enum BindingDeclarationKind: String {
     case multiBindingVariable
     case destructuredVariablePattern
     case accessorBackedVariable
-    case optionalBindingCondition
+    case ifOptionalBindingCondition
+    case guardOptionalBindingCondition
+    case whileOptionalBindingCondition
+    case unmodeledOptionalBindingCondition
     case matchingPatternCondition
     case forStatementPattern
     case switchCasePattern
@@ -982,8 +985,14 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         var ancestor = Syntax(node).parent
         var patternBinding: PatternBindingSyntax?
         while let current = ancestor {
-            if current.is(OptionalBindingConditionSyntax.self) {
-                return (nil, .optionalBindingCondition)
+            if let optionalBinding = current.as(OptionalBindingConditionSyntax.self) {
+                let kind = optionalBindingKind(of: optionalBinding)
+                return (
+                    kind == .ifOptionalBindingCondition
+                        ? ifOptionalBindingShadowScope(optionalBinding)
+                        : nil,
+                    kind
+                )
             }
             if current.is(MatchingPatternConditionSyntax.self) {
                 return (nil, .matchingPatternCondition)
@@ -1056,6 +1065,50 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             ancestor = current.parent
         }
         return (nil, .unmodeledIdentifierPattern)
+    }
+
+    private func optionalBindingKind(
+        of node: OptionalBindingConditionSyntax
+    ) -> BindingDeclarationKind {
+        var ancestor = Syntax(node).parent
+        while let current = ancestor {
+            if current.is(IfExprSyntax.self) {
+                return .ifOptionalBindingCondition
+            }
+            if current.is(GuardStmtSyntax.self) {
+                return .guardOptionalBindingCondition
+            }
+            if current.is(WhileStmtSyntax.self) {
+                return .whileOptionalBindingCondition
+            }
+            if current.is(CodeBlockItemSyntax.self) {
+                break
+            }
+            ancestor = current.parent
+        }
+        return .unmodeledOptionalBindingCondition
+    }
+
+    private func ifOptionalBindingShadowScope(
+        _ binding: OptionalBindingConditionSyntax
+    ) -> Range<Int>? {
+        guard binding.pattern.is(IdentifierPatternSyntax.self),
+              binding.initializer != nil else {
+            return nil
+        }
+        var ancestor = Syntax(binding).parent
+        while let current = ancestor {
+            if let ifExpression = current.as(IfExprSyntax.self) {
+                let start = binding.endPositionBeforeTrailingTrivia.utf8Offset
+                let end = ifExpression.body.rightBrace.positionAfterSkippingLeadingTrivia.utf8Offset
+                return start <= end ? start..<end : nil
+            }
+            if current.is(CodeBlockItemSyntax.self) {
+                return nil
+            }
+            ancestor = current.parent
+        }
+        return nil
     }
 
     private func switchCasePatternShadowScope(
