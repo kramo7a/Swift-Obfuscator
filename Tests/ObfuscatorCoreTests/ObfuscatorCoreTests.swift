@@ -7917,7 +7917,7 @@ import Testing
     #expect(conformingFacts.blockers.contains(.protocolConformance))
 }
 
-@Test func enumCasePlannerRenamesClosedInternalSimpleCasesAcrossFiles() throws {
+@Test func enumCasePlannerRenamesClosedInternalCaseTokensWithoutChangingAssociatedLabels() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -7942,7 +7942,14 @@ import Testing
         "func nextState() -> InternalState {",
         "    .ready",
         "}",
-        "let state = InternalState.idle"
+        "let state = InternalState.idle",
+        "let sample = InternalPayload.payload(value: 1)",
+        "func payloadValue(_ input: InternalPayload) -> Int {",
+        "    switch input {",
+        "    case .payload(let value):",
+        "        value",
+        "    }",
+        "}"
     ]
     try (uses.joined(separator: "\n") + "\n")
         .write(to: usesFile, atomically: true, encoding: .utf8)
@@ -8059,6 +8066,34 @@ import Testing
             line: 4,
             token: "idle",
             roles: ["reference"]
+        ),
+        testOccurrence(
+            payloadOwner,
+            path: usesFile.path,
+            line: 5,
+            token: "InternalPayload",
+            roles: ["reference"]
+        ),
+        testOccurrence(
+            payload,
+            path: usesFile.path,
+            line: 5,
+            token: "payload",
+            roles: ["reference", "call"]
+        ),
+        testOccurrence(
+            payloadOwner,
+            path: usesFile.path,
+            line: 6,
+            token: "InternalPayload",
+            roles: ["reference"]
+        ),
+        testOccurrence(
+            payload,
+            path: usesFile.path,
+            line: 8,
+            token: "payload",
+            roles: ["reference"]
         )
     ]
     let snapshot = IndexSnapshot(
@@ -8076,18 +8111,19 @@ import Testing
         generator: NameGenerator(prefix: "Case")
     )
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let internalEntries = plan.entries.filter { [idle.usr, ready.usr].contains($0.usr) }
-    #expect(internalEntries.count == 2)
-    #expect(internalEntries.flatMap(\.replacements).count == 4)
-    #expect(!plan.entries.contains { $0.usr == payload.usr || $0.usr == visible.usr })
-    #expect(plan.denied.first { $0.usr == payload.usr }?.reasons.contains { reason in
-        reason.contains("internalAssociatedValueComponent")
-    } == true)
+    let internalEntries = plan.entries.filter {
+        [idle.usr, ready.usr, payload.usr].contains($0.usr)
+    }
+    #expect(internalEntries.count == 3)
+    #expect(internalEntries.flatMap(\.replacements).count == 7)
+    #expect(!plan.entries.contains { $0.usr == value.usr || $0.usr == visible.usr })
     #expect(plan.denied.first { $0.usr == visible.usr }?.reasons.contains { reason in
         reason.contains("nonFileScopedAccess")
     } == true)
-    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleOwnerComponents == 1)
-    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleCases == 2)
+    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleOwnerComponents == 2)
+    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleCases == 3)
+    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleAssociatedValueCases == 1)
+    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleAssociatedValueParameters == 1)
     #expect(plan.conflicts.isEmpty)
 
     try SourcePatcher().apply(plan.replacements)
@@ -8097,7 +8133,9 @@ import Testing
         #expect(patchedDeclarations.contains("case \(entry.newName)"))
         #expect(patchedUses.contains(".\(entry.newName)"))
     }
-    #expect(patchedDeclarations.contains("case payload(value: Int)"))
+    #expect(patchedDeclarations.contains("(value: Int)"))
+    #expect(patchedUses.contains("(value: 1)"))
+    #expect(patchedUses.contains("(let value)"))
     #expect(patchedDeclarations.contains("case visible"))
     _ = try CommandRunner().run(
         executable: "/usr/bin/xcrun",
