@@ -7209,7 +7209,9 @@ import Testing
     )
 
     #expect(getterDecision.allowed == false)
-    #expect(getterDecision.reasons.contains { $0.contains("non-plain identifier get") })
+    #expect(getterDecision.reasons.contains {
+        $0.contains("synthetic accessor is derived from its parent declaration")
+    })
 
     let setter = SymbolRecord(
         usr: "usr-setter",
@@ -7238,7 +7240,9 @@ import Testing
     )
 
     #expect(setterDecision.allowed == false)
-    #expect(setterDecision.reasons.contains { $0.contains("non-plain identifier set") })
+    #expect(setterDecision.reasons.contains {
+        $0.contains("synthetic accessor is derived from its parent declaration")
+    })
 }
 
 @Test func renamePlannerIncludesExternalReferencesForSelectedDeclarations() throws {
@@ -9176,6 +9180,121 @@ import Testing
         executable: "/usr/bin/xcrun",
         arguments: ["swiftc", "-typecheck", file.path]
     )
+}
+
+@Test func plannerRenamesCompilerAcceptedContextualIdentifiersAndPreservesSemanticSelf() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("ContextualIdentifiers.swift")
+    let source = [
+        "struct ContextualBox {",
+        "    var value: Int {",
+        "        didSet { precondition(value >= 0) }",
+        "    }",
+        "    var prefix: Int",
+        "    func get() -> Self {",
+        "        Self(value: value, prefix: prefix)",
+        "    }",
+        "    func set(_ newValue: Int) -> Self {",
+        "        Self(value: newValue, prefix: prefix)",
+        "    }",
+        "    subscript(_ offset: Int) -> Int {",
+        "        value + offset",
+        "    }",
+        "}",
+        "var sample = ContextualBox(value: 1, prefix: 2)",
+        "sample.value = 3",
+        "precondition(sample.get().prefix == 2)",
+        "precondition(sample.set(4)[1] == 5)"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    let store = directory.appendingPathComponent("IndexStore", isDirectory: true)
+    let database = directory.appendingPathComponent("IndexDatabase", isDirectory: true)
+    let beforeExecutable = directory.appendingPathComponent("Before")
+    let runner = CommandRunner(
+        logDirectory: directory.appendingPathComponent("logs", isDirectory: true)
+    )
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: [
+            "swiftc",
+            "-module-name", "ContextualIdentifiersFixture",
+            "-index-store-path", store.path,
+            file.path,
+            "-o", beforeExecutable.path
+        ]
+    )
+    _ = try runner.run(executable: beforeExecutable.path, arguments: [])
+
+    let snapshot = try IndexReader().read(
+        storePath: store,
+        databasePath: database,
+        sourceRoot: directory
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let boxGroup = try #require(snapshot.groupsByUSR.first {
+        $0.symbol.kind == "struct" && $0.symbol.name == "ContextualBox"
+    })
+    #expect(boxGroup.occurrences.contains { occurrence in
+        guard let source = cache.file(for: occurrence.path),
+              let token = source.identifierToken(
+                line: occurrence.line,
+                utf8Column: occurrence.utf8Column
+              ) else {
+            return false
+        }
+        return token.name == "Self"
+    })
+    let accessorUSRs = Set(snapshot.groupsByUSR.filter {
+        SafetyAnalyzer.isAccessorOccurrenceGroup($0)
+    }.map(\.usr))
+    #expect(!accessorUSRs.isEmpty)
+    let subscriptUSRs = Set(snapshot.groupsByUSR.filter {
+        $0.symbol.name.hasPrefix("subscript(")
+    }.map(\.usr))
+    #expect(!subscriptUSRs.isEmpty)
+
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        generator: NameGenerator(prefix: "Ctx")
+    )
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let boxEntry = try #require(plan.entries.first { $0.usr == boxGroup.usr })
+    let getEntry = try #require(plan.entries.first {
+        $0.kind == "instanceMethod" && $0.oldName == "get"
+    })
+    let setEntry = try #require(plan.entries.first {
+        $0.kind == "instanceMethod" && $0.oldName == "set"
+    })
+    let prefixEntry = try #require(plan.entries.first {
+        $0.kind == "instanceProperty" && $0.oldName == "prefix"
+    })
+    #expect(boxEntry.replacements.allSatisfy { $0.oldName == "ContextualBox" })
+    #expect(getEntry.replacements.allSatisfy { $0.oldName == "get" })
+    #expect(setEntry.replacements.allSatisfy { $0.oldName == "set" })
+    #expect(prefixEntry.replacements.allSatisfy { $0.oldName == "prefix" })
+    #expect(Set(plan.entries.map(\.usr)).isDisjoint(with: accessorUSRs))
+    #expect(Set(plan.entries.map(\.usr)).isDisjoint(with: subscriptUSRs))
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("Self("))
+    #expect(patched.contains("didSet"))
+    #expect(patched.contains("subscript"))
+    #expect(!patched.contains("ContextualBox"))
+    #expect(!patched.contains("func get"))
+    #expect(!patched.contains("func set"))
+
+    let afterExecutable = directory.appendingPathComponent("After")
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", afterExecutable.path]
+    )
+    _ = try runner.run(executable: afterExecutable.path, arguments: [])
 }
 
 @Test func enumCasePlannerRenamesContextualAndBacktickedCaseTokens() throws {

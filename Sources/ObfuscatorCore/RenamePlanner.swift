@@ -387,6 +387,13 @@ public struct RenamePlanner {
                                 )
                                 continue
                             }
+                            if SafetyAnalyzer.isSemanticSelfTypeReference(
+                                occurrence: occurrence,
+                                token: token,
+                                symbolKind: componentGroup.symbol.kind
+                            ) {
+                                continue
+                            }
                             guard token.name == oldName else {
                                 localReasons.insert(
                                     "token mismatch at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
@@ -517,6 +524,13 @@ public struct RenamePlanner {
                 }
                 guard let token = source.identifierToken(line: occurrence.line, utf8Column: occurrence.utf8Column) else {
                     localReasons.append("identifier token unavailable at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
+                    continue
+                }
+                if SafetyAnalyzer.isSemanticSelfTypeReference(
+                    occurrence: occurrence,
+                    token: token,
+                    symbolKind: group.symbol.kind
+                ) {
                     continue
                 }
                 guard token.name == oldName else {

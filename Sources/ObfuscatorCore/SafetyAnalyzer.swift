@@ -76,6 +76,9 @@ public struct SafetyAnalyzer: Sendable {
         if isSyntheticAccessorName(group.symbol.name) {
             reasons.append("synthetic accessor is derived from its parent declaration")
         }
+        if Self.isAccessorOccurrenceGroup(group) {
+            reasons.append("synthetic accessor is derived from its parent declaration")
+        }
         let isSupportedLocalBindingParameter = group.symbol.kind == "parameter"
             && localBindingOnlyParameterUSRs.contains(group.usr)
         let isSupportedExternalLabelParameter = group.symbol.kind == "parameter"
@@ -140,9 +143,6 @@ public struct SafetyAnalyzer: Sendable {
             if !isUnderSourceRoot(occurrence.path) {
                 reasons.append("occurrence outside source root at \(occurrence.path):\(occurrence.line)")
             }
-            if occurrence.roles.contains("implicit") {
-                reasons.append("implicit occurrence at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
-            }
             if occurrence.roles.contains("declaration") || occurrence.roles.contains("definition") {
                 hasDeclarationOrDefinition = true
                 if isUnderObfuscationRoots(occurrence.path) {
@@ -164,6 +164,16 @@ public struct SafetyAnalyzer: Sendable {
                 reasons.append("identifier token unavailable at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
                 continue
             }
+            if Self.isSemanticSelfTypeReference(
+                occurrence: occurrence,
+                token: token,
+                symbolKind: group.symbol.kind
+            ) {
+                continue
+            }
+            if occurrence.roles.contains("implicit") {
+                reasons.append("implicit occurrence at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
+            }
             let isExternalLabelOnlyUnderscore = isSupportedExternalLabelParameter
                 && externalLabelOnlyParameterUSRs.contains(group.usr)
                 && token.name == "_"
@@ -174,10 +184,19 @@ public struct SafetyAnalyzer: Sendable {
             if token.isBackticked && !isCompilerValidatedEnumCaseToken {
                 reasons.append("backticked identifier \(token.name)")
             }
+            // The indexed project has already proved that an unescaped ASCII
+            // token is legal in every recorded declaration/reference context.
+            // Replacing it with a generated plain identifier is therefore
+            // safe even when the old spelling is a contextual keyword such as
+            // `get`, `set`, `open`, or `prefix`. Language entities are denied
+            // independently by semantic accessor relations or by the
+            // declaration-name check below.
+            let isCompilerAcceptedUnescapedIdentifier = !token.isBackticked
+                && isPlainSwiftArgumentLabel(token.name)
             if !isExternalLabelOnlyUnderscore
                 && !isCompilerValidatedParameterToken
                 && !isCompilerValidatedEnumCaseToken
-                && !isPlainSwiftIdentifier(token.name) {
+                && !isCompilerAcceptedUnescapedIdentifier {
                 reasons.append("non-plain identifier \(token.name)")
             }
             tokenNames.insert(token.name)
@@ -278,6 +297,7 @@ public struct SafetyAnalyzer: Sendable {
         let names: Set<String> = [
             "wrappedValue",
             "projectedValue",
+            "subscript",
             "appendInterpolation",
             "buildBlock",
             "buildPartialBlock",
@@ -289,6 +309,25 @@ public struct SafetyAnalyzer: Sendable {
             "buildFinalResult"
         ]
         return names.contains(name)
+    }
+
+    static func isAccessorOccurrenceGroup(_ group: USROccurrenceGroup) -> Bool {
+        group.occurrences.contains { occurrence in
+            occurrence.roles.contains("accessorOf")
+                || occurrence.relations.contains { $0.roles.contains("accessorOf") }
+        }
+    }
+
+    static func isSemanticSelfTypeReference(
+        occurrence: OccurrenceRecord,
+        token: IdentifierToken,
+        symbolKind: String
+    ) -> Bool {
+        let nominalKinds: Set<String> = ["class", "struct", "enum", "protocol"]
+        return nominalKinds.contains(symbolKind)
+            && token.name == "Self"
+            && !occurrence.roles.contains("declaration")
+            && !occurrence.roles.contains("definition")
     }
 
     private func isSyntheticAccessorName(_ name: String) -> Bool {
