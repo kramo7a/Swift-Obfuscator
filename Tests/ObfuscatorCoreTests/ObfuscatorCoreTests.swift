@@ -1953,6 +1953,130 @@ import Testing
     )
 }
 
+@Test func switchCasePatternShadowEndsAtCaseBoundary() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("SwitchCaseShadow.swift")
+    let lines = [
+        "enum Focus { case standard; case commented(Int) }",
+        "func route(_ groupId: Int, focus: Focus) -> Int {",
+        "    let result = switch focus {",
+        "    case .standard: groupId",
+        "    case .commented(let groupId): groupId",
+        "    }",
+        "    return result + groupId",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let groupId = SymbolRecord(
+        usr: "usr-switch-case-shadow-boundary",
+        name: "groupId",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [groupId],
+        occurrences: [
+            testOccurrence(
+                groupId,
+                path: file.path,
+                line: 2,
+                token: "groupId",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == groupId.usr })
+    #expect(entry.replacements.count == 3)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 0)
+    #expect(plan.parameterSyntaxFacts.unresolvedShadowingBindingKinds.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("func route(_ \(entry.newName): Int"))
+    #expect(patched.contains("case .standard: \(entry.newName)"))
+    #expect(patched.contains("case .commented(let groupId): groupId"))
+    #expect(patched.contains("return result + \(entry.newName)"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
+@Test func switchCaseMultiPatternShadowFailsClosed() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("SwitchCaseMultiPattern.swift")
+    let lines = [
+        "enum Focus { case standard; case first(Int); case second(Int) }",
+        "func route(_ value: Int, focus: Focus) -> Int {",
+        "    switch focus {",
+        "    case .first(let value), .second(let value): return value",
+        "    case .standard: return value",
+        "    }",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let value = SymbolRecord(
+        usr: "usr-switch-case-multi-pattern",
+        name: "value",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [value],
+        occurrences: [
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 2,
+                token: "value",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    #expect(!plan.entries.contains { $0.usr == value.usr })
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 1)
+    #expect(plan.parameterSyntaxFacts.unresolvedShadowingBindingKinds == [
+        "switchCasePattern": 1
+    ])
+    #expect(plan.denied.contains { $0.usr == value.usr })
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
 @Test func parameterCallSiteSyntaxFactsResolveCompilerAnchoredLabelsAndCallShapes() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
