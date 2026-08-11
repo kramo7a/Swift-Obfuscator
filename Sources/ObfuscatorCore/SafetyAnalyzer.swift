@@ -79,6 +79,9 @@ public struct SafetyAnalyzer: Sendable {
         if Self.isAccessorOccurrenceGroup(group) {
             reasons.append("synthetic accessor is derived from its parent declaration")
         }
+        if indexedFacts.explicitCodingKeysEnumUSRs.contains(group.usr) {
+            reasons.append("explicit CodingKeys type name is required for Codable semantics")
+        }
         let isSupportedLocalBindingParameter = group.symbol.kind == "parameter"
             && localBindingOnlyParameterUSRs.contains(group.usr)
         let isSupportedExternalLabelParameter = group.symbol.kind == "parameter"

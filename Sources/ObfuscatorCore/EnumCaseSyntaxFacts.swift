@@ -19,6 +19,7 @@ public enum EnumOwnerSyntaxAccessLevel: String, Codable, Hashable, Sendable {
 public enum EnumCaseSyntaxBlocker: String, Codable, Hashable, Sendable {
     case rawType
     case protocolConformance
+    case codingKeyContract
     case serializationContract
     case objectiveCRuntimeContract
     case externalOwner
@@ -373,6 +374,9 @@ public struct EnumCaseSyntaxFacts: Sendable {
         // source-text or protocol-name allowlist.
         if semanticComponent.hasProtocolCaseWitness {
             blockers.insert(.protocolConformance)
+        }
+        if semanticComponent.isExplicitCodingKeys {
+            blockers.insert(.codingKeyContract)
         }
         if semanticComponent.isSerializationSensitive
             && !permitsMemberLocalRawValueRenaming(

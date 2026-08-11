@@ -21,6 +21,7 @@ public struct EnumCaseOwnerComponent: Codable, Equatable, Sendable {
     public let members: [EnumCaseComponentMember]
     public let rawTypeUSRs: [String]
     public let protocolConformanceUSRs: [String]
+    public let isExplicitCodingKeys: Bool
     public let isSerializationSensitive: Bool
     public let hasExplicitCodingKeys: Bool
     public let hasCustomSerializationImplementation: Bool
@@ -225,6 +226,8 @@ public struct EnumCaseComponentFacts: Sendable {
                 members: members,
                 rawTypeUSRs: (rawTypeUSRsByOwner[ownerUSR] ?? []).sorted(),
                 protocolConformanceUSRs: (protocolUSRsByOwner[ownerUSR] ?? []).sorted(),
+                isExplicitCodingKeys:
+                    indexedFacts.explicitCodingKeysEnumUSRs.contains(ownerUSR),
                 isSerializationSensitive:
                     indexedFacts.serializationSensitiveOwnerUSRs.contains(ownerUSR),
                 hasExplicitCodingKeys:

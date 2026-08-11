@@ -6399,6 +6399,101 @@ import Testing
     })
 }
 
+@Test func explicitCodingKeysTypeAndCasesRemainStableUntilCoordinated() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("ExplicitCodingKeys.swift")
+    let source = [
+        "import Foundation",
+        "struct Payload: Codable {",
+        "    let value: Int",
+        "    enum CodingKeys: String, CodingKey {",
+        "        case value = \"wire_value\"",
+        "    }",
+        "}",
+        "let data = try JSONEncoder().encode(Payload(value: 7))",
+        "precondition(String(data: data, encoding: .utf8) == \"{\\\"wire_value\\\":7}\")"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    let store = directory.appendingPathComponent("IndexStore", isDirectory: true)
+    let database = directory.appendingPathComponent("IndexDatabase", isDirectory: true)
+    let beforeExecutable = directory.appendingPathComponent("Before")
+    let runner = CommandRunner(
+        logDirectory: directory.appendingPathComponent("logs", isDirectory: true)
+    )
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: [
+            "swiftc",
+            "-module-name", "ExplicitCodingKeysFixture",
+            "-index-store-path", store.path,
+            file.path,
+            "-o", beforeExecutable.path
+        ]
+    )
+    _ = try runner.run(executable: beforeExecutable.path, arguments: [])
+
+    let snapshot = try IndexReader().read(
+        storePath: store,
+        databasePath: database,
+        sourceRoot: directory
+    )
+    let codingKeysUSR = try #require(snapshot.groupsByUSR.first { group in
+        group.symbol.kind == "enum" && group.symbol.name == "CodingKeys"
+    }).usr
+    let codingCaseUSR = try #require(snapshot.groupsByUSR.first { group in
+        group.symbol.kind == "enumConstant"
+            && group.symbol.name == "value"
+            && group.occurrences.contains { occurrence in
+                occurrence.relations.contains { relation in
+                    relation.roles.contains("childOf") && relation.usr == codingKeysUSR
+                }
+            }
+    }).usr
+    let propertyUSR = try #require(snapshot.groupsByUSR.first { group in
+        group.symbol.kind == "instanceProperty"
+            && group.symbol.name == "value"
+            && group.occurrences.contains { occurrence in
+                !occurrence.roles.contains("implicit")
+                    && occurrence.roles.contains("definition")
+            }
+    }).usr
+
+    let cache = try SourceFileCache(paths: [file.path])
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        generator: NameGenerator(prefix: "Key")
+    )
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    #expect(!plan.entries.contains { $0.usr == codingKeysUSR })
+    #expect(!plan.entries.contains { $0.usr == codingCaseUSR })
+    #expect(!plan.entries.contains { $0.usr == propertyUSR })
+    #expect(plan.denied.first { $0.usr == codingKeysUSR }?.reasons.contains {
+        $0.contains("explicit CodingKeys type name is required")
+    } == true)
+    let codingCaseComponent = try #require(plan.enumCaseSyntaxFacts.components.first {
+        $0.ownerUSR == codingKeysUSR
+    })
+    #expect(codingCaseComponent.blockers.contains(.codingKeyContract))
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("enum CodingKeys: String, CodingKey"))
+    #expect(patched.contains("case value = \"wire_value\""))
+
+    let afterExecutable = directory.appendingPathComponent("After")
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", afterExecutable.path]
+    )
+    _ = try runner.run(executable: afterExecutable.path, arguments: [])
+}
+
 @Test func renamePlannerDeniesSerializedPropertiesWithCustomCodableImplementation() throws {
     let repositoryRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
