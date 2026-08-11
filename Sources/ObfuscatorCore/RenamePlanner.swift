@@ -204,8 +204,8 @@ public struct RenamePlanner {
             enumCaseSyntaxFacts.components.flatMap { $0.members.map(\.caseUSR) }
         )
         let eligibleEnumCaseUSRs = Set(
-            enumCaseSyntaxFacts.components.filter(\.isPreliminaryEligible).flatMap {
-                $0.members.map(\.caseUSR)
+            enumCaseSyntaxFacts.components.flatMap {
+                $0.preliminaryEligibleMembers.map(\.caseUSR)
             }
         )
         let enumCaseOwnerComponentByCaseUSR = Dictionary(

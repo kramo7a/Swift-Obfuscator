@@ -45,6 +45,11 @@ public struct EnumCaseMemberSyntaxFact: Codable, Equatable, Sendable {
     public let references: [EnumCaseReferenceSyntaxFact]
     public let unresolvedReferenceTokens: [SourceTokenRange]
     public let matchingStringLiteralTokens: [SourceTokenRange]
+    public let blockers: [EnumCaseSyntaxBlocker]
+
+    public var isPreliminaryEligible: Bool {
+        blockers.isEmpty
+    }
 }
 
 public struct EnumCaseOwnerSyntaxComponent: Codable, Equatable, Sendable {
@@ -54,8 +59,15 @@ public struct EnumCaseOwnerSyntaxComponent: Codable, Equatable, Sendable {
     public let members: [EnumCaseMemberSyntaxFact]
     public let blockers: [EnumCaseSyntaxBlocker]
 
+    public var preliminaryEligibleMembers: [EnumCaseMemberSyntaxFact] {
+        guard blockers.isEmpty else {
+            return []
+        }
+        return members.filter(\.isPreliminaryEligible)
+    }
+
     public var isPreliminaryEligible: Bool {
-        blockers.isEmpty
+        !preliminaryEligibleMembers.isEmpty
     }
 }
 
@@ -290,6 +302,8 @@ public struct EnumCaseSyntaxFacts: Sendable {
                     ($0.path, $0.byteRange.lowerBound)
                         < ($1.path, $1.byteRange.lowerBound)
                 }
+                let matchingStringLiteralTokens = caseCandidatesByUSR[semanticMember.usr]
+                    .flatMap { literalTokensBySpelling[$0.token.name] } ?? []
                 members.append(EnumCaseMemberSyntaxFact(
                     caseUSR: semanticMember.usr,
                     declarationToken: caseCandidatesByUSR[semanticMember.usr]?.token,
@@ -297,8 +311,10 @@ public struct EnumCaseSyntaxFacts: Sendable {
                         caseCandidatesByUSR[semanticMember.usr]?.hasExplicitRawValue ?? false,
                     references: references,
                     unresolvedReferenceTokens: unresolvedReferenceTokens,
-                    matchingStringLiteralTokens: caseCandidatesByUSR[semanticMember.usr]
-                        .flatMap { literalTokensBySpelling[$0.token.name] } ?? []
+                    matchingStringLiteralTokens: matchingStringLiteralTokens,
+                    blockers: matchingStringLiteralTokens.isEmpty
+                        ? []
+                        : [.stringLiteralSpelling]
                 ))
             }
             members.sort { $0.caseUSR < $1.caseUSR }
@@ -387,9 +403,6 @@ public struct EnumCaseSyntaxFacts: Sendable {
             if !member.unresolvedReferenceTokens.isEmpty {
                 blockers.insert(.unresolvedReferenceSyntax)
             }
-            if !member.matchingStringLiteralTokens.isEmpty {
-                blockers.insert(.stringLiteralSpelling)
-            }
             if member.references.contains(where: \.isInsideStringInterpolation) {
                 blockers.insert(.directStringInterpolation)
             }
@@ -427,13 +440,19 @@ public struct EnumCaseSyntaxFacts: Sendable {
         let resolvedReferenceOccurrences = components.reduce(0) { total, component in
             total + component.members.reduce(0) { $0 + $1.references.count }
         }
-        let eligible = components.filter(\.isPreliminaryEligible)
         var blockerOwnerComponents: [String: Int] = [:]
         var blockerCases: [String: Int] = [:]
         for component in components {
             for blocker in component.blockers {
                 blockerOwnerComponents[blocker.rawValue, default: 0] += 1
                 blockerCases[blocker.rawValue, default: 0] += component.members.count
+            }
+            let memberBlockers = Set(component.members.flatMap(\.blockers))
+            for blocker in memberBlockers {
+                blockerOwnerComponents[blocker.rawValue, default: 0] += 1
+                blockerCases[blocker.rawValue, default: 0] += component.members.count {
+                    $0.blockers.contains(blocker)
+                }
             }
         }
         let accessOwnerCounts = Dictionary(
@@ -465,11 +484,12 @@ public struct EnumCaseSyntaxFacts: Sendable {
         var eligibleSimpleCases = 0
         var eligibleAssociatedCases = 0
         var eligibleAssociatedParameters = 0
-        for component in eligible {
+        for component in components where component.isPreliminaryEligible {
             guard let semantic = semanticByOwner[component.ownerUSR] else {
                 continue
             }
-            for member in semantic.members {
+            let eligibleCaseUSRs = Set(component.preliminaryEligibleMembers.map(\.caseUSR))
+            for member in semantic.members where eligibleCaseUSRs.contains(member.usr) {
                 if member.hasAssociatedValues {
                     eligibleAssociatedCases += 1
                     eligibleAssociatedParameters += member.associatedValueParameterUSRs.count
@@ -499,8 +519,10 @@ public struct EnumCaseSyntaxFacts: Sendable {
             matchingStringLiteralTokens: matchingStringLiteralTokens,
             casesDirectlyInterpolated: casesDirectlyInterpolated,
             directInterpolationReferences: directInterpolationReferences,
-            preliminaryEligibleOwnerComponents: eligible.count,
-            preliminaryEligibleCases: eligible.reduce(0) { $0 + $1.members.count },
+            preliminaryEligibleOwnerComponents: components.count(where: \.isPreliminaryEligible),
+            preliminaryEligibleCases: components.reduce(0) {
+                $0 + $1.preliminaryEligibleMembers.count
+            },
             preliminaryEligibleSimpleCases: eligibleSimpleCases,
             preliminaryEligibleAssociatedValueCases: eligibleAssociatedCases,
             preliminaryEligibleAssociatedValueParameters: eligibleAssociatedParameters,

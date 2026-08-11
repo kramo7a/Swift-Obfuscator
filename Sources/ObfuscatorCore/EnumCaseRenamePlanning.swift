@@ -48,15 +48,15 @@ enum EnumCaseRenamePlanning {
         sourceCache: SourceFileCache
     ) -> EnumCaseRenamePlanningResult {
         let eligibleCaseUSRs = Set(
-            facts.components.filter(\.isPreliminaryEligible).flatMap { component in
-                component.members.map(\.caseUSR)
+            facts.components.flatMap { component in
+                component.preliminaryEligibleMembers.map(\.caseUSR)
             }
         )
         var componentTemplates: [EnumCaseOwnerRenameTemplate] = []
         var denied: [SafetyDecision] = []
 
         for component in facts.components {
-            guard component.isPreliminaryEligible else {
+            guard component.blockers.isEmpty else {
                 denied.append(contentsOf: denialDecisions(
                     component: component,
                     groupsByUSR: groupsByUSR,
@@ -65,9 +65,25 @@ enum EnumCaseRenamePlanning {
                 continue
             }
 
+            let blockedMembers = component.members.filter {
+                !$0.isPreliminaryEligible
+            }
+            for member in blockedMembers {
+                denied.append(contentsOf: denialDecisions(
+                    component: component,
+                    members: [member],
+                    groupsByUSR: groupsByUSR,
+                    reasons: member.blockers.map { "enum case blocker: \($0.rawValue)" }
+                ))
+            }
+            let candidateMembers = component.preliminaryEligibleMembers
+            guard !candidateMembers.isEmpty else {
+                continue
+            }
+
             var failures: Set<String> = []
             var memberTemplates: [EnumCaseMemberRenameTemplate] = []
-            for member in component.members {
+            for member in candidateMembers {
                 guard let group = groupsByUSR[member.caseUSR] else {
                     failures.insert("enum case occurrence group unavailable: \(member.caseUSR)")
                     continue
@@ -147,12 +163,13 @@ enum EnumCaseRenamePlanning {
                 ))
             }
 
-            if memberTemplates.count != component.members.count {
-                failures.insert("enum owner component is missing one or more member templates")
+            if memberTemplates.count != candidateMembers.count {
+                failures.insert("enum owner candidate subset is missing one or more member templates")
             }
             guard failures.isEmpty else {
                 denied.append(contentsOf: denialDecisions(
                     component: component,
+                    members: candidateMembers,
                     groupsByUSR: groupsByUSR,
                     reasons: failures.sorted()
                 ))
@@ -172,12 +189,17 @@ enum EnumCaseRenamePlanning {
 
     static func denialDecisions(
         component: EnumCaseOwnerSyntaxComponent,
+        members selectedMembers: [EnumCaseMemberSyntaxFact]? = nil,
         groupsByUSR: [String: USROccurrenceGroup],
         reasons: [String]
     ) -> [SafetyDecision] {
-        let componentReason = "enum case owner component \(component.ownerUSR) denied atomically: "
+        let members = selectedMembers ?? component.members
+        let scope = members.count == component.members.count
+            ? "enum case owner component \(component.ownerUSR) denied atomically"
+            : "enum case candidate subset in owner \(component.ownerUSR) denied atomically"
+        let componentReason = scope + ": "
             + (reasons.isEmpty ? "unspecified safety failure" : reasons.joined(separator: "; "))
-        return component.members.map { member in
+        return members.map { member in
             let group = groupsByUSR[member.caseUSR]
             return SafetyDecision(
                 usr: member.caseUSR,

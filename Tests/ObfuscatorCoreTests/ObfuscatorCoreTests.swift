@@ -7923,8 +7923,11 @@ import Testing
     let reflectedFacts = try #require(
         facts.components.first { $0.ownerUSR == reflected.usr }
     )
-    #expect(reflectedFacts.blockers.contains(.stringLiteralSpelling))
     #expect(reflectedFacts.blockers.contains(.directStringInterpolation))
+    let loggedFacts = try #require(
+        reflectedFacts.members.first { $0.caseUSR == logged.usr }
+    )
+    #expect(loggedFacts.blockers == [.stringLiteralSpelling])
 
     let visibleFacts = try #require(facts.components.first { $0.ownerUSR == visible.usr })
     #expect(visibleFacts.accessLevel == .public)
@@ -8216,7 +8219,7 @@ import Testing
     )
 }
 
-@Test func enumCasePlannerRenamesExactCaseTokensAndDeniesOwnersAtomically() throws {
+@Test func enumCasePlannerKeepsStringMatchedCaseDeniedWithoutBlockingSafeSibling() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -8238,8 +8241,11 @@ import Testing
         "private enum Blocked {",
         "    case logged",
         "    case queued(value: Int)",
+        "    static func sample() -> Self {",
+        "        .queued(value: 2)",
+        "    }",
         "}",
-        "private let blockedWire = \"queued\""
+        "private let blockedWire = \"logged\""
     ].joined(separator: "\n") + "\n"
     try source.write(to: file, atomically: true, encoding: .utf8)
 
@@ -8264,6 +8270,7 @@ import Testing
     let blocked = symbol("s:planner-blocked", "Blocked", "enum")
     let logged = symbol("s:planner-blocked-logged", "logged", "enumConstant")
     let queued = symbol("s:planner-blocked-queued", "queued(value:)", "enumConstant")
+    let blockedValue = symbol("s:planner-blocked-queued-value", "value", "parameter")
 
     let occurrences = [
         testOccurrence(safe, path: file.path, line: 1, token: "Safe", roles: ["definition"]),
@@ -8276,11 +8283,13 @@ import Testing
         testOccurrence(idle, path: file.path, line: 9, token: "idle", roles: ["reference"]),
         testOccurrence(blocked, path: file.path, line: 13, token: "Blocked", roles: ["definition"]),
         testOccurrence(logged, path: file.path, line: 14, token: "logged", roles: ["definition"], relations: [childOf(blocked)]),
-        testOccurrence(queued, path: file.path, line: 15, token: "queued", roles: ["definition"], relations: [childOf(blocked)])
+        testOccurrence(queued, path: file.path, line: 15, token: "queued", roles: ["definition"], relations: [childOf(blocked)]),
+        testOccurrence(blockedValue, path: file.path, line: 15, token: "value", roles: ["definition"], relations: [childOf(queued)]),
+        testOccurrence(queued, path: file.path, line: 17, token: "queued", roles: ["reference", "call"])
     ]
     let snapshot = IndexSnapshot(
         sourceFiles: [file.path],
-        symbols: [safe, idle, payload, value, blocked, logged, queued],
+        symbols: [safe, idle, payload, value, blocked, logged, queued, blockedValue],
         occurrences: occurrences
     )
     let cache = try SourceFileCache(paths: [file.path])
@@ -8297,10 +8306,20 @@ import Testing
     #expect(safeEntries.flatMap(\.replacements).count == 6)
     let valueEntry = try #require(plan.entries.first { $0.usr == value.usr })
     #expect(valueEntry.replacements.count == 2)
+    let queuedEntry = try #require(plan.entries.first { $0.usr == queued.usr })
+    let blockedValueEntry = try #require(plan.entries.first { $0.usr == blockedValue.usr })
+    #expect(queuedEntry.replacements.count == 2)
+    #expect(blockedValueEntry.replacements.count == 2)
     #expect(plan.parameterCallSiteSyntaxFacts.resolvedEnumCasePatterns == 1)
-    #expect(!plan.entries.contains { [logged.usr, queued.usr].contains($0.usr) })
-    #expect(plan.denied.filter { [logged.usr, queued.usr].contains($0.usr) }.count == 2)
-    #expect(plan.denied.filter { [logged.usr, queued.usr].contains($0.usr) }.allSatisfy {
+    #expect(!plan.entries.contains { $0.usr == logged.usr })
+    let loggedDenial = try #require(plan.denied.first { $0.usr == logged.usr })
+    #expect(
+        loggedDenial.reasons.contains { reason in
+            reason.contains("candidate subset") && reason.contains("stringLiteralSpelling")
+        }
+    )
+    #expect(!plan.denied.contains { $0.usr == queued.usr || $0.usr == blockedValue.usr })
+    #expect(plan.denied.filter { $0.usr == logged.usr }.allSatisfy {
         $0.reasons.contains { reason in
             reason.contains("denied atomically") && reason.contains("stringLiteralSpelling")
         }
@@ -8316,8 +8335,9 @@ import Testing
     #expect(patched.contains(".\(payloadEntry.newName)(\(valueEntry.newName): 1)"))
     #expect(patched.contains("case .\(payloadEntry.newName):"))
     #expect(patched.contains("case logged"))
-    #expect(patched.contains("case queued(value: Int)"))
-    #expect(patched.contains("\"queued\""))
+    #expect(patched.contains("case \(queuedEntry.newName)(\(blockedValueEntry.newName): Int)"))
+    #expect(patched.contains(".\(queuedEntry.newName)(\(blockedValueEntry.newName): 2)"))
+    #expect(patched.contains("\"logged\""))
     _ = try CommandRunner().run(
         executable: "/usr/bin/xcrun",
         arguments: ["swiftc", "-typecheck", file.path]
