@@ -58,6 +58,21 @@ public struct ParameterRenameComponent: Hashable, Sendable {
         structuralReasons.isEmpty
             && members.allSatisfy { $0.externalLabel != .unavailable }
     }
+
+    /// Enum associated-value labels occur both in constructor calls and in
+    /// switch/catch patterns. IndexStore marks the latter as non-call
+    /// references even though SwiftSyntax represents their argument list with
+    /// the same `FunctionCallExprSyntax` shape. Ordinary callables keep their
+    /// function-reference anchors in the separate callable-reference stage.
+    var externalLabelArgumentLocations: [IndexedSourceLocation] {
+        let locations = ownerCategory == .enumCase
+            ? callLocations + nonCallReferenceLocations
+            : callLocations
+        return Array(Set(locations)).sorted {
+            ($0.path, $0.line, $0.utf8Column)
+                < ($1.path, $1.line, $1.utf8Column)
+        }
+    }
 }
 
 public struct ParameterFactsSummary: Codable, Equatable, Sendable {

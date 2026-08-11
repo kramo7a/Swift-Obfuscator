@@ -30,6 +30,7 @@ public struct ParameterCallSiteSyntaxRoles: Hashable, Sendable {
     public let callByteRange: Range<Int>
     public let calleeByteRange: Range<Int>
     public let hasExplicitArgumentDelimiters: Bool
+    public let allowsOmittedNamedLabels: Bool
     public let arguments: [ParameterCallArgumentSyntaxRole]
 }
 
@@ -131,9 +132,11 @@ public struct ParameterCallSiteSyntaxFactsSummary: Codable, Equatable, Sendable 
         }
 
         let resolvedAnchors = Set(rolesByAnchor.keys)
-        let componentsWithCalls = components.filter { !$0.callLocations.isEmpty }
+        let componentsWithCalls = components.filter {
+            !$0.externalLabelArgumentLocations.isEmpty
+        }
         let fullyResolvedComponents = componentsWithCalls.filter { component in
-            component.callLocations.allSatisfy { location in
+            component.externalLabelArgumentLocations.allSatisfy { location in
                 resolvedAnchors.contains(ParameterCallSiteAnchor(
                     callableUSR: component.callableUSR,
                     location: location
@@ -144,7 +147,9 @@ public struct ParameterCallSiteSyntaxFactsSummary: Codable, Equatable, Sendable 
         self.namedParametersInComponentsWithAllIndexedCallsResolved = fullyResolvedComponents
             .reduce(0) { $0 + namedParameterCount($1) }
 
-        let componentsWithoutCalls = components.filter(\.callLocations.isEmpty)
+        let componentsWithoutCalls = components.filter {
+            $0.externalLabelArgumentLocations.isEmpty
+        }
         self.componentsWithoutIndexedCalls = componentsWithoutCalls.count
         self.namedParametersInComponentsWithoutIndexedCalls = componentsWithoutCalls
             .reduce(0) { $0 + namedParameterCount($1) }
@@ -188,16 +193,15 @@ public struct ParameterCallSiteSyntaxFacts: Sendable {
         sourceCache: SourceFileCache
     ) {
         let targetComponents = components.filter { component in
-            component.ownerCategory != .enumCase
-                && component.members.contains { member in
-                    if case .named = member.externalLabel {
-                        return true
-                    }
-                    return false
+            component.members.contains { member in
+                if case .named = member.externalLabel {
+                    return true
                 }
+                return false
+            }
         }
         let anchors = Set(targetComponents.flatMap { component in
-            component.callLocations.map {
+            component.externalLabelArgumentLocations.map {
                 ParameterCallSiteAnchor(callableUSR: component.callableUSR, location: $0)
             }
         })
@@ -262,6 +266,8 @@ public struct ParameterCallSiteSyntaxFacts: Sendable {
                 calleeByteRange: match.candidate.calleeByteRange,
                 hasExplicitArgumentDelimiters:
                     match.candidate.hasExplicitArgumentDelimiters,
+                allowsOmittedNamedLabels:
+                    match.candidate.allowsOmittedNamedLabels,
                 arguments: match.candidate.arguments
             )
         }
@@ -299,6 +305,7 @@ private struct CallSyntaxCandidate {
     let calleeByteRange: Range<Int>
     let anchorByteRanges: [Range<Int>]
     let hasExplicitArgumentDelimiters: Bool
+    let allowsOmittedNamedLabels: Bool
     let arguments: [ParameterCallArgumentSyntaxRole]
     let structuralReasons: [String]
 }
@@ -324,6 +331,7 @@ private final class ParameterCallSyntaxVisitor: SyntaxVisitor {
             calleeByteRange: syntaxRange(node.calledExpression),
             anchorByteRanges: [syntaxRange(node.calledExpression)],
             hasExplicitArgumentDelimiters: node.leftParen != nil && node.rightParen != nil,
+            allowsOmittedNamedLabels: isInsideExpressionPattern(node),
             arguments: arguments.roles,
             structuralReasons: arguments.reasons
         ))
@@ -345,6 +353,7 @@ private final class ParameterCallSyntaxVisitor: SyntaxVisitor {
                 syntaxRange(node.leftSquare)
             ],
             hasExplicitArgumentDelimiters: true,
+            allowsOmittedNamedLabels: false,
             arguments: arguments.roles,
             structuralReasons: arguments.reasons
         ))
@@ -367,6 +376,7 @@ private final class ParameterCallSyntaxVisitor: SyntaxVisitor {
             calleeByteRange: syntaxRange(node.attributeName),
             anchorByteRanges: [syntaxRange(node.attributeName)],
             hasExplicitArgumentDelimiters: node.leftParen != nil && node.rightParen != nil,
+            allowsOmittedNamedLabels: false,
             arguments: arguments.roles,
             structuralReasons: arguments.reasons
         ))
@@ -407,6 +417,17 @@ private final class ParameterCallSyntaxVisitor: SyntaxVisitor {
     private func syntaxRange(_ node: some SyntaxProtocol) -> Range<Int> {
         node.positionAfterSkippingLeadingTrivia.utf8Offset
             ..< node.endPositionBeforeTrailingTrivia.utf8Offset
+    }
+
+    private func isInsideExpressionPattern(_ node: some SyntaxProtocol) -> Bool {
+        var ancestor = Syntax(node).parent
+        while let current = ancestor {
+            if current.as(ExpressionPatternSyntax.self) != nil {
+                return true
+            }
+            ancestor = current.parent
+        }
+        return false
     }
 
     private func sourceToken(_ token: TokenSyntax) -> SourceTokenRange? {

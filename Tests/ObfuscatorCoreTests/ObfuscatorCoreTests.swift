@@ -7917,7 +7917,7 @@ import Testing
     #expect(conformingFacts.blockers.contains(.protocolConformance))
 }
 
-@Test func enumCasePlannerRenamesClosedInternalCaseTokensWithoutChangingAssociatedLabels() throws {
+@Test func enumCasePlannerCoordinatesInternalAssociatedLabelsWithoutRenamingPatternBindings() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -7947,6 +7947,12 @@ import Testing
         "func payloadValue(_ input: InternalPayload) -> Int {",
         "    switch input {",
         "    case .payload(let value):",
+        "        value",
+        "    }",
+        "}",
+        "func labeledPayloadValue(_ input: InternalPayload) -> Int {",
+        "    switch input {",
+        "    case .payload(value: let value):",
         "        value",
         "    }",
         "}"
@@ -8094,6 +8100,20 @@ import Testing
             line: 8,
             token: "payload",
             roles: ["reference"]
+        ),
+        testOccurrence(
+            payloadOwner,
+            path: usesFile.path,
+            line: 12,
+            token: "InternalPayload",
+            roles: ["reference"]
+        ),
+        testOccurrence(
+            payload,
+            path: usesFile.path,
+            line: 14,
+            token: "payload",
+            roles: ["reference"]
         )
     ]
     let snapshot = IndexSnapshot(
@@ -8115,8 +8135,10 @@ import Testing
         [idle.usr, ready.usr, payload.usr].contains($0.usr)
     }
     #expect(internalEntries.count == 3)
-    #expect(internalEntries.flatMap(\.replacements).count == 7)
-    #expect(!plan.entries.contains { $0.usr == value.usr || $0.usr == visible.usr })
+    #expect(internalEntries.flatMap(\.replacements).count == 8)
+    let valueEntry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(valueEntry.replacements.count == 3)
+    #expect(!plan.entries.contains { $0.usr == visible.usr })
     #expect(plan.denied.first { $0.usr == visible.usr }?.reasons.contains { reason in
         reason.contains("nonFileScopedAccess")
     } == true)
@@ -8133,9 +8155,10 @@ import Testing
         #expect(patchedDeclarations.contains("case \(entry.newName)"))
         #expect(patchedUses.contains(".\(entry.newName)"))
     }
-    #expect(patchedDeclarations.contains("(value: Int)"))
-    #expect(patchedUses.contains("(value: 1)"))
+    #expect(patchedDeclarations.contains("(\(valueEntry.newName): Int)"))
+    #expect(patchedUses.contains("(\(valueEntry.newName): 1)"))
     #expect(patchedUses.contains("(let value)"))
+    #expect(patchedUses.contains("(\(valueEntry.newName): let value)"))
     #expect(patchedDeclarations.contains("case visible"))
     _ = try CommandRunner().run(
         executable: "/usr/bin/xcrun",

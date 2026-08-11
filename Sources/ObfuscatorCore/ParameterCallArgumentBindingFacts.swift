@@ -61,7 +61,7 @@ public struct ParameterCallArgumentBindingFactsSummary: Codable, Equatable, Send
             }
         }
         let allAnchors = Set(components.flatMap { component in
-            component.callLocations.map {
+            component.externalLabelArgumentLocations.map {
                 ParameterCallSiteAnchor(callableUSR: component.callableUSR, location: $0)
             }
         })
@@ -88,9 +88,11 @@ public struct ParameterCallArgumentBindingFactsSummary: Codable, Equatable, Send
         }
 
         let resolvedAnchors = Set(bindingsByAnchor.keys)
-        let componentsWithCalls = components.filter { !$0.callLocations.isEmpty }
+        let componentsWithCalls = components.filter {
+            !$0.externalLabelArgumentLocations.isEmpty
+        }
         let fullyBoundComponents = componentsWithCalls.filter { component in
-            component.callLocations.allSatisfy { location in
+            component.externalLabelArgumentLocations.allSatisfy { location in
                 resolvedAnchors.contains(ParameterCallSiteAnchor(
                     callableUSR: component.callableUSR,
                     location: location
@@ -101,7 +103,9 @@ public struct ParameterCallArgumentBindingFactsSummary: Codable, Equatable, Send
         self.namedParametersInComponentsWithAllIndexedCallsBound = fullyBoundComponents
             .reduce(0) { $0 + namedParameterCount($1) }
 
-        let componentsWithoutCalls = components.filter(\.callLocations.isEmpty)
+        let componentsWithoutCalls = components.filter {
+            $0.externalLabelArgumentLocations.isEmpty
+        }
         self.componentsWithoutIndexedCalls = componentsWithoutCalls.count
         self.namedParametersInComponentsWithoutIndexedCalls = componentsWithoutCalls
             .reduce(0) { $0 + namedParameterCount($1) }
@@ -142,13 +146,12 @@ public struct ParameterCallArgumentBindingFacts: Sendable {
         callSiteSyntaxFacts: ParameterCallSiteSyntaxFacts
     ) {
         let targetComponents = components.filter { component in
-            component.ownerCategory != .enumCase
-                && component.members.contains { member in
-                    if case .named = member.externalLabel {
-                        return true
-                    }
-                    return false
+            component.members.contains { member in
+                if case .named = member.externalLabel {
+                    return true
                 }
+                return false
+            }
         }
         var bindingsByAnchor: [ParameterCallSiteAnchor: ParameterCallArgumentBindings] = [:]
         var unresolvedReasonsByAnchor: [ParameterCallSiteAnchor: String] = [:]
@@ -158,7 +161,7 @@ public struct ParameterCallArgumentBindingFacts: Sendable {
                 component: component,
                 parameterRolesByUSR: parameterRolesByUSR
             )
-            for location in component.callLocations {
+            for location in component.externalLabelArgumentLocations {
                 let anchor = ParameterCallSiteAnchor(
                     callableUSR: component.callableUSR,
                     location: location
@@ -178,7 +181,8 @@ public struct ParameterCallArgumentBindingFacts: Sendable {
 
                 switch ParameterArgumentOrdinalMatcher.assignment(
                     arguments: callRoles.arguments,
-                    parameters: parameters
+                    parameters: parameters,
+                    allowsOmittedNamedLabels: callRoles.allowsOmittedNamedLabels
                 ) {
                 case .unique(let ordinals):
                     let bindings = zip(callRoles.arguments.indices, ordinals).map {

@@ -203,6 +203,11 @@ public struct RenamePlanner {
         let enumCaseUSRs = Set(
             enumCaseSyntaxFacts.components.flatMap { $0.members.map(\.caseUSR) }
         )
+        let eligibleEnumCaseUSRs = Set(
+            enumCaseSyntaxFacts.components.filter(\.isPreliminaryEligible).flatMap {
+                $0.members.map(\.caseUSR)
+            }
+        )
         let enumCaseOwnerComponentByCaseUSR = Dictionary(
             uniqueKeysWithValues: enumCaseSyntaxFacts.components.flatMap { component in
                 component.members.map { ($0.caseUSR, component) }
@@ -245,7 +250,8 @@ public struct RenamePlanner {
             indexedFacts: indexedFacts,
             parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
             callBindingFacts: parameterCallArgumentBindingFacts,
-            callableReferenceBindingFacts: parameterCallableReferenceBindingFacts
+            callableReferenceBindingFacts: parameterCallableReferenceBindingFacts,
+            eligibleEnumCaseUSRs: eligibleEnumCaseUSRs
         )
         let externalLabelParameterUSRs = Set(
             parameterExternalLabelComponentFacts.components.flatMap(\.namedParameterUSRs)

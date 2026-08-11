@@ -60,7 +60,8 @@ enum ParameterArgumentOrdinalMatcher {
 
     static func assignment(
         arguments: [ParameterCallArgumentSyntaxRole],
-        parameters: [ParameterOrdinalMatchParameter]
+        parameters: [ParameterOrdinalMatchParameter],
+        allowsOmittedNamedLabels: Bool = false
     ) -> ParameterOrdinalAssignmentResult {
         var solutions: [[Int]] = []
         var current: [Int] = []
@@ -105,7 +106,8 @@ enum ParameterArgumentOrdinalMatcher {
                 guard argument(
                     arguments[argumentIndex],
                     matches: parameters[ordinal],
-                    repeatsVariadic: repeatsVariadic
+                    repeatsVariadic: repeatsVariadic,
+                    allowsOmittedNamedLabels: allowsOmittedNamedLabels
                 ) else {
                     continue
                 }
@@ -170,7 +172,8 @@ enum ParameterArgumentOrdinalMatcher {
     private static func argument(
         _ argument: ParameterCallArgumentSyntaxRole,
         matches parameter: ParameterOrdinalMatchParameter,
-        repeatsVariadic: Bool
+        repeatsVariadic: Bool,
+        allowsOmittedNamedLabels: Bool
     ) -> Bool {
         if repeatsVariadic {
             guard parameter.isVariadic else {
@@ -192,7 +195,8 @@ enum ParameterArgumentOrdinalMatcher {
             case .omitted:
                 return label == nil
             case .named(let name):
-                return label?.name == name
+                return label == nil && allowsOmittedNamedLabels
+                    || label?.name == name
             case .unavailable:
                 return false
             }

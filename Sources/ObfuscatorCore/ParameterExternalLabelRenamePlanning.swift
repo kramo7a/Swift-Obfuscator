@@ -251,7 +251,7 @@ enum ParameterExternalLabelRenamePlanning {
         failures: inout Set<String>
     ) {
         for callable in component.sourceCallableComponents {
-            for location in callable.callLocations {
+            for location in callable.externalLabelArgumentLocations {
                 let anchor = ParameterCallSiteAnchor(
                     callableUSR: callable.callableUSR,
                     location: location
@@ -291,6 +291,9 @@ enum ParameterExternalLabelRenamePlanning {
         failures: inout Set<String>
     ) {
         for callable in component.sourceCallableComponents {
+            guard callable.ownerCategory != .enumCase else {
+                continue
+            }
             for location in callable.nonCallReferenceLocations {
                 let anchor = ParameterCallableReferenceAnchor(
                     callableUSR: callable.callableUSR,

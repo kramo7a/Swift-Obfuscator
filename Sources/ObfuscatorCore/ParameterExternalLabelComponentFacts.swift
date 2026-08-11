@@ -14,6 +14,7 @@ public enum ParameterExternalLabelComponentBlocker: String, Codable, Hashable, S
     case incompleteCallBindings
     case incompleteCallableReferenceBindings
     case inconsistentRelatedSignature
+    case enumCaseOwnerComponentDenied
 }
 
 public struct ParameterExternalLabelOrdinalComponent: Sendable {
@@ -252,11 +253,10 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
         indexedFacts: IndexedSemanticFacts,
         parameterRolesByUSR: [String: ParameterDeclarationSyntaxRoles],
         callBindingFacts: ParameterCallArgumentBindingFacts,
-        callableReferenceBindingFacts: ParameterCallableReferenceBindingFacts
+        callableReferenceBindingFacts: ParameterCallableReferenceBindingFacts,
+        eligibleEnumCaseUSRs: Set<String> = []
     ) {
-        let callableComponents = indexedFacts.parameterRenameComponents.filter {
-            $0.ownerCategory != .enumCase
-        }
+        let callableComponents = indexedFacts.parameterRenameComponents
         let componentsByCallableUSR = Dictionary(
             uniqueKeysWithValues: callableComponents.map { ($0.callableUSR, $0) }
         )
@@ -286,7 +286,8 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
                 indexedFacts: indexedFacts,
                 parameterRolesByUSR: parameterRolesByUSR,
                 callBindingFacts: callBindingFacts,
-                callableReferenceBindingFacts: callableReferenceBindingFacts
+                callableReferenceBindingFacts: callableReferenceBindingFacts,
+                eligibleEnumCaseUSRs: eligibleEnumCaseUSRs
             ))
         }
 
@@ -322,7 +323,8 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
         indexedFacts: IndexedSemanticFacts,
         parameterRolesByUSR: [String: ParameterDeclarationSyntaxRoles],
         callBindingFacts: ParameterCallArgumentBindingFacts,
-        callableReferenceBindingFacts: ParameterCallableReferenceBindingFacts
+        callableReferenceBindingFacts: ParameterCallableReferenceBindingFacts,
+        eligibleEnumCaseUSRs: Set<String>
     ) -> ParameterExternalLabelRenameComponent {
         var blockers: Set<ParameterExternalLabelComponentBlocker> = []
         var details: Set<String> = []
@@ -352,6 +354,14 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
         }
 
         for component in sourceComponents {
+            if component.ownerCategory == .enumCase,
+               !eligibleEnumCaseUSRs.contains(component.callableUSR) {
+                blockers.insert(.enumCaseOwnerComponentDenied)
+                details.insert(
+                    "enum case owner component is not eligible for coordinated renaming: "
+                        + component.callableUSR
+                )
+            }
             if !component.isStructurallyComplete {
                 blockers.insert(.incompleteParameterStructure)
                 for reason in component.structuralReasons {
@@ -370,7 +380,7 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
                 blockers.insert(.externallyOwned)
                 details.insert("externally owned source callable: \(component.callableUSR)")
             }
-            if !component.callLocations.allSatisfy({ location in
+            if !component.externalLabelArgumentLocations.allSatisfy({ location in
                 callBindingFacts.bindingsByAnchor[ParameterCallSiteAnchor(
                     callableUSR: component.callableUSR,
                     location: location
@@ -379,7 +389,8 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
                 blockers.insert(.incompleteCallBindings)
                 details.insert("one or more call anchors are not ordinal-bound: \(component.callableUSR)")
             }
-            if !component.nonCallReferenceLocations.allSatisfy({ location in
+            if component.ownerCategory != .enumCase,
+               !component.nonCallReferenceLocations.allSatisfy({ location in
                 callableReferenceBindingFacts.bindingsByAnchor[
                     ParameterCallableReferenceAnchor(
                         callableUSR: component.callableUSR,
