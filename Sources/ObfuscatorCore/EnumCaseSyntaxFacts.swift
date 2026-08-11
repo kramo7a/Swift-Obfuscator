@@ -24,6 +24,7 @@ public enum EnumCaseSyntaxBlocker: String, Codable, Hashable, Sendable {
     case externalOwner
     case occurrenceLeavesSelectedRoots
     case nonFileScopedAccess
+    case internalAssociatedValueComponent
     case declarationAttribute
     case stringLiteralSpelling
     case directStringInterpolation
@@ -354,7 +355,14 @@ public struct EnumCaseSyntaxFacts: Sendable {
             blockers.insert(.unresolvedDeclarationSyntax)
             return blockers
         }
-        if !ownerCandidate.accessLevel.isFileScoped { blockers.insert(.nonFileScopedAccess) }
+        if !ownerCandidate.accessLevel.isFileScoped
+            && ownerCandidate.accessLevel != .internal {
+            blockers.insert(.nonFileScopedAccess)
+        }
+        if ownerCandidate.accessLevel == .internal
+            && semanticComponent.members.contains(where: \.hasAssociatedValues) {
+            blockers.insert(.internalAssociatedValueComponent)
+        }
         if !ownerCandidate.attributes.isEmpty { blockers.insert(.declarationAttribute) }
         for member in members {
             guard let declarationToken = member.declarationToken else {

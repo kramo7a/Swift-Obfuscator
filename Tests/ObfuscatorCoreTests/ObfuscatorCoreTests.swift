@@ -7917,6 +7917,194 @@ import Testing
     #expect(conformingFacts.blockers.contains(.protocolConformance))
 }
 
+@Test func enumCasePlannerRenamesClosedInternalSimpleCasesAcrossFiles() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let declarationsFile = directory.appendingPathComponent("Declarations.swift")
+    let declarations = [
+        "enum InternalState {",
+        "    case idle",
+        "    case ready",
+        "}",
+        "enum InternalPayload {",
+        "    case payload(value: Int)",
+        "}",
+        "public enum PublicState {",
+        "    case visible",
+        "}"
+    ]
+    try (declarations.joined(separator: "\n") + "\n")
+        .write(to: declarationsFile, atomically: true, encoding: .utf8)
+    let usesFile = directory.appendingPathComponent("Uses.swift")
+    let uses = [
+        "func nextState() -> InternalState {",
+        "    .ready",
+        "}",
+        "let state = InternalState.idle"
+    ]
+    try (uses.joined(separator: "\n") + "\n")
+        .write(to: usesFile, atomically: true, encoding: .utf8)
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])
+    }
+
+    let internalOwner = symbol("s:internal-state", "InternalState", "enum")
+    let idle = symbol("s:internal-state-idle", "idle", "enumConstant")
+    let ready = symbol("s:internal-state-ready", "ready", "enumConstant")
+    let payloadOwner = symbol("s:internal-payload", "InternalPayload", "enum")
+    let payload = symbol("s:internal-payload-case", "payload(value:)", "enumConstant")
+    let value = symbol("s:internal-payload-value", "value", "parameter")
+    let publicOwner = symbol("s:public-state", "PublicState", "enum")
+    let visible = symbol("s:public-state-visible", "visible", "enumConstant")
+
+    let occurrences = [
+        testOccurrence(
+            internalOwner,
+            path: declarationsFile.path,
+            line: 1,
+            token: "InternalState",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            idle,
+            path: declarationsFile.path,
+            line: 2,
+            token: "idle",
+            roles: ["definition"],
+            relations: [childOf(internalOwner)]
+        ),
+        testOccurrence(
+            ready,
+            path: declarationsFile.path,
+            line: 3,
+            token: "ready",
+            roles: ["definition"],
+            relations: [childOf(internalOwner)]
+        ),
+        testOccurrence(
+            payloadOwner,
+            path: declarationsFile.path,
+            line: 5,
+            token: "InternalPayload",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            payload,
+            path: declarationsFile.path,
+            line: 6,
+            token: "payload",
+            roles: ["definition"],
+            relations: [childOf(payloadOwner)]
+        ),
+        testOccurrence(
+            value,
+            path: declarationsFile.path,
+            line: 6,
+            token: "value",
+            roles: ["definition"],
+            relations: [childOf(payload)]
+        ),
+        testOccurrence(
+            publicOwner,
+            path: declarationsFile.path,
+            line: 8,
+            token: "PublicState",
+            roles: ["definition"]
+        ),
+        testOccurrence(
+            visible,
+            path: declarationsFile.path,
+            line: 9,
+            token: "visible",
+            roles: ["definition"],
+            relations: [childOf(publicOwner)]
+        ),
+        testOccurrence(
+            internalOwner,
+            path: usesFile.path,
+            line: 1,
+            token: "InternalState",
+            roles: ["reference"]
+        ),
+        testOccurrence(
+            ready,
+            path: usesFile.path,
+            line: 2,
+            token: "ready",
+            roles: ["reference"]
+        ),
+        testOccurrence(
+            internalOwner,
+            path: usesFile.path,
+            line: 4,
+            token: "InternalState",
+            roles: ["reference"]
+        ),
+        testOccurrence(
+            idle,
+            path: usesFile.path,
+            line: 4,
+            token: "idle",
+            roles: ["reference"]
+        )
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [declarationsFile.path, usesFile.path],
+        symbols: [
+            internalOwner, idle, ready,
+            payloadOwner, payload, value,
+            publicOwner, visible
+        ],
+        occurrences: occurrences
+    )
+    let cache = try SourceFileCache(paths: [declarationsFile.path, usesFile.path])
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        generator: NameGenerator(prefix: "Case")
+    )
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let internalEntries = plan.entries.filter { [idle.usr, ready.usr].contains($0.usr) }
+    #expect(internalEntries.count == 2)
+    #expect(internalEntries.flatMap(\.replacements).count == 4)
+    #expect(!plan.entries.contains { $0.usr == payload.usr || $0.usr == visible.usr })
+    #expect(plan.denied.first { $0.usr == payload.usr }?.reasons.contains { reason in
+        reason.contains("internalAssociatedValueComponent")
+    } == true)
+    #expect(plan.denied.first { $0.usr == visible.usr }?.reasons.contains { reason in
+        reason.contains("nonFileScopedAccess")
+    } == true)
+    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleOwnerComponents == 1)
+    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleCases == 2)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patchedDeclarations = try String(contentsOf: declarationsFile, encoding: .utf8)
+    let patchedUses = try String(contentsOf: usesFile, encoding: .utf8)
+    for entry in internalEntries {
+        #expect(patchedDeclarations.contains("case \(entry.newName)"))
+        #expect(patchedUses.contains(".\(entry.newName)"))
+    }
+    #expect(patchedDeclarations.contains("case payload(value: Int)"))
+    #expect(patchedDeclarations.contains("case visible"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", declarationsFile.path, usesFile.path]
+    )
+}
+
 @Test func enumCasePlannerRenamesExactCaseTokensAndDeniesOwnersAtomically() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
