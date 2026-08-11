@@ -8344,7 +8344,7 @@ import Testing
     )
 }
 
-@Test func enumCasePlannerPreservesExplicitRawValues() throws {
+@Test func enumCasePlannerRenamesExplicitRawCaseWithoutChangingImplicitSibling() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -8352,9 +8352,11 @@ import Testing
     let file = directory.appendingPathComponent("ExplicitRawEnum.swift")
     let source = [
         "private enum ExplicitWire: String {",
+        "    case implicit",
         "    case stable = \"wire_stable\"",
         "}",
-        "let rawValue = ExplicitWire.stable.rawValue"
+        "precondition(ExplicitWire.implicit.rawValue == [\"im\", \"plicit\"].joined())",
+        "precondition(ExplicitWire.stable.rawValue == \"wire_stable\")"
     ].joined(separator: "\n") + "\n"
     try source.write(to: file, atomically: true, encoding: .utf8)
 
@@ -8369,6 +8371,7 @@ import Testing
         )
     }
     let owner = symbol("s:explicit-wire", "ExplicitWire", "enum")
+    let implicit = symbol("s:explicit-wire-implicit", "implicit", "enumConstant")
     let stable = symbol("s:explicit-wire-stable", "stable", "enumConstant")
     let rawType = symbol("s:explicit-raw-type", "String", "struct")
     func relation(_ symbol: SymbolRecord, _ role: String) -> RelationRecord {
@@ -8377,7 +8380,7 @@ import Testing
 
     let snapshot = IndexSnapshot(
         sourceFiles: [file.path],
-        symbols: [owner, stable, rawType],
+        symbols: [owner, implicit, stable, rawType],
         occurrences: [
             testOccurrence(owner, path: file.path, line: 1, token: "ExplicitWire", roles: ["definition"]),
             testOccurrence(
@@ -8389,15 +8392,25 @@ import Testing
                 relations: [relation(owner, "baseOf")]
             ),
             testOccurrence(
-                stable,
+                implicit,
                 path: file.path,
                 line: 2,
+                token: "implicit",
+                roles: ["definition"],
+                relations: [relation(owner, "childOf")]
+            ),
+            testOccurrence(
+                stable,
+                path: file.path,
+                line: 3,
                 token: "stable",
                 roles: ["definition"],
                 relations: [relation(owner, "childOf")]
             ),
-            testOccurrence(owner, path: file.path, line: 4, token: "ExplicitWire", roles: ["reference"]),
-            testOccurrence(stable, path: file.path, line: 4, token: "stable", roles: ["reference"])
+            testOccurrence(owner, path: file.path, line: 5, token: "ExplicitWire", roles: ["reference"]),
+            testOccurrence(implicit, path: file.path, line: 5, token: "implicit", roles: ["reference"]),
+            testOccurrence(owner, path: file.path, line: 6, token: "ExplicitWire", roles: ["reference"]),
+            testOccurrence(stable, path: file.path, line: 6, token: "stable", roles: ["reference"])
         ]
     )
     let cache = try SourceFileCache(paths: [file.path])
@@ -8411,19 +8424,30 @@ import Testing
         plan.enumCaseSyntaxFacts.components.first { $0.ownerUSR == owner.usr }
     )
     #expect(component.blockers.isEmpty)
-    #expect(component.members.first?.hasExplicitRawValue == true)
+    let implicitFacts = try #require(component.members.first { $0.caseUSR == implicit.usr })
+    let stableFacts = try #require(component.members.first { $0.caseUSR == stable.usr })
+    #expect(!implicitFacts.hasExplicitRawValue)
+    #expect(implicitFacts.blockers == [.rawType])
+    #expect(stableFacts.hasExplicitRawValue)
+    #expect(stableFacts.blockers.isEmpty)
     let stableEntry = try #require(plan.entries.first { $0.usr == stable.usr })
     #expect(stableEntry.replacements.count == 2)
+    #expect(!plan.entries.contains { $0.usr == implicit.usr })
+    let implicitDenial = try #require(plan.denied.first { $0.usr == implicit.usr })
+    #expect(implicitDenial.reasons.contains { $0.contains("enum case blocker: rawType") })
     #expect(plan.conflicts.isEmpty)
 
     try SourcePatcher().apply(plan.replacements)
     let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("case implicit"))
     #expect(patched.contains("case \(stableEntry.newName) = \"wire_stable\""))
     #expect(!patched.contains("case stable"))
+    let executable = directory.appendingPathComponent("ExplicitRawEnum")
     _ = try CommandRunner().run(
         executable: "/usr/bin/xcrun",
-        arguments: ["swiftc", "-typecheck", file.path]
+        arguments: ["swiftc", file.path, "-o", executable.path]
     )
+    _ = try CommandRunner().run(executable: executable.path, arguments: [])
 }
 
 @Test func enumCasePlannerPreservesExplicitRawCodableWireValuesAndDeniesManualContracts() throws {
@@ -8518,8 +8542,16 @@ import Testing
         $0.ownerUSR == customFacts.ownerUSR
     })
     #expect(stableSyntax.blockers.isEmpty)
-    #expect(implicitSyntax.blockers.contains(.rawType))
+    #expect(!implicitSyntax.blockers.contains(.rawType))
     #expect(implicitSyntax.blockers.contains(.serializationContract))
+    let implicitFirstSyntax = try #require(implicitSyntax.members.first {
+        $0.declarationToken?.name == "first"
+    })
+    let implicitSecondSyntax = try #require(implicitSyntax.members.first {
+        $0.declarationToken?.name == "second"
+    })
+    #expect(implicitFirstSyntax.blockers.contains(.rawType))
+    #expect(!implicitSecondSyntax.blockers.contains(.rawType))
     #expect(customSyntax.blockers.contains(.serializationContract))
 
     let plannedUSRs = Set(plan.entries.map(\.usr))

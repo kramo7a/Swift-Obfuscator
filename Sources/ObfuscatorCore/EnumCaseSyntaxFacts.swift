@@ -304,17 +304,23 @@ public struct EnumCaseSyntaxFacts: Sendable {
                 }
                 let matchingStringLiteralTokens = caseCandidatesByUSR[semanticMember.usr]
                     .flatMap { literalTokensBySpelling[$0.token.name] } ?? []
+                let hasExplicitRawValue =
+                    caseCandidatesByUSR[semanticMember.usr]?.hasExplicitRawValue ?? false
+                var memberBlockers: Set<EnumCaseSyntaxBlocker> = []
+                if semanticComponent.hasRawType && !hasExplicitRawValue {
+                    memberBlockers.insert(.rawType)
+                }
+                if !matchingStringLiteralTokens.isEmpty {
+                    memberBlockers.insert(.stringLiteralSpelling)
+                }
                 members.append(EnumCaseMemberSyntaxFact(
                     caseUSR: semanticMember.usr,
                     declarationToken: caseCandidatesByUSR[semanticMember.usr]?.token,
-                    hasExplicitRawValue:
-                        caseCandidatesByUSR[semanticMember.usr]?.hasExplicitRawValue ?? false,
+                    hasExplicitRawValue: hasExplicitRawValue,
                     references: references,
                     unresolvedReferenceTokens: unresolvedReferenceTokens,
                     matchingStringLiteralTokens: matchingStringLiteralTokens,
-                    blockers: matchingStringLiteralTokens.isEmpty
-                        ? []
-                        : [.stringLiteralSpelling]
+                    blockers: memberBlockers.sorted { $0.rawValue < $1.rawValue }
                 ))
             }
             members.sort { $0.caseUSR < $1.caseUSR }
@@ -352,10 +358,6 @@ public struct EnumCaseSyntaxFacts: Sendable {
         members: [EnumCaseMemberSyntaxFact]
     ) -> Set<EnumCaseSyntaxBlocker> {
         var blockers: Set<EnumCaseSyntaxBlocker> = []
-        if semanticComponent.hasRawType
-            && !members.allSatisfy(\.hasExplicitRawValue) {
-            blockers.insert(.rawType)
-        }
         // A protocol conformance does not by itself make enum case spellings
         // requirements. IndexStoreDB marks the exceptional case-as-witness
         // declaration with an explicit overrideOf relation to the requirement.
