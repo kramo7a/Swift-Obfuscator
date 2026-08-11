@@ -22,6 +22,8 @@ public struct EnumCaseOwnerComponent: Codable, Equatable, Sendable {
     public let rawTypeUSRs: [String]
     public let protocolConformanceUSRs: [String]
     public let isSerializationSensitive: Bool
+    public let hasExplicitCodingKeys: Bool
+    public let hasCustomSerializationImplementation: Bool
     public let isRuntimeSensitive: Bool
     public let isExternallyOwned: Bool
     public let hasOccurrencesOutsideSelectedRoots: Bool
@@ -44,6 +46,10 @@ public struct EnumCaseOwnerComponent: Codable, Equatable, Sendable {
 
     public var hasProtocolCaseWitness: Bool {
         members.contains(where: \.isProtocolRequirementWitness)
+    }
+
+    public var hasManualSerializationContract: Bool {
+        hasExplicitCodingKeys || hasCustomSerializationImplementation
     }
 }
 
@@ -221,6 +227,10 @@ public struct EnumCaseComponentFacts: Sendable {
                 protocolConformanceUSRs: (protocolUSRsByOwner[ownerUSR] ?? []).sorted(),
                 isSerializationSensitive:
                     indexedFacts.serializationSensitiveOwnerUSRs.contains(ownerUSR),
+                hasExplicitCodingKeys:
+                    indexedFacts.explicitCodingKeysOwnerUSRs.contains(ownerUSR),
+                hasCustomSerializationImplementation:
+                    indexedFacts.customSerializationImplementationOwnerUSRs.contains(ownerUSR),
                 isRuntimeSensitive: !componentUSRs.isDisjoint(
                     with: indexedFacts.runtimeSensitiveUSRs
                 ),

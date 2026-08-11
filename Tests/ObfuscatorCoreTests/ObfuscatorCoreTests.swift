@@ -8406,6 +8406,123 @@ import Testing
     )
 }
 
+@Test func enumCasePlannerPreservesExplicitRawCodableWireValuesAndDeniesManualContracts() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("ExplicitRawCodable.swift")
+    let source = [
+        "import Foundation",
+        "private enum StableWire: String, Codable {",
+        "    case first = \"wire_first\"",
+        "    case second = \"wire_second\"",
+        "}",
+        "private enum ImplicitWire: String, Codable {",
+        "    case first",
+        "    case second = \"wire_second\"",
+        "}",
+        "private enum CustomWire: String, Codable {",
+        "    case visible = \"wire_visible\"",
+        "    case hidden = \"wire_hidden\"",
+        "    func encode(to encoder: Encoder) throws {",
+        "        var container = encoder.singleValueContainer()",
+        "        try container.encode(\"custom-\" + String(describing: self))",
+        "    }",
+        "    init(from decoder: Decoder) throws {",
+        "        let value = try decoder.singleValueContainer().decode(String.self)",
+        "        self = value == \"custom-visible\" ? .visible : .hidden",
+        "    }",
+        "}",
+        "let encoded = try JSONEncoder().encode(StableWire.first)",
+        "precondition(String(data: encoded, encoding: .utf8) == \"\\\"wire_first\\\"\")",
+        "private let decoded = try JSONDecoder().decode(",
+        "    StableWire.self,",
+        "    from: Data(\"\\\"wire_second\\\"\".utf8)",
+        ")",
+        "precondition(decoded == .second)"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    let store = directory.appendingPathComponent("IndexStore", isDirectory: true)
+    let database = directory.appendingPathComponent("IndexDatabase", isDirectory: true)
+    let beforeExecutable = directory.appendingPathComponent("Before")
+    let runner = CommandRunner(
+        logDirectory: directory.appendingPathComponent("logs", isDirectory: true)
+    )
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: [
+            "swiftc",
+            "-module-name", "ExplicitRawCodableFixture",
+            "-index-store-path", store.path,
+            file.path,
+            "-o", beforeExecutable.path
+        ]
+    )
+    _ = try runner.run(executable: beforeExecutable.path, arguments: [])
+
+    let snapshot = try IndexReader().read(
+        storePath: store,
+        databasePath: database,
+        sourceRoot: directory
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        generator: NameGenerator(prefix: "Case")
+    )
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    let stableFacts = try #require(plan.enumCaseComponentFacts.components.first {
+        $0.ownerName == "StableWire"
+    })
+    let implicitFacts = try #require(plan.enumCaseComponentFacts.components.first {
+        $0.ownerName == "ImplicitWire"
+    })
+    let customFacts = try #require(plan.enumCaseComponentFacts.components.first {
+        $0.ownerName == "CustomWire"
+    })
+    #expect(stableFacts.hasRawType)
+    #expect(stableFacts.isSerializationSensitive)
+    #expect(!stableFacts.hasManualSerializationContract)
+    #expect(customFacts.hasCustomSerializationImplementation)
+
+    let stableSyntax = try #require(plan.enumCaseSyntaxFacts.components.first {
+        $0.ownerUSR == stableFacts.ownerUSR
+    })
+    let implicitSyntax = try #require(plan.enumCaseSyntaxFacts.components.first {
+        $0.ownerUSR == implicitFacts.ownerUSR
+    })
+    let customSyntax = try #require(plan.enumCaseSyntaxFacts.components.first {
+        $0.ownerUSR == customFacts.ownerUSR
+    })
+    #expect(stableSyntax.blockers.isEmpty)
+    #expect(implicitSyntax.blockers.contains(.rawType))
+    #expect(implicitSyntax.blockers.contains(.serializationContract))
+    #expect(customSyntax.blockers.contains(.serializationContract))
+
+    let plannedUSRs = Set(plan.entries.map(\.usr))
+    #expect(Set(stableFacts.caseUSRs).isSubset(of: plannedUSRs))
+    #expect(Set(implicitFacts.caseUSRs).isDisjoint(with: plannedUSRs))
+    #expect(Set(customFacts.caseUSRs).isDisjoint(with: plannedUSRs))
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("= \"wire_first\""))
+    #expect(patched.contains("= \"wire_second\""))
+    #expect(patched.contains("case first\n"))
+    #expect(patched.contains("case visible = \"wire_visible\""))
+
+    let afterExecutable = directory.appendingPathComponent("After")
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", afterExecutable.path]
+    )
+    _ = try runner.run(executable: afterExecutable.path, arguments: [])
+}
+
 @Test func indexedEnumCaseProtocolWitnessRelationsAreExplicit() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

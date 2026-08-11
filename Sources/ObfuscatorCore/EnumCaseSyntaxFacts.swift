@@ -349,7 +349,11 @@ public struct EnumCaseSyntaxFacts: Sendable {
         if semanticComponent.hasProtocolCaseWitness {
             blockers.insert(.protocolConformance)
         }
-        if semanticComponent.isSerializationSensitive {
+        if semanticComponent.isSerializationSensitive
+            && !preservesSerializationSpelling(
+                semanticComponent: semanticComponent,
+                members: members
+            ) {
             blockers.insert(.serializationContract)
         }
         if semanticComponent.isRuntimeSensitive {
@@ -392,6 +396,20 @@ public struct EnumCaseSyntaxFacts: Sendable {
             }
         }
         return blockers
+    }
+
+    /// Raw-representable Codable enums encode their raw values, not their case
+    /// identifiers. Renaming is therefore safe only when every case already
+    /// has an explicit raw-value expression and IndexStoreDB finds no explicit
+    /// CodingKeys or custom Codable witness that could use another contract.
+    private static func preservesSerializationSpelling(
+        semanticComponent: EnumCaseOwnerComponent,
+        members: [EnumCaseMemberSyntaxFact]
+    ) -> Bool {
+        semanticComponent.hasRawType
+            && !semanticComponent.hasManualSerializationContract
+            && !members.isEmpty
+            && members.allSatisfy(\.hasExplicitRawValue)
     }
 
     private static func makeSummary(
