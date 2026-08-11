@@ -139,8 +139,6 @@ public struct EnumCaseSyntaxFacts: Sendable {
         )
         let ownerUSRs = Set(semanticFacts.components.map(\.ownerUSR))
         let caseUSRs = Set(semanticFacts.components.flatMap(\.caseUSRs))
-        let caseNames = Set(semanticFacts.components.flatMap { $0.members.map(\.name) })
-
         var visitorsByPath: [String: EnumCaseSyntaxVisitor] = [:]
         var literalTokensBySpelling: [String: [SourceTokenRange]] = [:]
         for path in sourceCache.allPaths {
@@ -148,7 +146,7 @@ public struct EnumCaseSyntaxFacts: Sendable {
                 continue
             }
             let tree = Parser.parse(source: String(decoding: source.data, as: UTF8.self))
-            let visitor = EnumCaseSyntaxVisitor(source: source, relevantCaseNames: caseNames)
+            let visitor = EnumCaseSyntaxVisitor(source: source)
             visitor.walk(tree)
             visitorsByPath[source.path] = visitor
             for token in visitor.matchingStringLiteralTokens {
@@ -299,8 +297,8 @@ public struct EnumCaseSyntaxFacts: Sendable {
                         caseCandidatesByUSR[semanticMember.usr]?.hasExplicitRawValue ?? false,
                     references: references,
                     unresolvedReferenceTokens: unresolvedReferenceTokens,
-                    matchingStringLiteralTokens:
-                        literalTokensBySpelling[semanticMember.name] ?? []
+                    matchingStringLiteralTokens: caseCandidatesByUSR[semanticMember.usr]
+                        .flatMap { literalTokensBySpelling[$0.token.name] } ?? []
                 ))
             }
             members.sort { $0.caseUSR < $1.caseUSR }
@@ -553,15 +551,13 @@ private struct EnumCaseReferenceSyntaxCandidate {
 
 private final class EnumCaseSyntaxVisitor: SyntaxVisitor {
     let source: SourceFile
-    let relevantCaseNames: Set<String>
     var ownerCandidatesByOffset: [Int: [EnumOwnerSyntaxCandidate]] = [:]
     var caseCandidatesByOffset: [Int: [EnumCaseSyntaxCandidate]] = [:]
     var referenceCandidatesByOffset: [Int: [EnumCaseReferenceSyntaxCandidate]] = [:]
     var matchingStringLiteralTokens: [SourceTokenRange] = []
 
-    init(source: SourceFile, relevantCaseNames: Set<String>) {
+    init(source: SourceFile) {
         self.source = source
-        self.relevantCaseNames = relevantCaseNames
         super.init(viewMode: .sourceAccurate)
     }
 
@@ -613,8 +609,7 @@ private final class EnumCaseSyntaxVisitor: SyntaxVisitor {
     override func visit(_ node: StringLiteralExprSyntax) -> SyntaxVisitorContinueKind {
         guard node.segments.count == 1,
               let segment = node.segments.first?.as(StringSegmentSyntax.self),
-              let token = rawToken(segment.content),
-              relevantCaseNames.contains(token.name) else {
+              let token = rawToken(segment.content) else {
             return .visitChildren
         }
         matchingStringLiteralTokens.append(token)

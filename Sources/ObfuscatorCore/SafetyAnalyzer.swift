@@ -57,7 +57,8 @@ public struct SafetyAnalyzer: Sendable {
         propertyWrapperSupportedUSRs: Set<String> = [],
         localBindingOnlyParameterUSRs: Set<String> = [],
         coordinatedExternalLabelParameterUSRs: Set<String> = [],
-        externalLabelOnlyParameterUSRs: Set<String> = []
+        externalLabelOnlyParameterUSRs: Set<String> = [],
+        coordinatedEnumCaseUSRs: Set<String> = []
     ) -> SafetyDecision {
         var reasons: [String] = []
         var tokenNames: Set<String> = []
@@ -79,7 +80,11 @@ public struct SafetyAnalyzer: Sendable {
             && coordinatedExternalLabelParameterUSRs.contains(group.usr)
         let isSupportedParameter = isSupportedLocalBindingParameter
             || isSupportedExternalLabelParameter
-        if !allowedKinds.contains(group.symbol.kind) && !isSupportedParameter {
+        let isSupportedEnumCase = group.symbol.kind == "enumConstant"
+            && coordinatedEnumCaseUSRs.contains(group.usr)
+        if !allowedKinds.contains(group.symbol.kind)
+            && !isSupportedParameter
+            && !isSupportedEnumCase {
             reasons.append("unsupported symbol kind \(group.symbol.kind)")
         }
         if group.occurrences.isEmpty {

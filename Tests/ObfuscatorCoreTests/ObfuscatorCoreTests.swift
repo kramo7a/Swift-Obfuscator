@@ -7487,6 +7487,110 @@ import Testing
     #expect(conformingFacts.blockers.contains(.protocolConformance))
 }
 
+@Test func enumCasePlannerRenamesExactCaseTokensAndDeniesOwnersAtomically() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("EnumCasePlanning.swift")
+    let source = [
+        "private enum Safe {",
+        "    case idle",
+        "    case payload(value: Int)",
+        "    static func normalize(_ input: Self) -> Self {",
+        "        switch input {",
+        "        case .idle:",
+        "            return .payload(value: 1)",
+        "        case .payload:",
+        "            return .idle",
+        "        }",
+        "    }",
+        "}",
+        "private enum Blocked {",
+        "    case logged",
+        "    case queued(value: Int)",
+        "}",
+        "private let blockedWire = \"queued\""
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])
+    }
+
+    let safe = symbol("s:planner-safe", "Safe", "enum")
+    let idle = symbol("s:planner-safe-idle", "idle", "enumConstant")
+    let payload = symbol("s:planner-safe-payload", "payload(value:)", "enumConstant")
+    let value = symbol("s:planner-safe-payload-value", "value", "parameter")
+    let blocked = symbol("s:planner-blocked", "Blocked", "enum")
+    let logged = symbol("s:planner-blocked-logged", "logged", "enumConstant")
+    let queued = symbol("s:planner-blocked-queued", "queued(value:)", "enumConstant")
+
+    let occurrences = [
+        testOccurrence(safe, path: file.path, line: 1, token: "Safe", roles: ["definition"]),
+        testOccurrence(idle, path: file.path, line: 2, token: "idle", roles: ["definition"], relations: [childOf(safe)]),
+        testOccurrence(payload, path: file.path, line: 3, token: "payload", roles: ["definition"], relations: [childOf(safe)]),
+        testOccurrence(value, path: file.path, line: 3, token: "value", roles: ["definition"], relations: [childOf(payload)]),
+        testOccurrence(idle, path: file.path, line: 6, token: "idle", roles: ["reference"]),
+        testOccurrence(payload, path: file.path, line: 7, token: "payload", roles: ["reference"]),
+        testOccurrence(payload, path: file.path, line: 8, token: "payload", roles: ["reference"]),
+        testOccurrence(idle, path: file.path, line: 9, token: "idle", roles: ["reference"]),
+        testOccurrence(blocked, path: file.path, line: 13, token: "Blocked", roles: ["definition"]),
+        testOccurrence(logged, path: file.path, line: 14, token: "logged", roles: ["definition"], relations: [childOf(blocked)]),
+        testOccurrence(queued, path: file.path, line: 15, token: "queued", roles: ["definition"], relations: [childOf(blocked)])
+    ]
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [safe, idle, payload, value, blocked, logged, queued],
+        occurrences: occurrences
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        generator: NameGenerator(prefix: "Case")
+    )
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    let safeEntries = plan.entries.filter { [idle.usr, payload.usr].contains($0.usr) }
+    #expect(safeEntries.count == 2)
+    #expect(safeEntries.allSatisfy { $0.kind == "enumConstant" })
+    #expect(safeEntries.allSatisfy { $0.newName.first?.isLowercase == true })
+    #expect(safeEntries.flatMap(\.replacements).count == 6)
+    #expect(!plan.entries.contains { [logged.usr, queued.usr].contains($0.usr) })
+    #expect(plan.denied.filter { [logged.usr, queued.usr].contains($0.usr) }.count == 2)
+    #expect(plan.denied.filter { [logged.usr, queued.usr].contains($0.usr) }.allSatisfy {
+        $0.reasons.contains { reason in
+            reason.contains("denied atomically") && reason.contains("stringLiteralSpelling")
+        }
+    })
+    #expect(plan.conflicts.isEmpty)
+
+    let idleEntry = try #require(safeEntries.first { $0.usr == idle.usr })
+    let payloadEntry = try #require(safeEntries.first { $0.usr == payload.usr })
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("case \(idleEntry.newName)"))
+    #expect(patched.contains("case \(payloadEntry.newName)(value: Int)"))
+    #expect(patched.contains(".\(payloadEntry.newName)(value: 1)"))
+    #expect(patched.contains("case logged"))
+    #expect(patched.contains("case queued(value: Int)"))
+    #expect(patched.contains("\"queued\""))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
 private func utf8Column(of needle: String, in line: String) -> Int {
     let range = line.range(of: needle)!
     return line[..<range.lowerBound].utf8.count + 1

@@ -184,6 +184,14 @@ public struct RenamePlanner {
             sourceCache: sourceCache,
             obfuscationRoots: analyzer.obfuscationRoots
         )
+        let enumCaseUSRs = Set(
+            enumCaseSyntaxFacts.components.flatMap { $0.members.map(\.caseUSR) }
+        )
+        let enumCaseOwnerComponentByCaseUSR = Dictionary(
+            uniqueKeysWithValues: enumCaseSyntaxFacts.components.flatMap { component in
+                component.members.map { ($0.caseUSR, component) }
+            }
+        )
         let parameterSyntaxFacts = ParameterSyntaxFacts(
             snapshot: snapshot,
             sourceCache: sourceCache,
@@ -254,6 +262,9 @@ public struct RenamePlanner {
 
         for group in groups {
             if externalLabelParameterUSRs.contains(group.usr) {
+                continue
+            }
+            if enumCaseUSRs.contains(group.usr) {
                 continue
             }
             if let component = coordinatedComponentByUSR[group.usr] {
@@ -536,6 +547,79 @@ public struct RenamePlanner {
             ))
         }
 
+        let enumCasePlanning = EnumCaseRenamePlanning.makeResult(
+            facts: enumCaseSyntaxFacts,
+            groupsByUSR: groupsByUSR,
+            indexedFacts: indexedFacts,
+            analyzer: analyzer,
+            sourceCache: sourceCache
+        )
+        denied.append(contentsOf: enumCasePlanning.denied)
+        for componentTemplate in enumCasePlanning.componentTemplates {
+            guard let component = enumCaseSyntaxFacts.components.first(where: {
+                $0.ownerUSR == componentTemplate.ownerUSR
+            }) else {
+                continue
+            }
+
+            var mappingFailures: Set<String> = []
+            var existingNamesByUSR: [String: String] = [:]
+            for member in componentTemplate.members {
+                guard let existing = mappingStore.entry(for: member.usr) else {
+                    continue
+                }
+                if existing.originalName != member.oldName || existing.kind != "enumConstant" {
+                    mappingFailures.insert(
+                        "persisted mapping metadata disagrees for \(member.usr)"
+                    )
+                } else {
+                    existingNamesByUSR[member.usr] = existing.obfuscatedName
+                }
+            }
+            let existingTargets = Array(existingNamesByUSR.values)
+            if Set(existingTargets).count != existingTargets.count {
+                mappingFailures.insert("enum owner members have duplicate persisted mappings")
+            }
+            guard mappingFailures.isEmpty else {
+                denied.append(contentsOf: EnumCaseRenamePlanning.denialDecisions(
+                    component: component,
+                    groupsByUSR: groupsByUSR,
+                    reasons: mappingFailures.sorted()
+                ))
+                continue
+            }
+
+            for member in componentTemplate.members {
+                let newName: String
+                if let existingName = existingNamesByUSR[member.usr] {
+                    newName = existingName
+                } else {
+                    newName = nextName(for: "enumConstant", avoiding: reservedNames)
+                    reservedNames.insert(newName)
+                }
+                if mappingStore.entry(for: member.usr) == nil {
+                    mappingStore.record(
+                        usr: member.usr,
+                        originalName: member.oldName,
+                        obfuscatedName: newName,
+                        kind: "enumConstant"
+                    )
+                }
+                entries.append(RenamePlanEntry(
+                    usr: member.usr,
+                    kind: "enumConstant",
+                    oldName: member.oldName,
+                    newName: newName,
+                    replacements: member.replacements.map {
+                        $0.replacement(newName: newName)
+                    }.sorted { lhs, rhs in
+                        (lhs.path, lhs.byteOffset, lhs.usr)
+                            < (rhs.path, rhs.byteOffset, rhs.usr)
+                    }
+                ))
+            }
+        }
+
         let externalLabelPlanning = ParameterExternalLabelRenamePlanning.makeResult(
             facts: parameterExternalLabelComponentFacts,
             groupsByUSR: groupsByUSR,
@@ -647,6 +731,14 @@ public struct RenamePlanner {
                 }
                 return externalLabelComponentByParameterUSR[entry.usr]?.key
             })
+            let conflictedEnumCaseOwners = Set(entries.compactMap { entry -> String? in
+                guard entry.replacements.contains(where: {
+                    conflictKeys.contains("\($0.path):\($0.byteOffset)")
+                }) else {
+                    return nil
+                }
+                return enumCaseOwnerComponentByCaseUSR[entry.usr]?.ownerUSR
+            })
             entries = entries.compactMap { entry in
                 if let componentKey = coordinatedComponentByUSR[entry.usr]?.key,
                    conflictedCoordinatedComponents.contains(componentKey) {
@@ -654,6 +746,10 @@ public struct RenamePlanner {
                 }
                 if let componentKey = externalLabelComponentByParameterUSR[entry.usr]?.key,
                    conflictedExternalLabelComponents.contains(componentKey) {
+                    return nil
+                }
+                if let ownerUSR = enumCaseOwnerComponentByCaseUSR[entry.usr]?.ownerUSR,
+                   conflictedEnumCaseOwners.contains(ownerUSR) {
                     return nil
                 }
                 return entry.replacements.contains {
@@ -678,6 +774,16 @@ public struct RenamePlanner {
             for component in parameterExternalLabelComponentFacts.components
             where conflictedExternalLabelComponents.contains(component.key) {
                 denied.append(contentsOf: ParameterExternalLabelRenamePlanning.denialDecisions(
+                    component: component,
+                    groupsByUSR: groupsByUSR,
+                    reasons: [
+                        "component contains a replacement conflict and was removed atomically"
+                    ]
+                ))
+            }
+            for component in enumCaseSyntaxFacts.components
+            where conflictedEnumCaseOwners.contains(component.ownerUSR) {
+                denied.append(contentsOf: EnumCaseRenamePlanning.denialDecisions(
                     component: component,
                     groupsByUSR: groupsByUSR,
                     reasons: [
@@ -1123,7 +1229,8 @@ public struct RenamePlanner {
             "staticProperty",
             "classProperty",
             "variable",
-            "parameter"
+            "parameter",
+            "enumConstant"
         ]
         guard lowerCamelCaseKinds.contains(symbolKind),
               let letterIndex = name.firstIndex(where: \.isLetter) else {
