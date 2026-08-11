@@ -164,7 +164,7 @@ public struct SafetyAnalyzer: Sendable {
                 && isPlainSwiftArgumentLabel(token.name)
             let isCompilerValidatedEnumCaseToken = isSupportedEnumCase
                 && isPlainSwiftArgumentLabel(token.name)
-            if token.isBackticked {
+            if token.isBackticked && !isCompilerValidatedEnumCaseToken {
                 reasons.append("backticked identifier \(token.name)")
             }
             if !isExternalLabelOnlyUnderscore

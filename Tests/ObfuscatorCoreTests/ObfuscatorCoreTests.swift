@@ -8643,7 +8643,7 @@ import Testing
     )
 }
 
-@Test func enumCasePlannerRenamesContextualKeywordsButKeepsBackticksDenied() throws {
+@Test func enumCasePlannerRenamesContextualAndBacktickedCaseTokens() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -8661,7 +8661,7 @@ import Testing
         "private enum EscapedToken {",
         "    case `public`",
         "}",
-        "private let escaped = EscapedToken.`public`"
+        "private let escaped = EscapedToken.public"
     ].joined(separator: "\n") + "\n"
     try source.write(to: file, atomically: true, encoding: .utf8)
 
@@ -8791,10 +8791,12 @@ import Testing
         $0.ownerUSR == escaped.usr
     })
     #expect(contextualFacts.blockers.isEmpty)
-    #expect(escapedFacts.blockers == [.backtickedIdentifier])
-    let contextualUSRs = Set([open.usr, get.usr, left.usr])
-    #expect(contextualUSRs.isSubset(of: Set(plan.entries.map(\.usr))))
-    #expect(!plan.entries.contains { $0.usr == publicCase.usr })
+    #expect(escapedFacts.blockers.isEmpty)
+    let expectedUSRs = Set([open.usr, get.usr, left.usr, publicCase.usr])
+    #expect(expectedUSRs.isSubset(of: Set(plan.entries.map(\.usr))))
+    let escapedEntry = try #require(plan.entries.first { $0.usr == escaped.usr })
+    let publicEntry = try #require(plan.entries.first { $0.usr == publicCase.usr })
+    #expect(publicEntry.replacements.count == 2)
     #expect(plan.conflicts.isEmpty)
 
     try SourcePatcher().apply(plan.replacements)
@@ -8802,7 +8804,9 @@ import Testing
     #expect(!patched.contains("case open"))
     #expect(!patched.contains("case get"))
     #expect(!patched.contains("case left"))
-    #expect(patched.contains("case `public`"))
+    #expect(patched.contains("case `\(publicEntry.newName)`"))
+    #expect(patched.contains("\(escapedEntry.newName).\(publicEntry.newName)"))
+    #expect(!patched.contains("public"))
     _ = try CommandRunner().run(
         executable: "/usr/bin/xcrun",
         arguments: ["swiftc", "-typecheck", file.path]

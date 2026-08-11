@@ -199,7 +199,6 @@ enum EnumCaseRenamePlanning {
         failures: inout Set<String>
     ) {
         guard token.name == expectedName,
-              !token.isBackticked,
               isPlainSwiftArgumentLabel(token.name),
               let source = sourceCache.file(for: token.path),
               source.text(in: token.byteRange) == expectedName else {
