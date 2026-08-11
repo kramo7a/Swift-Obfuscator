@@ -1,5 +1,10 @@
 import Foundation
 
+enum ParameterLocalBindingReplacementKind: Hashable, Sendable {
+    case replaceIdentifier
+    case insertBindingAfterExternalLabel
+}
+
 struct ParameterLocalBindingReplacementTemplate: Hashable, Sendable {
     let path: String
     let byteOffset: Int
@@ -8,6 +13,7 @@ struct ParameterLocalBindingReplacementTemplate: Hashable, Sendable {
     let utf8Column: Int
     let oldName: String
     let usr: String
+    let kind: ParameterLocalBindingReplacementKind
 
     func replacement(newName: String) -> SourceReplacement {
         SourceReplacement(
@@ -17,7 +23,7 @@ struct ParameterLocalBindingReplacementTemplate: Hashable, Sendable {
             line: line,
             utf8Column: utf8Column,
             oldName: oldName,
-            newName: newName,
+            newName: kind == .replaceIdentifier ? newName : " \(newName)",
             usr: usr
         )
     }
@@ -58,13 +64,12 @@ enum ParameterLocalBindingRenamePlanning {
                 continue
             }
             guard let roles = parameterRolesByUSR[parameterUSR],
-                  case .named = roles.externalLabel,
-                  let localBinding = roles.localBinding,
-                  !roles.sharesLabelAndBindingToken else {
+                  case .named(let externalLabel) = roles.externalLabel,
+                  let localBinding = roles.localBinding else {
                 denied.append(denialDecision(
                     group: group,
                     oldName: group.symbol.name,
-                    reasons: ["parameter does not have independent external-label and local-binding tokens"]
+                    reasons: ["parameter does not have a named external label and local binding"]
                 ))
                 continue
             }
@@ -89,11 +94,15 @@ enum ParameterLocalBindingRenamePlanning {
 
             var replacements: Set<ParameterLocalBindingReplacementTemplate> = []
             var failures: Set<String> = []
+            let sharedLabelAndBindingToken = roles.sharesLabelAndBindingToken
+                ? externalLabel
+                : nil
             for occurrence in group.occurrences {
                 add(
                     occurrence: occurrence,
                     expectedName: localBinding.name,
                     parameterUSR: parameterUSR,
+                    excluding: sharedLabelAndBindingToken,
                     sourceCache: sourceCache,
                     replacements: &replacements,
                     failures: &failures
@@ -102,6 +111,17 @@ enum ParameterLocalBindingRenamePlanning {
             for token in roles.localBindingTokens {
                 add(
                     token: token,
+                    expectedName: localBinding.name,
+                    parameterUSR: parameterUSR,
+                    excluding: sharedLabelAndBindingToken,
+                    sourceCache: sourceCache,
+                    replacements: &replacements,
+                    failures: &failures
+                )
+            }
+            if let sharedLabelAndBindingToken {
+                addBindingInsertion(
+                    after: sharedLabelAndBindingToken,
                     expectedName: localBinding.name,
                     parameterUSR: parameterUSR,
                     sourceCache: sourceCache,
@@ -152,6 +172,7 @@ enum ParameterLocalBindingRenamePlanning {
         occurrence: OccurrenceRecord,
         expectedName: String,
         parameterUSR: String,
+        excluding excludedToken: SourceTokenRange?,
         sourceCache: SourceFileCache,
         replacements: inout Set<ParameterLocalBindingReplacementTemplate>,
         failures: inout Set<String>
@@ -168,6 +189,11 @@ enum ParameterLocalBindingRenamePlanning {
             )
             return
         }
+        if let excludedToken,
+           source.path == excludedToken.path,
+           token.byteRange == excludedToken.byteRange {
+            return
+        }
         replacements.insert(ParameterLocalBindingReplacementTemplate(
             path: source.path,
             byteOffset: token.byteRange.lowerBound,
@@ -175,7 +201,8 @@ enum ParameterLocalBindingRenamePlanning {
             line: occurrence.line,
             utf8Column: occurrence.utf8Column,
             oldName: expectedName,
-            usr: parameterUSR
+            usr: parameterUSR,
+            kind: .replaceIdentifier
         ))
     }
 
@@ -183,6 +210,7 @@ enum ParameterLocalBindingRenamePlanning {
         token: SourceTokenRange,
         expectedName: String,
         parameterUSR: String,
+        excluding excludedToken: SourceTokenRange?,
         sourceCache: SourceFileCache,
         replacements: inout Set<ParameterLocalBindingReplacementTemplate>,
         failures: inout Set<String>
@@ -199,6 +227,9 @@ enum ParameterLocalBindingRenamePlanning {
             )
             return
         }
+        if let excludedToken, isSameToken(token, excludedToken) {
+            return
+        }
         replacements.insert(ParameterLocalBindingReplacementTemplate(
             path: source.path,
             byteOffset: token.byteRange.lowerBound,
@@ -206,7 +237,44 @@ enum ParameterLocalBindingRenamePlanning {
             line: location.line,
             utf8Column: location.utf8Column,
             oldName: expectedName,
-            usr: parameterUSR
+            usr: parameterUSR,
+            kind: .replaceIdentifier
         ))
+    }
+
+    private static func addBindingInsertion(
+        after token: SourceTokenRange,
+        expectedName: String,
+        parameterUSR: String,
+        sourceCache: SourceFileCache,
+        replacements: inout Set<ParameterLocalBindingReplacementTemplate>,
+        failures: inout Set<String>
+    ) {
+        guard isPlainSwiftIdentifier(expectedName),
+              !token.isBackticked,
+              token.name == expectedName,
+              let source = sourceCache.file(for: token.path),
+              source.text(in: token.byteRange) == expectedName,
+              let location = source.sourceLocation(atByteOffset: token.byteRange.upperBound) else {
+            failures.insert(
+                "compiler syntax shared-label token mismatch at "
+                    + "\(token.path):\(token.byteRange.lowerBound)"
+            )
+            return
+        }
+        replacements.insert(ParameterLocalBindingReplacementTemplate(
+            path: source.path,
+            byteOffset: token.byteRange.upperBound,
+            length: 0,
+            line: location.line,
+            utf8Column: location.utf8Column,
+            oldName: "",
+            usr: parameterUSR,
+            kind: .insertBindingAfterExternalLabel
+        ))
+    }
+
+    private static func isSameToken(_ lhs: SourceTokenRange, _ rhs: SourceTokenRange) -> Bool {
+        lhs.path == rhs.path && lhs.byteRange == rhs.byteRange
     }
 }

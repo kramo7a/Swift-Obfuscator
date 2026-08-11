@@ -256,6 +256,16 @@ public struct RenamePlanner {
         let externalLabelParameterUSRs = Set(
             parameterExternalLabelComponentFacts.components.flatMap(\.namedParameterUSRs)
         )
+        let namedLocalBindingParameterUSRs = Set(
+            parameterSyntaxFacts.rolesByUSR.values.compactMap { role -> String? in
+                guard parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs.contains(
+                    role.parameterUSR
+                ), case .named = role.externalLabel else {
+                    return nil
+                }
+                return role.parameterUSR
+            }
+        )
         let externalLabelComponentByParameterUSR = Dictionary(
             uniqueKeysWithValues: parameterExternalLabelComponentFacts.components.flatMap {
                 component in
@@ -289,7 +299,8 @@ public struct RenamePlanner {
         var processedCoordinatedComponents: Set<String> = []
 
         for group in groups {
-            if externalLabelParameterUSRs.contains(group.usr) {
+            if externalLabelParameterUSRs.contains(group.usr)
+                || namedLocalBindingParameterUSRs.contains(group.usr) {
                 continue
             }
             if enumCaseUSRs.contains(group.usr) {
@@ -666,11 +677,11 @@ public struct RenamePlanner {
             analyzer: analyzer,
             sourceCache: sourceCache
         )
-        let preservedLabelLocalBindingCandidateUSRs = Set(
-            parameterExternalLabelComponentFacts.components
-                .filter { !$0.isEligible }
-                .flatMap(\.namedParameterUSRs)
-        ).intersection(parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs)
+        let fullyPlannedExternalLabelParameterUSRs = Set(
+            externalLabelPlanning.componentTemplates.flatMap(\.namedParameterUSRs)
+        )
+        let preservedLabelLocalBindingCandidateUSRs = namedLocalBindingParameterUSRs
+            .subtracting(fullyPlannedExternalLabelParameterUSRs)
         let preservedLabelLocalBindingPlanning = ParameterLocalBindingRenamePlanning.makeResult(
             candidateUSRs: preservedLabelLocalBindingCandidateUSRs,
             groupsByUSR: groupsByUSR,

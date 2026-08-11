@@ -1643,17 +1643,20 @@ import Testing
 
     let valueEntry = try #require(plan.entries.first { $0.usr == value.usr })
     let localEntry = try #require(plan.entries.first { $0.usr == local.usr })
-    #expect(plan.entries.count == 2)
+    let sharedEntry = try #require(plan.entries.first { $0.usr == shared.usr })
+    #expect(plan.entries.count == 3)
     #expect(valueEntry.oldName == "value")
     #expect(valueEntry.newName.first?.isLowercase == true)
     #expect(valueEntry.replacements.count == 2)
     #expect(localEntry.oldName == "local")
     #expect(localEntry.replacements.count == 2)
+    #expect(sharedEntry.oldName == "shared")
+    #expect(sharedEntry.replacements.count == 2)
     #expect(!plan.denied.contains { $0.usr == local.usr })
-    #expect(plan.denied.contains { $0.usr == shared.usr })
-    #expect(plan.parameterSyntaxFacts.localBindingOnlyCoverageCandidates == 2)
-    #expect(plan.parameterLocalBindingOutcome.candidates == 2)
-    #expect(plan.parameterLocalBindingOutcome.renamed == 2)
+    #expect(!plan.denied.contains { $0.usr == shared.usr })
+    #expect(plan.parameterSyntaxFacts.localBindingOnlyCoverageCandidates == 3)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 3)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 3)
     #expect(plan.parameterLocalBindingOutcome.denied == 0)
     #expect(plan.parameterLocalBindingOutcome.unclassified == 0)
     #expect(plan.parameterLocalBindingOutcome.denialCategories.isEmpty)
@@ -1663,8 +1666,8 @@ import Testing
     try SourcePatcher().apply(plan.replacements)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched == [
-        "func calculate(_ \(valueEntry.newName): Int, wire \(localEntry.newName): Int, shared: Int) -> Int {",
-        "    \(valueEntry.newName) + \(localEntry.newName) + shared",
+        "func calculate(_ \(valueEntry.newName): Int, wire \(localEntry.newName): Int, shared \(sharedEntry.newName): Int) -> Int {",
+        "    \(valueEntry.newName) + \(localEntry.newName) + \(sharedEntry.newName)",
         "}",
         ""
     ].joined(separator: "\n"))
@@ -4251,7 +4254,203 @@ import Testing
     _ = try CommandRunner().run(executable: afterExecutable.path, arguments: [])
 }
 
-@Test func externalLabelComponentDeniesUncoveredInheritedConstructorCalls() throws {
+@Test func parameterPlannerSplitsSharedObjectiveCLabelFromLocalBinding() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("SharedRuntimeParameter.swift")
+    let lines = [
+        "import Foundation",
+        "final class RuntimeBridge: NSObject {",
+        "    @objc(executePayload:)",
+        "    func execute(payload: Int) -> Int { payload + 1 }",
+        "}",
+        "precondition(RuntimeBridge().execute(payload: 41) == 42)"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    let runtimeMethod = SymbolRecord(
+        usr: "c:@M@Fixture@objc(cs)RuntimeBridge(im)executePayload:",
+        name: "execute(payload:)",
+        kind: "instanceMethod",
+        language: "objective-c",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let payload = SymbolRecord(
+        usr: "s:FixtureSharedRuntimeParameterPayload",
+        name: "payload",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let childOfMethod = RelationRecord(
+        usr: runtimeMethod.usr,
+        name: runtimeMethod.name,
+        rolesRaw: 0,
+        roles: ["childOf"]
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [runtimeMethod, payload],
+        occurrences: [
+            testOccurrence(
+                runtimeMethod,
+                path: file.path,
+                line: 4,
+                token: "execute",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                payload,
+                path: file.path,
+                line: 4,
+                token: "payload",
+                roles: ["definition"],
+                relations: [childOfMethod]
+            )
+        ]
+    )
+
+    let beforeExecutable = directory.appendingPathComponent("Before")
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", beforeExecutable.path]
+    )
+    _ = try CommandRunner().run(executable: beforeExecutable.path, arguments: [])
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == payload.usr })
+    #expect(entry.replacements.count == 2)
+    #expect(entry.replacements.contains {
+        $0.length == 0 && $0.oldName.isEmpty && $0.newName == " \(entry.newName)"
+    })
+    #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
+        "objectiveCRuntimeDispatch": 1
+    ])
+    #expect(plan.parameterExternalLabelRenameOutcome.candidateParameterUSRs == 0)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("@objc(executePayload:)"))
+    #expect(patched.contains("func execute(payload \(entry.newName): Int)"))
+    #expect(patched.contains("{ \(entry.newName) + 1 }"))
+    #expect(patched.contains("execute(payload: 41)"))
+
+    let afterExecutable = directory.appendingPathComponent("After")
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", afterExecutable.path]
+    )
+    _ = try CommandRunner().run(executable: afterExecutable.path, arguments: [])
+}
+
+@Test func parameterPlannerSplitsSharedNestedFunctionLabelFromLocalBinding() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("NestedFunctionParameter.swift")
+    let lines = [
+        "func outer() {",
+        "    func configure(layer: Int) -> Int { layer }",
+        "    precondition(configure(layer: 41) == 41)",
+        "}",
+        "outer()"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    let outer = SymbolRecord(
+        usr: "s:FixtureOuterFunction",
+        name: "outer()",
+        kind: "function",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let layer = SymbolRecord(
+        usr: "s:FixtureNestedFunctionLayer",
+        name: "layer",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let childOfOuter = RelationRecord(
+        usr: outer.usr,
+        name: outer.name,
+        rolesRaw: 0,
+        roles: ["childOf"]
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [outer, layer],
+        occurrences: [
+            testOccurrence(
+                outer,
+                path: file.path,
+                line: 1,
+                token: "outer",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                layer,
+                path: file.path,
+                line: 2,
+                token: "layer",
+                roles: ["definition"],
+                relations: [childOfOuter]
+            ),
+            testOccurrence(
+                outer,
+                path: file.path,
+                line: 5,
+                token: "outer",
+                roles: ["reference"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == layer.usr })
+    #expect(entry.replacements.count == 2)
+    #expect(entry.replacements.contains {
+        $0.length == 0 && $0.oldName.isEmpty && $0.newName == " \(entry.newName)"
+    })
+    #expect(plan.parameterSyntaxFacts.nestedLocalFunctionParameters == 1)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("configure(layer \(entry.newName): Int)"))
+    #expect(patched.contains("{ \(entry.newName) }"))
+    #expect(patched.contains("configure(layer: 41)"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", directory.appendingPathComponent("After").path]
+    )
+}
+
+@Test func inheritedInitializerKeepsLabelWhileSplittingLocalBinding() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
         isDirectory: true
@@ -4355,13 +4554,30 @@ import Testing
 
     var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    #expect(!plan.entries.contains { $0.usr == session.usr })
+    let entry = try #require(plan.entries.first { $0.usr == session.usr })
+    #expect(entry.replacements.count == 2)
+    #expect(entry.replacements.contains {
+        $0.length == 0 && $0.oldName.isEmpty && $0.newName == " \(entry.newName)"
+    })
     #expect(plan.parameterExternalLabelComponentFacts.deniedAtomicComponents == 1)
     #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
         "incompleteInheritedConstructorCoverage": 1
     ])
     #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 0)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
     #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("convenience init(session \(entry.newName): Int)"))
+    #expect(patched.contains("self.init(session: \(entry.newName), url: \"\")"))
+    #expect(patched.contains("(session: 1)"))
+    #expect(!patched.contains("(\(entry.newName): 1)"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
 }
 
 @Test func parameterCallArgumentBindingsResolveDefaultsVariadicsAndTrailingClosures() throws {

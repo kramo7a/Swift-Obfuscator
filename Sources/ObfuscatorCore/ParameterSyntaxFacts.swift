@@ -539,14 +539,13 @@ public struct ParameterSyntaxFacts: Sendable {
         case .none, .omitted:
             return true
         case .named:
-            // `external local:` has two independent source tokens. The local
-            // binding and its lexical references may be renamed without
-            // changing the external argument label, overload identity,
-            // Objective-C selector, protocol requirement, or inherited
-            // initializer signature. A shorthand `name:` parameter has one
-            // shared token and therefore still requires full call-site
-            // coordination.
-            return !role.sharesLabelAndBindingToken
+            // `external local:` already has two independent source tokens.
+            // For shorthand `name:`, the planner may preserve `name` as the
+            // external label and insert a distinct local binding, producing
+            // `name obfuscated:`. Both forms keep overload identity,
+            // Objective-C selectors, protocol requirements, and inherited
+            // initializer signatures unchanged.
+            return true
         }
     }
 }
