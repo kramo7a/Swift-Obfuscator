@@ -1121,7 +1121,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                     shadowScopes,
                     kind,
                     optionalBinding.initializer == nil
-                        && kind == .ifOptionalBindingCondition
+                        && (kind == .ifOptionalBindingCondition
+                            || kind == .guardOptionalBindingCondition)
                         && shadowScopes != nil
                 )
             }
@@ -1245,8 +1246,7 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
     private func guardOptionalBindingShadowScopes(
         _ binding: OptionalBindingConditionSyntax
     ) -> [Range<Int>]? {
-        guard binding.pattern.is(IdentifierPatternSyntax.self),
-              binding.initializer != nil else {
+        guard binding.pattern.is(IdentifierPatternSyntax.self) else {
             return nil
         }
         var ancestor = Syntax(binding).parent
