@@ -96,7 +96,14 @@ public struct SafetyAnalyzer: Sendable {
            !coordinatedProtocolRequirementUSRs.contains(group.usr) {
             reasons.append("protocol members require relation-aware witness renaming")
         }
+        // External nominal ownership is structural. A descendant with its own
+        // explicit selected declaration is source-authored and can use the
+        // same occurrence-closure and runtime checks as any other local symbol.
+        let isSourceAuthoredExternalExtensionDeclaration =
+            indexedFacts.externallyOwnedUSRs.contains(group.usr)
+                && indexedFacts.selectedDeclarationUSRs.contains(group.usr)
         if indexedFacts.externallyOwnedUSRs.contains(group.usr),
+           !isSourceAuthoredExternalExtensionDeclaration,
            !isSupportedLocalBindingParameter {
             reasons.append("extensions on external Swift or Objective-C owners are not self-contained")
         }

@@ -376,6 +376,9 @@ import Testing
     #expect(facts.externallyOwnedUSRs.contains(externalExtension.usr))
     #expect(facts.externallyOwnedUSRs.contains(externalNested.usr))
     #expect(facts.externallyOwnedUSRs.contains(externalHelper.usr))
+    #expect(facts.selectedDeclarationUSRs.contains(externalExtension.usr))
+    #expect(facts.selectedDeclarationUSRs.contains(externalNested.usr))
+    #expect(facts.selectedDeclarationUSRs.contains(externalHelper.usr))
     #expect(!facts.externallyOwnedUSRs.contains(localExtension.usr))
     #expect(!facts.externallyOwnedUSRs.contains(localHelper.usr))
     #expect(!facts.externallyOwnedUSRs.contains(localObjCExtension.usr))
@@ -415,7 +418,7 @@ import Testing
     )
 
     #expect(requirementDecision.reasons.contains("protocol members require relation-aware witness renaming"))
-    #expect(externalDecision.reasons.contains("extensions on external Swift or Objective-C owners are not self-contained"))
+    #expect(externalDecision.allowed)
     #expect(localDecision.allowed)
     #expect(runtimeDecision.reasons.contains("runtime-reflected or externally linked declaration according to IndexStore semantics"))
 }
@@ -6770,6 +6773,133 @@ import Testing
 
     #expect(decision.allowed == false)
     #expect(decision.reasons.contains("extensions on external Swift or Objective-C owners are not self-contained"))
+}
+
+@Test func renamePlannerAllowsSourceAuthoredMembersOnExternalOwners() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("ExternalOwnerExtension.swift")
+    let lines = [
+        "extension String {",
+        "    func framed() -> String { \"[\\(self)]\" }",
+        "}",
+        "precondition(\"value\".framed() == \"[value]\")"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    let string = SymbolRecord(
+        usr: "s:SS",
+        name: "String",
+        kind: "struct",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let externalExtension = SymbolRecord(
+        usr: "s:e:FixtureStringExtension",
+        name: "String",
+        kind: "extension",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let framed = SymbolRecord(
+        usr: "s:SS7FixtureE6framedSSyF",
+        name: "framed()",
+        kind: "instanceMethod",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let extendedBy = RelationRecord(
+        usr: externalExtension.usr,
+        name: externalExtension.name,
+        rolesRaw: 0,
+        roles: ["extendedBy"]
+    )
+    let childOf = RelationRecord(
+        usr: externalExtension.usr,
+        name: externalExtension.name,
+        rolesRaw: 0,
+        roles: ["childOf"]
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [string, externalExtension, framed],
+        occurrences: [
+            testOccurrence(
+                string,
+                path: file.path,
+                line: 1,
+                token: "String",
+                roles: ["reference", "extendedBy"],
+                relations: [extendedBy]
+            ),
+            testOccurrence(
+                externalExtension,
+                path: file.path,
+                line: 1,
+                token: "String",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                framed,
+                path: file.path,
+                line: 2,
+                token: "framed",
+                roles: ["definition", "childOf"],
+                relations: [childOf]
+            ),
+            testOccurrence(
+                framed,
+                path: file.path,
+                line: 4,
+                token: "framed",
+                roles: ["reference", "call"]
+            )
+        ]
+    )
+    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+    #expect(facts.externallyOwnedUSRs.contains(externalExtension.usr))
+    #expect(facts.externallyOwnedUSRs.contains(framed.usr))
+    #expect(facts.selectedDeclarationUSRs.contains(framed.usr))
+
+    let beforeExecutable = directory.appendingPathComponent("Before")
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", beforeExecutable.path]
+    )
+    _ = try CommandRunner().run(executable: beforeExecutable.path, arguments: [])
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == framed.usr })
+    #expect(entry.oldName == "framed")
+    #expect(entry.replacements.count == 2)
+    #expect(!plan.entries.contains { $0.usr == externalExtension.usr })
+    #expect(!plan.entries.contains { $0.usr == string.usr })
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("func \(entry.newName)()"))
+    #expect(patched.contains(".\(entry.newName)()"))
+    #expect(patched.contains("extension String"))
+
+    let afterExecutable = directory.appendingPathComponent("After")
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", afterExecutable.path]
+    )
+    _ = try CommandRunner().run(executable: afterExecutable.path, arguments: [])
 }
 
 @Test func safetyAnalyzerDeniesStdlibModuleExtensionOwners() throws {
