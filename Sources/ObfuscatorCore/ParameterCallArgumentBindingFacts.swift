@@ -179,6 +179,18 @@ public struct ParameterCallArgumentBindingFacts: Sendable {
                     continue
                 }
 
+                if callRoles.kind == .enumCasePattern {
+                    guard callRoles.arguments.isEmpty else {
+                        unresolvedReasonsByAnchor[anchor] = Self.unmatchedReason
+                        continue
+                    }
+                    bindingsByAnchor[anchor] = ParameterCallArgumentBindings(
+                        anchor: anchor,
+                        arguments: []
+                    )
+                    continue
+                }
+
                 switch ParameterArgumentOrdinalMatcher.assignment(
                     arguments: callRoles.arguments,
                     parameters: parameters,

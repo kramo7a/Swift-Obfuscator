@@ -16,6 +16,7 @@ public enum ParameterCallSyntaxKind: String, Codable, Hashable, Sendable {
     case functionCall
     case subscriptCall
     case attributeCall
+    case enumCasePattern
 }
 
 public enum ParameterCallArgumentSyntaxRole: Hashable, Sendable {
@@ -52,6 +53,7 @@ public struct ParameterCallSiteSyntaxFactsSummary: Codable, Equatable, Sendable 
     public let resolvedFunctionCalls: Int
     public let resolvedSubscriptCalls: Int
     public let resolvedAttributeCalls: Int
+    public let resolvedEnumCasePatterns: Int
     public let parenthesizedArguments: Int
     public let namedParenthesizedArgumentTokens: Int
     public let unlabeledParenthesizedArguments: Int
@@ -97,6 +99,7 @@ public struct ParameterCallSiteSyntaxFactsSummary: Codable, Equatable, Sendable 
         self.resolvedFunctionCalls = roles.count { $0.kind == .functionCall }
         self.resolvedSubscriptCalls = roles.count { $0.kind == .subscriptCall }
         self.resolvedAttributeCalls = roles.count { $0.kind == .attributeCall }
+        self.resolvedEnumCasePatterns = roles.count { $0.kind == .enumCasePattern }
         self.parenthesizedArguments = roles.reduce(0) { count, role in
             count + role.arguments.count {
                 if case .parenthesized = $0 { return true }
@@ -325,15 +328,39 @@ private final class ParameterCallSyntaxVisitor: SyntaxVisitor {
             trailingClosure: node.trailingClosure,
             additionalTrailingClosures: node.additionalTrailingClosures
         )
+        let isExpressionPattern = isInsideExpressionPattern(node)
+        let omitsEntireEnumPayload = isExpressionPattern
+            && node.leftParen == nil
+            && node.rightParen == nil
+            && arguments.roles.isEmpty
         candidates.append(CallSyntaxCandidate(
-            kind: .functionCall,
+            kind: omitsEntireEnumPayload ? .enumCasePattern : .functionCall,
             callByteRange: syntaxRange(node),
             calleeByteRange: syntaxRange(node.calledExpression),
             anchorByteRanges: [syntaxRange(node.calledExpression)],
             hasExplicitArgumentDelimiters: node.leftParen != nil && node.rightParen != nil,
-            allowsOmittedNamedLabels: isInsideExpressionPattern(node),
+            allowsOmittedNamedLabels: isExpressionPattern,
             arguments: arguments.roles,
             structuralReasons: arguments.reasons
+        ))
+        return .visitChildren
+    }
+
+    override func visit(_ node: MemberAccessExprSyntax) -> SyntaxVisitorContinueKind {
+        guard node.parent?.as(ExpressionPatternSyntax.self) != nil,
+              node.declName.argumentNames == nil,
+              let caseToken = sourceToken(node.declName.baseName) else {
+            return .visitChildren
+        }
+        candidates.append(CallSyntaxCandidate(
+            kind: .enumCasePattern,
+            callByteRange: syntaxRange(node),
+            calleeByteRange: syntaxRange(node),
+            anchorByteRanges: [caseToken.byteRange],
+            hasExplicitArgumentDelimiters: false,
+            allowsOmittedNamedLabels: true,
+            arguments: [],
+            structuralReasons: []
         ))
         return .visitChildren
     }

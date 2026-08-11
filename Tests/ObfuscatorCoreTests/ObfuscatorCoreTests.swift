@@ -2777,6 +2777,7 @@ import Testing
     #expect(summary.resolvedFunctionCalls == 5)
     #expect(summary.resolvedSubscriptCalls == 1)
     #expect(summary.resolvedAttributeCalls == 1)
+    #expect(summary.resolvedEnumCasePatterns == 0)
     #expect(summary.parenthesizedArguments == 7)
     #expect(summary.namedParenthesizedArgumentTokens == 7)
     #expect(summary.unlabeledParenthesizedArguments == 0)
@@ -7955,6 +7956,12 @@ import Testing
         "    case .payload(value: let value):",
         "        value",
         "    }",
+        "}",
+        "func ignoredPayloadValue(_ input: InternalPayload) -> Int {",
+        "    switch input {",
+        "    case .payload:",
+        "        0",
+        "    }",
         "}"
     ]
     try (uses.joined(separator: "\n") + "\n")
@@ -8114,6 +8121,20 @@ import Testing
             line: 14,
             token: "payload",
             roles: ["reference"]
+        ),
+        testOccurrence(
+            payloadOwner,
+            path: usesFile.path,
+            line: 18,
+            token: "InternalPayload",
+            roles: ["reference"]
+        ),
+        testOccurrence(
+            payload,
+            path: usesFile.path,
+            line: 20,
+            token: "payload",
+            roles: ["reference"]
         )
     ]
     let snapshot = IndexSnapshot(
@@ -8135,7 +8156,7 @@ import Testing
         [idle.usr, ready.usr, payload.usr].contains($0.usr)
     }
     #expect(internalEntries.count == 3)
-    #expect(internalEntries.flatMap(\.replacements).count == 8)
+    #expect(internalEntries.flatMap(\.replacements).count == 9)
     let valueEntry = try #require(plan.entries.first { $0.usr == value.usr })
     #expect(valueEntry.replacements.count == 3)
     #expect(!plan.entries.contains { $0.usr == visible.usr })
@@ -8146,6 +8167,7 @@ import Testing
     #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleCases == 3)
     #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleAssociatedValueCases == 1)
     #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleAssociatedValueParameters == 1)
+    #expect(plan.parameterCallSiteSyntaxFacts.resolvedEnumCasePatterns == 1)
     #expect(plan.conflicts.isEmpty)
 
     try SourcePatcher().apply(plan.replacements)
@@ -8245,6 +8267,9 @@ import Testing
     #expect(safeEntries.allSatisfy { $0.kind == "enumConstant" })
     #expect(safeEntries.allSatisfy { $0.newName.first?.isLowercase == true })
     #expect(safeEntries.flatMap(\.replacements).count == 6)
+    let valueEntry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(valueEntry.replacements.count == 2)
+    #expect(plan.parameterCallSiteSyntaxFacts.resolvedEnumCasePatterns == 1)
     #expect(!plan.entries.contains { [logged.usr, queued.usr].contains($0.usr) })
     #expect(plan.denied.filter { [logged.usr, queued.usr].contains($0.usr) }.count == 2)
     #expect(plan.denied.filter { [logged.usr, queued.usr].contains($0.usr) }.allSatisfy {
@@ -8259,8 +8284,9 @@ import Testing
     try SourcePatcher().apply(plan.replacements)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("case \(idleEntry.newName)"))
-    #expect(patched.contains("case \(payloadEntry.newName)(value: Int)"))
-    #expect(patched.contains(".\(payloadEntry.newName)(value: 1)"))
+    #expect(patched.contains("case \(payloadEntry.newName)(\(valueEntry.newName): Int)"))
+    #expect(patched.contains(".\(payloadEntry.newName)(\(valueEntry.newName): 1)"))
+    #expect(patched.contains("case .\(payloadEntry.newName):"))
     #expect(patched.contains("case logged"))
     #expect(patched.contains("case queued(value: Int)"))
     #expect(patched.contains("\"queued\""))
