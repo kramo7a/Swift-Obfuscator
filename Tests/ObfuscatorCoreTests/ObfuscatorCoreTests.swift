@@ -1159,8 +1159,11 @@ import Testing
     #expect(facts.unresolvedReasonsByUSR.isEmpty)
     #expect(facts.rolesByUSR.count == 9)
     #expect(facts.localBindingOnlyCoverageCandidateUSRs == [
+        local.usr,
         nestedValue.usr,
+        inner.usr,
         nextValue.usr,
+        index.usr,
         closureValue.usr
     ])
 
@@ -1253,7 +1256,7 @@ import Testing
     #expect(summary.distinctLabelAndBindingTokens == 5)
     #expect(summary.localBindingReferenceTokens == 6)
     #expect(summary.parametersWithShadowingBindingDeclarations == 0)
-    #expect(summary.localBindingOnlyCoverageCandidates == 3)
+    #expect(summary.localBindingOnlyCoverageCandidates == 6)
     #expect(summary.parametersRequiringExternalLabelCoordination == 3)
     #expect(summary.nonEnumParametersWithoutLocalBindings == 0)
     #expect(summary.enumCaseParametersExcludedFromParameterStage == 3)
@@ -1526,7 +1529,9 @@ import Testing
         obfuscationRoots: [file]
     )
     #expect(facts.unresolvedReasonsByUSR.isEmpty)
-    #expect(facts.localBindingOnlyCoverageCandidateUSRs == [lhs.usr, rhs.usr, index.usr])
+    #expect(facts.localBindingOnlyCoverageCandidateUSRs == [
+        lhs.usr, rhs.usr, index.usr, localIndex.usr
+    ])
 
     let lhsRoles = try #require(facts.rolesByUSR[lhs.usr])
     #expect(lhsRoles.externalLabel == .none)
@@ -1558,7 +1563,7 @@ import Testing
     #expect(summary.namedExternalLabels == 1)
     #expect(summary.omittedExternalLabels == 0)
     #expect(summary.parametersWithoutExternalLabels == 3)
-    #expect(summary.localBindingOnlyCoverageCandidates == 3)
+    #expect(summary.localBindingOnlyCoverageCandidates == 4)
     #expect(summary.parametersRequiringExternalLabelCoordination == 1)
 
     var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
@@ -1573,8 +1578,8 @@ import Testing
     #expect(lhsEntry.replacements.count == 2)
     #expect(rhsEntry.replacements.count == 2)
     #expect(indexEntry.replacements.count == 2)
-    #expect(plan.parameterLocalBindingOutcome.candidates == 3)
-    #expect(plan.parameterLocalBindingOutcome.renamed == 3)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 4)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 4)
 
     try SourcePatcher().apply(plan.replacements)
     let patched = try String(contentsOf: file, encoding: .utf8)
@@ -1587,7 +1592,7 @@ import Testing
     ))
 }
 
-@Test func renamePlannerRenamesOnlyParametersWhoseExternalLabelIsAlreadyAbsent() throws {
+@Test func renamePlannerSeparatesExternalLabelsFromLocalBindings() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
         isDirectory: true
@@ -1636,27 +1641,30 @@ import Testing
     var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    let entry = try #require(plan.entries.first { $0.usr == value.usr })
-    #expect(plan.entries.count == 1)
-    #expect(entry.oldName == "value")
-    #expect(entry.newName.first?.isLowercase == true)
-    #expect(entry.replacements.count == 2)
-    #expect(plan.denied.contains { $0.usr == local.usr })
+    let valueEntry = try #require(plan.entries.first { $0.usr == value.usr })
+    let localEntry = try #require(plan.entries.first { $0.usr == local.usr })
+    #expect(plan.entries.count == 2)
+    #expect(valueEntry.oldName == "value")
+    #expect(valueEntry.newName.first?.isLowercase == true)
+    #expect(valueEntry.replacements.count == 2)
+    #expect(localEntry.oldName == "local")
+    #expect(localEntry.replacements.count == 2)
+    #expect(!plan.denied.contains { $0.usr == local.usr })
     #expect(plan.denied.contains { $0.usr == shared.usr })
-    #expect(plan.parameterSyntaxFacts.localBindingOnlyCoverageCandidates == 1)
-    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
-    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
+    #expect(plan.parameterSyntaxFacts.localBindingOnlyCoverageCandidates == 2)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 2)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 2)
     #expect(plan.parameterLocalBindingOutcome.denied == 0)
     #expect(plan.parameterLocalBindingOutcome.unclassified == 0)
     #expect(plan.parameterLocalBindingOutcome.denialCategories.isEmpty)
     #expect(plan.parameterLocalBindingOutcome.deniedCandidateUSRs.isEmpty)
-    #expect(!entry.replacements.contains { $0.oldName == "_" })
+    #expect(!valueEntry.replacements.contains { $0.oldName == "_" })
 
     try SourcePatcher().apply(plan.replacements)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched == [
-        "func calculate(_ \(entry.newName): Int, wire local: Int, shared: Int) -> Int {",
-        "    \(entry.newName) + local + shared",
+        "func calculate(_ \(valueEntry.newName): Int, wire \(localEntry.newName): Int, shared: Int) -> Int {",
+        "    \(valueEntry.newName) + \(localEntry.newName) + shared",
         "}",
         ""
     ].joined(separator: "\n"))
@@ -3884,7 +3892,7 @@ import Testing
     )
 }
 
-@Test func externalLabelComponentPreservesDynamicMemberLookupLabel() throws {
+@Test func externalLabelComponentPreservesDynamicMemberLookupLabelAndRenamesBinding() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
         isDirectory: true
@@ -3965,13 +3973,25 @@ import Testing
 
     var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    #expect(!plan.entries.contains { $0.usr == keyPath.usr })
+    let entry = try #require(plan.entries.first { $0.usr == keyPath.usr })
+    #expect(entry.replacements.count == 2)
     #expect(plan.parameterExternalLabelComponentFacts.deniedAtomicComponents == 1)
     #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
         "languageRequiredExternalLabel": 1
     ])
     #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 0)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
     #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("subscript<T>(dynamicMember \(entry.newName): KeyPath<Root, T>)"))
+    #expect(patched.contains("root[keyPath: \(entry.newName)]"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
 }
 
 @Test func parameterSyntaxFactsExcludeKeyPathMembersFromLocalBindingReferences() throws {
@@ -4030,7 +4050,7 @@ import Testing
     #expect(patched.contains("print(\(entry.newName))"))
 }
 
-@Test func externalLabelComponentPreservesPropertyWrapperInitializerLabel() throws {
+@Test func externalLabelComponentPreservesPropertyWrapperInitializerLabelAndRenamesBinding() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
         isDirectory: true
@@ -4110,13 +4130,125 @@ import Testing
 
     var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    #expect(!plan.entries.contains { $0.usr == value.usr })
+    let entry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(entry.replacements.count == 2)
     #expect(plan.parameterExternalLabelComponentFacts.deniedAtomicComponents == 1)
     #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
         "languageRequiredExternalLabel": 1
     ])
     #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 0)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
     #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("init(wrappedValue \(entry.newName): Value)"))
+    #expect(patched.contains("wrappedValue = \(entry.newName)"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
+@Test func parameterPlannerPreservesObjectiveCLabelAndRenamesOnlyLocalBinding() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("RuntimeParameter.swift")
+    let lines = [
+        "import Foundation",
+        "final class RuntimeBridge: NSObject {",
+        "    @objc(executePayload:)",
+        "    func execute(payload value: Int) -> Int { value + 1 }",
+        "}",
+        "precondition(RuntimeBridge().execute(payload: 41) == 42)"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    let runtimeMethod = SymbolRecord(
+        usr: "c:@M@Fixture@objc(cs)RuntimeBridge(im)executePayload:",
+        name: "execute(payload:)",
+        kind: "instanceMethod",
+        language: "objective-c",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let value = SymbolRecord(
+        usr: "s:FixtureRuntimeParameterValue",
+        name: "value",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let childOfMethod = RelationRecord(
+        usr: runtimeMethod.usr,
+        name: runtimeMethod.name,
+        rolesRaw: 0,
+        roles: ["childOf"]
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [runtimeMethod, value],
+        occurrences: [
+            testOccurrence(
+                runtimeMethod,
+                path: file.path,
+                line: 4,
+                token: "execute",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 4,
+                token: "value",
+                roles: ["definition"],
+                relations: [childOfMethod]
+            )
+        ]
+    )
+
+    let beforeExecutable = directory.appendingPathComponent("Before")
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", beforeExecutable.path]
+    )
+    _ = try CommandRunner().run(executable: beforeExecutable.path, arguments: [])
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(entry.replacements.count == 2)
+    #expect(plan.parameterExternalLabelComponentFacts.blockerComponents == [
+        "objectiveCRuntimeDispatch": 1
+    ])
+    #expect(plan.parameterExternalLabelRenameOutcome.candidateParameterUSRs == 0)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("@objc(executePayload:)"))
+    #expect(patched.contains("func execute(payload \(entry.newName): Int)"))
+    #expect(patched.contains("execute(payload: 41)"))
+    #expect(!patched.contains("payload \(entry.newName): Int) -> Int { value"))
+
+    let afterExecutable = directory.appendingPathComponent("After")
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", afterExecutable.path]
+    )
+    _ = try CommandRunner().run(executable: afterExecutable.path, arguments: [])
 }
 
 @Test func externalLabelComponentDeniesUncoveredInheritedConstructorCalls() throws {

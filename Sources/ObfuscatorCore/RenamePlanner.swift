@@ -666,7 +666,19 @@ public struct RenamePlanner {
             analyzer: analyzer,
             sourceCache: sourceCache
         )
-        denied.append(contentsOf: externalLabelPlanning.denied)
+        let preservedLabelLocalBindingCandidateUSRs = Set(
+            parameterExternalLabelComponentFacts.components
+                .filter { !$0.isEligible }
+                .flatMap(\.namedParameterUSRs)
+        ).intersection(parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs)
+        let preservedLabelLocalBindingPlanning = ParameterLocalBindingRenamePlanning.makeResult(
+            candidateUSRs: preservedLabelLocalBindingCandidateUSRs,
+            groupsByUSR: groupsByUSR,
+            indexedFacts: indexedFacts,
+            parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
+            analyzer: analyzer,
+            sourceCache: sourceCache
+        )
         for componentTemplate in externalLabelPlanning.componentTemplates {
             guard let component = parameterExternalLabelComponentFacts.components.first(where: {
                 $0.key == componentTemplate.key
@@ -740,6 +752,52 @@ public struct RenamePlanner {
                 }
             }
         }
+
+        var renamedPreservedLabelLocalBindingUSRs: Set<String> = []
+        for template in preservedLabelLocalBindingPlanning.templates {
+            guard let group = groupsByUSR[template.usr] else {
+                continue
+            }
+            let newName: String
+            if let existing = mappingStore.entry(for: template.usr) {
+                guard existing.originalName == template.oldName,
+                      existing.kind == "parameter" else {
+                    denied.append(ParameterLocalBindingRenamePlanning.denialDecision(
+                        group: group,
+                        oldName: template.oldName,
+                        reasons: ["persisted mapping metadata disagrees for \(template.usr)"]
+                    ))
+                    continue
+                }
+                newName = existing.obfuscatedName
+            } else {
+                newName = nextName(for: "parameter", avoiding: reservedNames)
+                reservedNames.insert(newName)
+                mappingStore.record(
+                    usr: template.usr,
+                    originalName: template.oldName,
+                    obfuscatedName: newName,
+                    kind: "parameter"
+                )
+            }
+            entries.append(RenamePlanEntry(
+                usr: template.usr,
+                kind: "parameter",
+                oldName: template.oldName,
+                newName: newName,
+                replacements: template.replacements.map {
+                    $0.replacement(newName: newName)
+                }.sorted { lhs, rhs in
+                    (lhs.path, lhs.byteOffset, lhs.usr)
+                        < (rhs.path, rhs.byteOffset, rhs.usr)
+                }
+            ))
+            renamedPreservedLabelLocalBindingUSRs.insert(template.usr)
+        }
+        denied.append(contentsOf: externalLabelPlanning.denied.filter {
+            !renamedPreservedLabelLocalBindingUSRs.contains($0.usr)
+        })
+        denied.append(contentsOf: preservedLabelLocalBindingPlanning.denied)
 
         let conflictGroups = Dictionary(grouping: entries.flatMap(\.replacements)) { replacement in
             "\(replacement.path):\(replacement.byteOffset)"
