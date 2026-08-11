@@ -24,6 +24,7 @@ public struct RenamePlan: Codable, Sendable {
     public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
     public let enumCaseComponentFacts: EnumCaseComponentFactsSummary
     public let enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary
+    public let genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary
 
     public init(
         entries: [RenamePlanEntry],
@@ -40,7 +41,8 @@ public struct RenamePlan: Codable, Sendable {
         parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary = .empty,
         parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty,
         enumCaseComponentFacts: EnumCaseComponentFactsSummary = .empty,
-        enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary = .empty
+        enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary = .empty,
+        genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary = .empty
     ) {
         self.entries = entries
         self.denied = denied
@@ -57,6 +59,7 @@ public struct RenamePlan: Codable, Sendable {
         self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
         self.enumCaseComponentFacts = enumCaseComponentFacts
         self.enumCaseSyntaxFacts = enumCaseSyntaxFacts
+        self.genericParameterSyntaxFacts = genericParameterSyntaxFacts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -75,6 +78,7 @@ public struct RenamePlan: Codable, Sendable {
         case parameterLocalBindingOutcome
         case enumCaseComponentFacts
         case enumCaseSyntaxFacts
+        case genericParameterSyntaxFacts
     }
 
     public init(from decoder: Decoder) throws {
@@ -129,6 +133,10 @@ public struct RenamePlan: Codable, Sendable {
         enumCaseSyntaxFacts = try container.decodeIfPresent(
             EnumCaseSyntaxFactsSummary.self,
             forKey: .enumCaseSyntaxFacts
+        ) ?? .empty
+        genericParameterSyntaxFacts = try container.decodeIfPresent(
+            GenericParameterSyntaxFactsSummary.self,
+            forKey: .genericParameterSyntaxFacts
         ) ?? .empty
     }
 
@@ -193,6 +201,11 @@ public struct RenamePlanner {
             }
         )
         let parameterSyntaxFacts = ParameterSyntaxFacts(
+            snapshot: snapshot,
+            sourceCache: sourceCache,
+            obfuscationRoots: analyzer.obfuscationRoots
+        )
+        let genericParameterSyntaxFacts = GenericParameterSyntaxFacts(
             snapshot: snapshot,
             sourceCache: sourceCache,
             obfuscationRoots: analyzer.obfuscationRoots
@@ -287,6 +300,10 @@ public struct RenamePlanner {
                         coordinatedProtocolRequirementUSRs: coordinationEnabled
                             ? component.protocolRequirementUSRs
                             : [],
+                        genericParameterUSRs:
+                            genericParameterSyntaxFacts.genericParameterUSRs,
+                        supportedGenericParameterUSRs:
+                            genericParameterSyntaxFacts.supportedGenericParameterUSRs,
                         serializationKeyPreservedUSRs: serializationKeyPreservedUSRs,
                         propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs,
                         localBindingOnlyParameterUSRs:
@@ -437,6 +454,9 @@ public struct RenamePlanner {
                 indexedFacts: indexedFacts,
                 overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
                 tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs,
+                genericParameterUSRs: genericParameterSyntaxFacts.genericParameterUSRs,
+                supportedGenericParameterUSRs:
+                    genericParameterSyntaxFacts.supportedGenericParameterUSRs,
                 serializationKeyPreservedUSRs: serializationKeyPreservedUSRs,
                 propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs,
                 localBindingOnlyParameterUSRs:
@@ -828,7 +848,8 @@ public struct RenamePlanner {
                 groupsByUSR: groupsByUSR
             ),
             enumCaseComponentFacts: enumCaseComponentFacts.summary,
-            enumCaseSyntaxFacts: enumCaseSyntaxFacts.summary
+            enumCaseSyntaxFacts: enumCaseSyntaxFacts.summary,
+            genericParameterSyntaxFacts: genericParameterSyntaxFacts.summary
         )
     }
 

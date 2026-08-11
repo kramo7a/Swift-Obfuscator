@@ -6588,11 +6588,111 @@ import Testing
 
     let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
         group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
-        sourceCache: cache
+        sourceCache: cache,
+        genericParameterUSRs: [symbol.usr]
     )
 
     #expect(decision.allowed == false)
     #expect(decision.reasons.contains("generic type parameter occurrences are incomplete"))
+}
+
+@Test func renamePlannerUsesIndexedGenericParameterOccurrencesAfterSyntaxAnchoring() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent("Sample.swift")
+    let lines = [
+        "struct Box<Value: Hashable> {",
+        "    let stored: Value",
+        "    func accept(_ input: Value) {",
+        "        let _: Value = input",
+        "    }",
+        "}",
+        "typealias Alias = String"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+
+    let genericParameter = SymbolRecord(
+        usr: "usr-generic-value",
+        name: "Value",
+        kind: "typealias",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let ordinaryTypealias = SymbolRecord(
+        usr: "usr-alias",
+        name: "Alias",
+        kind: "typealias",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    func occurrence(
+        _ symbol: SymbolRecord,
+        line: Int,
+        roles: [String]
+    ) -> OccurrenceRecord {
+        OccurrenceRecord(
+            symbol: symbol,
+            path: file.path,
+            line: line,
+            utf8Column: utf8Column(of: symbol.name, in: lines[line - 1]),
+            moduleName: "Sample",
+            isSystem: false,
+            rolesRaw: roles.contains("definition") ? 2 : 4,
+            roles: roles,
+            rolesDescription: roles.joined(separator: ","),
+            symbolProvider: "swift",
+            relations: []
+        )
+    }
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [genericParameter, ordinaryTypealias],
+        occurrences: [
+            occurrence(genericParameter, line: 1, roles: ["definition"]),
+            occurrence(genericParameter, line: 2, roles: ["reference"]),
+            occurrence(genericParameter, line: 3, roles: ["reference"]),
+            occurrence(genericParameter, line: 4, roles: ["reference"]),
+            occurrence(ordinaryTypealias, line: 7, roles: ["definition"])
+        ]
+    )
+
+    let facts = GenericParameterSyntaxFacts(
+        snapshot: snapshot,
+        sourceCache: cache,
+        obfuscationRoots: [directory]
+    )
+    #expect(facts.genericParameterUSRs == [genericParameter.usr])
+    #expect(facts.supportedGenericParameterUSRs == [genericParameter.usr])
+    #expect(facts.unresolvedReasonsByUSR.isEmpty)
+    #expect(facts.summary.syntaxGenericParameters == 1)
+    #expect(facts.summary.indexedGenericParameters == 1)
+    #expect(facts.summary.supportedGenericParameters == 1)
+    #expect(facts.summary.indexedOccurrences == 4)
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == genericParameter.usr })
+    #expect(entry.replacements.count == 4)
+    #expect(plan.genericParameterSyntaxFacts.supportedGenericParameters == 1)
+    #expect(plan.entries.contains { $0.usr == ordinaryTypealias.usr })
+    #expect(plan.denied.allSatisfy { $0.usr != genericParameter.usr })
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("struct Box<\(entry.newName): Hashable>"))
+    #expect(patched.contains("let stored: \(entry.newName)"))
+    #expect(patched.contains("func accept(_ input: \(entry.newName))"))
+    #expect(patched.contains("let _: \(entry.newName) = input"))
 }
 
 @Test func safetyAnalyzerDeniesAccessorContextualKeywords() throws {

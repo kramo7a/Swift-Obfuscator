@@ -70,6 +70,7 @@ struct RunSummary: Codable {
     var parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary?
     var enumCaseComponentFacts: EnumCaseComponentFactsSummary?
     var enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary?
+    var genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary?
     var artifacts = RunArtifacts()
     var logs: [String] = []
     var error: RunErrorSummary?
@@ -431,6 +432,7 @@ struct SwiftObfuscatorCLI {
             summary.parameterLocalBindingOutcome = plan.parameterLocalBindingOutcome
             summary.enumCaseComponentFacts = plan.enumCaseComponentFacts
             summary.enumCaseSyntaxFacts = plan.enumCaseSyntaxFacts
+            summary.genericParameterSyntaxFacts = plan.genericParameterSyntaxFacts
             let dryRunReport = ReportRenderer.renderDryRun(plan: plan, compact: options.compactReport)
             let dryRunReportPath = try output.writeArtifact(named: "dry-run-report.txt", contents: dryRunReport)
             summary.artifacts.dryRunReport = dryRunReportPath.path

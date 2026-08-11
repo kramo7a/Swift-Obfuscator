@@ -53,6 +53,8 @@ public struct SafetyAnalyzer: Sendable {
         tupleTypealiasRelatedUSRs: Set<String> = [],
         coordinatedRelatedUSRs: Set<String> = [],
         coordinatedProtocolRequirementUSRs: Set<String> = [],
+        genericParameterUSRs: Set<String> = [],
+        supportedGenericParameterUSRs: Set<String> = [],
         serializationKeyPreservedUSRs: Set<String> = [],
         propertyWrapperSupportedUSRs: Set<String> = [],
         localBindingOnlyParameterUSRs: Set<String> = [],
@@ -108,6 +110,10 @@ public struct SafetyAnalyzer: Sendable {
         }
         if tupleTypealiasRelatedUSRs.contains(group.usr) {
             reasons.append("tuple typealias constructor occurrences are incomplete")
+        }
+        if genericParameterUSRs.contains(group.usr),
+           !supportedGenericParameterUSRs.contains(group.usr) {
+            reasons.append("generic type parameter occurrences are incomplete")
         }
         if indexedFacts.propertyWrapperDerivedUSRsByPropertyUSR[group.usr] != nil,
            !propertyWrapperSupportedUSRs.contains(group.usr) {
@@ -167,10 +173,6 @@ public struct SafetyAnalyzer: Sendable {
             tokenNames.insert(token.name)
 
             if occurrence.roles.contains("declaration") || occurrence.roles.contains("definition") {
-                if group.symbol.kind == "typealias",
-                   declarationLineLooksGenericTypeParameter(source: source, occurrence: occurrence, token: token) {
-                    reasons.append("generic type parameter occurrences are incomplete")
-                }
                 if Self.isLanguageRequiredDeclarationName(token.name) {
                     reasons.append("language-required declaration name \(token.name)")
                 }
@@ -282,24 +284,6 @@ public struct SafetyAnalyzer: Sendable {
     private func isSyntheticAccessorName(_ name: String) -> Bool {
         let lowercasedName = name.lowercased()
         return lowercasedName.hasPrefix("getter:") || lowercasedName.hasPrefix("setter:")
-    }
-
-    private func declarationLineLooksGenericTypeParameter(
-        source: SourceFile,
-        occurrence: OccurrenceRecord,
-        token: IdentifierToken
-    ) -> Bool {
-        guard let line = source.lineText(line: occurrence.line),
-              let tokenRange = line.range(of: token.name) else {
-            return false
-        }
-
-        let before = line[..<tokenRange.lowerBound]
-        let after = line[tokenRange.upperBound...]
-        let declarationKeywords = ["class", "struct", "enum", "protocol", "func"]
-        return before.contains("<")
-            && after.contains(">")
-            && declarationKeywords.contains { containsSwiftWord(String(before), word: $0) }
     }
 
     private func declarationHasUnindexedRuntimeOrLinkageAttribute(
