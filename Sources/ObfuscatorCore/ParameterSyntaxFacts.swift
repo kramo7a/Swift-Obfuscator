@@ -61,6 +61,8 @@ public struct ParameterDeclarationSyntaxRoles: Hashable, Sendable {
     public let isVariadic: Bool
     public let trailingClosureCompatibility: ParameterTrailingClosureCompatibility
     public let localBindingReferences: [SourceTokenRange]
+    public let coordinatedShorthandBindingDeclarations: [SourceTokenRange]
+    public let coordinatedShorthandBindingReferences: [SourceTokenRange]
     public let shadowingBindingDeclarations: [SourceTokenRange]
     public let implicitShadowingBindingNames: Set<String>
     public let syntaxOwnerToken: SourceTokenRange?
@@ -81,7 +83,12 @@ public struct ParameterDeclarationSyntaxRoles: Hashable, Sendable {
 
     public var localBindingTokens: [SourceTokenRange] {
         let declaration = localBinding.map { [$0] } ?? []
-        return Array(Set(declaration + localBindingReferences)).sorted {
+        return Array(Set(
+            declaration
+                + localBindingReferences
+                + coordinatedShorthandBindingDeclarations
+                + coordinatedShorthandBindingReferences
+        )).sorted {
             ($0.path, $0.byteRange.lowerBound) < ($1.path, $1.byteRange.lowerBound)
         }
     }
@@ -112,6 +119,9 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
     public let sharedLabelAndBindingTokens: Int
     public let distinctLabelAndBindingTokens: Int
     public let localBindingReferenceTokens: Int
+    public let parametersWithCoordinatedShorthandBindings: Int
+    public let coordinatedShorthandBindingDeclarations: Int
+    public let coordinatedShorthandBindingReferenceTokens: Int
     public let parametersWithShadowingBindingDeclarations: Int
     public let unresolvedShadowingBindingKinds: [String: Int]
     public let localBindingOnlyCoverageCandidates: Int
@@ -176,6 +186,15 @@ public struct ParameterSyntaxFactsSummary: Codable, Equatable, Sendable {
         }
         self.localBindingReferenceTokens = roles.reduce(0) {
             $0 + $1.localBindingReferences.count
+        }
+        self.parametersWithCoordinatedShorthandBindings = roles.count {
+            !$0.coordinatedShorthandBindingDeclarations.isEmpty
+        }
+        self.coordinatedShorthandBindingDeclarations = roles.reduce(0) {
+            $0 + $1.coordinatedShorthandBindingDeclarations.count
+        }
+        self.coordinatedShorthandBindingReferenceTokens = roles.reduce(0) {
+            $0 + $1.coordinatedShorthandBindingReferences.count
         }
         self.parametersWithShadowingBindingDeclarations = roles.count {
             !$0.shadowingBindingDeclarations.isEmpty
@@ -446,6 +465,10 @@ public struct ParameterSyntaxFacts: Sendable {
                     symbolKindsByNominalTypeAnchor: symbolKindsByNominalTypeAnchor
                 ),
                 localBindingReferences: candidate.localBindingReferences,
+                coordinatedShorthandBindingDeclarations:
+                    candidate.coordinatedShorthandBindingDeclarations,
+                coordinatedShorthandBindingReferences:
+                    candidate.coordinatedShorthandBindingReferences,
                 shadowingBindingDeclarations: candidate.shadowingBindingDeclarations,
                 implicitShadowingBindingNames: candidate.implicitShadowingBindingNames,
                 syntaxOwnerToken: candidate.ownerToken,
@@ -533,6 +556,8 @@ private struct ParameterSyntaxCandidate {
     let ownerToken: SourceTokenRange?
     let bodyRange: Range<Int>?
     var localBindingReferences: [SourceTokenRange] = []
+    var coordinatedShorthandBindingDeclarations: [SourceTokenRange] = []
+    var coordinatedShorthandBindingReferences: [SourceTokenRange] = []
     var shadowingBindingDeclarations: [SourceTokenRange] = []
     var shadowingBindingKinds: [String] = []
     var implicitShadowingBindingNames: Set<String> = []
@@ -549,25 +574,32 @@ private struct BindingDeclaration {
     /// Exact lexical ranges in which this declaration shadows an outer binding.
     /// `nil` means the scope has not been modeled and must remain fail-closed.
     let shadowScopes: [Range<Int>]?
+    /// The declaration uses shorthand optional-binding syntax, so its source token
+    /// also reads the visible binding with the same name.
+    let isShorthandOptionalBinding: Bool
 
     init(
         token: SourceTokenRange,
         kind: BindingDeclarationKind,
-        shadowScope: Range<Int>?
+        shadowScope: Range<Int>?,
+        isShorthandOptionalBinding: Bool = false
     ) {
         self.token = token
         self.kind = kind
         self.shadowScopes = shadowScope.map { [$0] }
+        self.isShorthandOptionalBinding = isShorthandOptionalBinding
     }
 
     init(
         token: SourceTokenRange,
         kind: BindingDeclarationKind,
-        shadowScopes: [Range<Int>]?
+        shadowScopes: [Range<Int>]?,
+        isShorthandOptionalBinding: Bool = false
     ) {
         self.token = token
         self.kind = kind
         self.shadowScopes = shadowScopes
+        self.isShorthandOptionalBinding = isShorthandOptionalBinding
     }
 }
 
@@ -770,7 +802,8 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             bindingDeclarations.append(BindingDeclaration(
                 token: token,
                 kind: facts.kind,
-                shadowScopes: facts.shadowScopes
+                shadowScopes: facts.shadowScopes,
+                isShorthandOptionalBinding: facts.isShorthandOptionalBinding
             ))
         }
         return .visitChildren
@@ -844,6 +877,52 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                         && scope.upperBound <= bodyRange.upperBound
                 }
             }
+            let safelyCoordinatedShorthandBindings = scopedBindings.filter { binding in
+                guard binding.isShorthandOptionalBinding,
+                      let scopes = binding.shadowScopes else {
+                    return false
+                }
+                let isAlreadyShadowed = scopedBindings.contains { other in
+                    other.token != binding.token
+                        && (other.shadowScopes ?? []).contains(where: {
+                            $0.contains(binding.token.byteRange.lowerBound)
+                        })
+                }
+                guard !isAlreadyShadowed else {
+                    return false
+                }
+                let hasNestedBinding = matchingBindings.contains { other in
+                    other.token != binding.token
+                        && scopes.contains(where: {
+                            $0.contains(other.token.byteRange.lowerBound)
+                        })
+                }
+                let hasNestedImplicitBinding = implicitBindingScopes.contains { implicit in
+                    implicit.name == localBinding.name
+                        && scopes.contains(where: {
+                            $0.contains(implicit.bodyRange.lowerBound)
+                        })
+                }
+                return !hasNestedBinding && !hasNestedImplicitBinding
+            }
+            let safeCoordinatedTokens = Set(
+                safelyCoordinatedShorthandBindings.map(\.token)
+            )
+            let unsafeDirectShorthandTokens = Set<SourceTokenRange>(
+                scopedBindings.compactMap { binding -> SourceTokenRange? in
+                    guard binding.isShorthandOptionalBinding,
+                          !safeCoordinatedTokens.contains(binding.token) else {
+                        return nil
+                    }
+                    let isAlreadyShadowed = scopedBindings.contains { other in
+                        other.token != binding.token
+                            && (other.shadowScopes ?? []).contains(where: {
+                                $0.contains(binding.token.byteRange.lowerBound)
+                            })
+                    }
+                    return isAlreadyShadowed ? nil : binding.token
+                }
+            )
             let shadowScopes = scopedBindings.flatMap { $0.shadowScopes ?? [] }
             candidates[index].localBindingReferences = Array(Set(
                 declarationReferences.filter { reference in
@@ -854,7 +933,23 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                         })
                 }
             )).sorted { $0.byteRange.lowerBound < $1.byteRange.lowerBound }
+            candidates[index].coordinatedShorthandBindingDeclarations =
+                safelyCoordinatedShorthandBindings.map(\.token).sorted {
+                    $0.byteRange.lowerBound < $1.byteRange.lowerBound
+                }
+            candidates[index].coordinatedShorthandBindingReferences = Array(Set(
+                safelyCoordinatedShorthandBindings.flatMap { binding in
+                    let scopes = binding.shadowScopes ?? []
+                    return declarationReferences.filter { reference in
+                        reference.name == localBinding.name
+                            && scopes.contains(where: {
+                                $0.contains(reference.byteRange.lowerBound)
+                            })
+                    }
+                }
+            )).sorted { $0.byteRange.lowerBound < $1.byteRange.lowerBound }
             let scopedTokens = Set(scopedBindings.map(\.token))
+                .subtracting(unsafeDirectShorthandTokens)
             let unresolvedBindings = matchingBindings.filter {
                 !scopedTokens.contains($0.token)
             }
@@ -1003,7 +1098,11 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
 
     private func identifierPatternBindingFacts(
         of node: IdentifierPatternSyntax
-    ) -> (shadowScopes: [Range<Int>]?, kind: BindingDeclarationKind) {
+    ) -> (
+        shadowScopes: [Range<Int>]?,
+        kind: BindingDeclarationKind,
+        isShorthandOptionalBinding: Bool
+    ) {
         var ancestor = Syntax(node).parent
         var patternBinding: PatternBindingSyntax?
         while let current = ancestor {
@@ -1018,40 +1117,47 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                 default:
                     shadowScopes = nil
                 }
-                return (shadowScopes, kind)
+                return (
+                    shadowScopes,
+                    kind,
+                    optionalBinding.initializer == nil
+                        && kind == .ifOptionalBindingCondition
+                        && shadowScopes != nil
+                )
             }
             if current.is(MatchingPatternConditionSyntax.self) {
-                return (nil, .matchingPatternCondition)
+                return (nil, .matchingPatternCondition, false)
             }
             if current.is(ForStmtSyntax.self) {
-                return (nil, .forStatementPattern)
+                return (nil, .forStatementPattern, false)
             }
             if current.is(SwitchCaseItemSyntax.self) {
                 return (
                     switchCasePatternShadowScope(of: node).map { [$0] },
-                    .switchCasePattern
+                    .switchCasePattern,
+                    false
                 )
             }
             if current.is(CatchItemSyntax.self) {
-                return (nil, .catchItemPattern)
+                return (nil, .catchItemPattern, false)
             }
             if let binding = current.as(PatternBindingSyntax.self) {
                 patternBinding = binding
                 break
             }
             if current.is(CodeBlockItemSyntax.self) {
-                return (nil, .unmodeledIdentifierPattern)
+                return (nil, .unmodeledIdentifierPattern, false)
             }
             ancestor = current.parent
         }
         guard let patternBinding else {
-            return (nil, .unmodeledIdentifierPattern)
+            return (nil, .unmodeledIdentifierPattern, false)
         }
         guard patternBinding.pattern.is(IdentifierPatternSyntax.self) else {
-            return (nil, .destructuredVariablePattern)
+            return (nil, .destructuredVariablePattern, false)
         }
         guard patternBinding.accessorBlock == nil else {
-            return (nil, .accessorBackedVariable)
+            return (nil, .accessorBackedVariable, false)
         }
 
         ancestor = Syntax(patternBinding).parent
@@ -1062,15 +1168,15 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
                 break
             }
             if current.is(CodeBlockItemSyntax.self) {
-                return (nil, .unmodeledIdentifierPattern)
+                return (nil, .unmodeledIdentifierPattern, false)
             }
             ancestor = current.parent
         }
         guard let variableDeclaration else {
-            return (nil, .unmodeledIdentifierPattern)
+            return (nil, .unmodeledIdentifierPattern, false)
         }
         guard variableDeclaration.bindings.count == 1 else {
-            return (nil, .multiBindingVariable)
+            return (nil, .multiBindingVariable, false)
         }
 
         ancestor = Syntax(variableDeclaration).parent
@@ -1078,19 +1184,19 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
             if let closure = current.as(ClosureExprSyntax.self) {
                 let start = variableDeclaration.endPositionBeforeTrailingTrivia.utf8Offset
                 let end = closure.rightBrace.positionAfterSkippingLeadingTrivia.utf8Offset
-                return (start <= end ? [start..<end] : nil, .simpleLocalVariable)
+                return (start <= end ? [start..<end] : nil, .simpleLocalVariable, false)
             }
             if let codeBlock = current.as(CodeBlockSyntax.self) {
                 let start = variableDeclaration.endPositionBeforeTrailingTrivia.utf8Offset
                 let end = codeBlock.rightBrace.positionAfterSkippingLeadingTrivia.utf8Offset
-                return (start <= end ? [start..<end] : nil, .simpleLocalVariable)
+                return (start <= end ? [start..<end] : nil, .simpleLocalVariable, false)
             }
             if current.is(MemberBlockSyntax.self) || current.is(SourceFileSyntax.self) {
-                return (nil, .memberOrSourceVariable)
+                return (nil, .memberOrSourceVariable, false)
             }
             ancestor = current.parent
         }
-        return (nil, .unmodeledIdentifierPattern)
+        return (nil, .unmodeledIdentifierPattern, false)
     }
 
     private func optionalBindingKind(
@@ -1118,8 +1224,7 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
     private func ifOptionalBindingShadowScope(
         _ binding: OptionalBindingConditionSyntax
     ) -> Range<Int>? {
-        guard binding.pattern.is(IdentifierPatternSyntax.self),
-              binding.initializer != nil else {
+        guard binding.pattern.is(IdentifierPatternSyntax.self) else {
             return nil
         }
         var ancestor = Syntax(binding).parent

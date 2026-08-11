@@ -2141,7 +2141,7 @@ import Testing
     )
 }
 
-@Test func shorthandIfOptionalBindingShadowFailsClosed() throws {
+@Test func shorthandIfOptionalBindingRenamesWithVisibleParameter() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString,
         isDirectory: true
@@ -2152,7 +2152,7 @@ import Testing
     let lines = [
         "func inspect(_ value: Int?) -> Int {",
         "    if let value { return value }",
-        "    return 0",
+        "    return value ?? 0",
         "}"
     ]
     try (lines.joined(separator: "\n") + "\n").write(
@@ -2185,12 +2185,143 @@ import Testing
 
     var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(entry.replacements.count == 4)
+    #expect(plan.parameterSyntaxFacts.parametersWithCoordinatedShorthandBindings == 1)
+    #expect(plan.parameterSyntaxFacts.coordinatedShorthandBindingDeclarations == 1)
+    #expect(plan.parameterSyntaxFacts.coordinatedShorthandBindingReferenceTokens == 1)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 0)
+    #expect(plan.parameterSyntaxFacts.unresolvedShadowingBindingKinds.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("func inspect(_ \(entry.newName): Int?)"))
+    #expect(patched.contains("if let \(entry.newName) { return \(entry.newName) }"))
+    #expect(patched.contains("return \(entry.newName) ?? 0"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
+@Test func shorthandIfOptionalBindingWithNestedSameNameFailsClosed() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("NestedIfOptionalShorthand.swift")
+    let lines = [
+        "func inspect(_ value: Int?) -> Int {",
+        "    if let value {",
+        "        let value = value + 1",
+        "        return value",
+        "    }",
+        "    return value ?? 0",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let value = SymbolRecord(
+        usr: "usr-nested-if-optional-shorthand",
+        name: "value",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [value],
+        occurrences: [
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 1,
+                token: "value",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
     #expect(!plan.entries.contains { $0.usr == value.usr })
+    #expect(plan.parameterSyntaxFacts.parametersWithCoordinatedShorthandBindings == 0)
     #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 1)
     #expect(plan.parameterSyntaxFacts.unresolvedShadowingBindingKinds == [
         "ifOptionalBindingCondition": 1
     ])
     #expect(plan.denied.contains { $0.usr == value.usr })
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
+@Test func shorthandIfInsideExplicitShadowDoesNotBindOuterParameter() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("NestedExplicitIfOptional.swift")
+    let lines = [
+        "func inspect(_ value: Int??) -> Int {",
+        "    if let value = value {",
+        "        if let value { return value }",
+        "    }",
+        "    return (value ?? nil) ?? 0",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let value = SymbolRecord(
+        usr: "usr-shorthand-inside-explicit-shadow",
+        name: "value",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [value],
+        occurrences: [
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 1,
+                token: "value",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == value.usr })
+    #expect(entry.replacements.count == 3)
+    #expect(plan.parameterSyntaxFacts.parametersWithCoordinatedShorthandBindings == 0)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 0)
+    #expect(plan.parameterSyntaxFacts.unresolvedShadowingBindingKinds.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("func inspect(_ \(entry.newName): Int??)"))
+    #expect(patched.contains("if let value = \(entry.newName)"))
+    #expect(patched.contains("if let value { return value }"))
+    #expect(patched.contains("return (\(entry.newName) ?? nil) ?? 0"))
     _ = try CommandRunner().run(
         executable: "/usr/bin/xcrun",
         arguments: ["swiftc", "-typecheck", file.path]
@@ -2738,6 +2869,8 @@ import Testing
             isVariadic: false,
             trailingClosureCompatibility: .definitelyNonCallable,
             localBindingReferences: [],
+            coordinatedShorthandBindingDeclarations: [],
+            coordinatedShorthandBindingReferences: [],
             shadowingBindingDeclarations: [],
             implicitShadowingBindingNames: [],
             syntaxOwnerToken: nil,
@@ -2932,6 +3065,8 @@ import Testing
             isVariadic: false,
             trailingClosureCompatibility: .definitelyNonCallable,
             localBindingReferences: [],
+            coordinatedShorthandBindingDeclarations: [],
+            coordinatedShorthandBindingReferences: [],
             shadowingBindingDeclarations: [],
             implicitShadowingBindingNames: [],
             syntaxOwnerToken: nil,
