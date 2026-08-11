@@ -702,7 +702,7 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         if let token = sourceToken(node.identifier) {
             bindingDeclarations.append(BindingDeclaration(
                 token: token,
-                shadowScope: nil
+                shadowScope: simpleLocalVariableShadowScope(of: node)
             ))
         }
         return .visitChildren
@@ -920,6 +920,64 @@ private final class ParameterSyntaxVisitor: SyntaxVisitor {
         while let current = ancestor {
             if let closure = current.as(ClosureExprSyntax.self) {
                 return syntaxRange(closure.statements)
+            }
+            ancestor = current.parent
+        }
+        return nil
+    }
+
+    private func simpleLocalVariableShadowScope(
+        of node: IdentifierPatternSyntax
+    ) -> Range<Int>? {
+        var ancestor = Syntax(node).parent
+        var patternBinding: PatternBindingSyntax?
+        while let current = ancestor {
+            if let binding = current.as(PatternBindingSyntax.self) {
+                patternBinding = binding
+                break
+            }
+            if current.is(CodeBlockItemSyntax.self) {
+                return nil
+            }
+            ancestor = current.parent
+        }
+        guard let patternBinding,
+              patternBinding.pattern.is(IdentifierPatternSyntax.self),
+              patternBinding.accessorBlock == nil else {
+            return nil
+        }
+
+        ancestor = Syntax(patternBinding).parent
+        var variableDeclaration: VariableDeclSyntax?
+        while let current = ancestor {
+            if let declaration = current.as(VariableDeclSyntax.self) {
+                variableDeclaration = declaration
+                break
+            }
+            if current.is(CodeBlockItemSyntax.self) {
+                return nil
+            }
+            ancestor = current.parent
+        }
+        guard let variableDeclaration,
+              variableDeclaration.bindings.count == 1 else {
+            return nil
+        }
+
+        ancestor = Syntax(variableDeclaration).parent
+        while let current = ancestor {
+            if let closure = current.as(ClosureExprSyntax.self) {
+                let start = variableDeclaration.endPositionBeforeTrailingTrivia.utf8Offset
+                let end = closure.rightBrace.positionAfterSkippingLeadingTrivia.utf8Offset
+                return start <= end ? start..<end : nil
+            }
+            if let codeBlock = current.as(CodeBlockSyntax.self) {
+                let start = variableDeclaration.endPositionBeforeTrailingTrivia.utf8Offset
+                let end = codeBlock.rightBrace.positionAfterSkippingLeadingTrivia.utf8Offset
+                return start <= end ? start..<end : nil
+            }
+            if current.is(MemberBlockSyntax.self) || current.is(SourceFileSyntax.self) {
+                return nil
             }
             ancestor = current.parent
         }

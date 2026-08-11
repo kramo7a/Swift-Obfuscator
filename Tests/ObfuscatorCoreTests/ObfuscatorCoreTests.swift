@@ -1737,15 +1737,18 @@ import Testing
     let labelEntry = try #require(plan.entries.first { $0.usr == label.usr })
     let messageEntry = try #require(plan.entries.first { $0.usr == message.usr })
     let webViewEntry = try #require(plan.entries.first { $0.usr == webView.usr })
-    #expect(plan.entries.count == 3)
+    let shadowedValueEntry = try #require(
+        plan.entries.first { $0.usr == shadowedValue.usr }
+    )
+    #expect(plan.entries.count == 4)
     #expect(labelEntry.replacements.count == 2)
     #expect(messageEntry.replacements.count == 2)
-    #expect(plan.denied.contains { $0.usr == shadowedValue.usr })
+    #expect(shadowedValueEntry.replacements.count == 2)
     #expect(webViewEntry.replacements.count == 3)
-    #expect(plan.parameterSyntaxFacts.localBindingReferenceTokens == 6)
-    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 1)
-    #expect(plan.parameterLocalBindingOutcome.candidates == 3)
-    #expect(plan.parameterLocalBindingOutcome.renamed == 3)
+    #expect(plan.parameterSyntaxFacts.localBindingReferenceTokens == 5)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 0)
+    #expect(plan.parameterLocalBindingOutcome.candidates == 4)
+    #expect(plan.parameterLocalBindingOutcome.renamed == 4)
 
     try SourcePatcher().apply(plan.replacements)
     let patched = try String(contentsOf: file, encoding: .utf8)
@@ -1756,7 +1759,9 @@ import Testing
     #expect(patched.contains("func evaluate(_ \(webViewEntry.newName): WebView)"))
     #expect(patched.contains("[weak \(webViewEntry.newName)]"))
     #expect(patched.contains("\(webViewEntry.newName)?.run()"))
-    #expect(patched.contains("func shadow(_ value: Int)"))
+    #expect(patched.contains("func shadow(_ \(shadowedValueEntry.newName): Int)"))
+    #expect(patched.contains("do { let value = 1; _ = value }"))
+    #expect(patched.contains("return \(shadowedValueEntry.newName)"))
 }
 
 @Test func parameterLocalBindingRenameFailsClosedForImplicitSwiftBindings() throws {
@@ -1831,6 +1836,121 @@ import Testing
     #expect(plan.denied.map(\.usr).contains(error.usr))
     #expect(plan.denied.map(\.usr).contains(newValue.usr))
     #expect(plan.denied.map(\.usr).contains(oldValue.usr))
+}
+
+@Test func parameterLocalBindingRenameFailsClosedForMultiBindingScope() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("MultiBindingShadow.swift")
+    let lines = [
+        "func inspect(_ value: Int) -> Int {",
+        "    do { let value = 1, copy = value; _ = copy }",
+        "    return value",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let value = SymbolRecord(
+        usr: "usr-multi-binding-shadow",
+        name: "value",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [value],
+        occurrences: [
+            testOccurrence(
+                value,
+                path: file.path,
+                line: 1,
+                token: "value",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    #expect(!plan.entries.contains { $0.usr == value.usr })
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 1)
+    #expect(plan.parameterSyntaxFacts.localBindingOnlyCoverageCandidates == 0)
+    #expect(plan.denied.contains { $0.usr == value.usr })
+
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
+@Test func localVariableShadowInsideClosureEndsAtClosureBoundary() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        UUID().uuidString,
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("ClosureShadow.swift")
+    let lines = [
+        "struct Group {}",
+        "func inspect(_ group: Group) -> Group {",
+        "    _ = { let group = Group(); _ = group }",
+        "    return group",
+        "}"
+    ]
+    try (lines.joined(separator: "\n") + "\n").write(
+        to: file,
+        atomically: true,
+        encoding: .utf8
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    let group = SymbolRecord(
+        usr: "usr-closure-shadow-boundary",
+        name: "group",
+        kind: "parameter",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [group],
+        occurrences: [
+            testOccurrence(
+                group,
+                path: file.path,
+                line: 2,
+                token: "group",
+                roles: ["definition"]
+            )
+        ]
+    )
+
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+    let entry = try #require(plan.entries.first { $0.usr == group.usr })
+    #expect(entry.replacements.count == 2)
+    #expect(plan.parameterSyntaxFacts.parametersWithShadowingBindingDeclarations == 0)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("func inspect(_ \(entry.newName): Group)"))
+    #expect(patched.contains("{ let group = Group(); _ = group }"))
+    #expect(patched.contains("return \(entry.newName)"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
 }
 
 @Test func parameterCallSiteSyntaxFactsResolveCompilerAnchoredLabelsAndCallShapes() throws {
