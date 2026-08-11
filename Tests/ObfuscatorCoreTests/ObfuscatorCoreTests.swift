@@ -8450,7 +8450,7 @@ import Testing
     _ = try CommandRunner().run(executable: executable.path, arguments: [])
 }
 
-@Test func enumCasePlannerPreservesExplicitRawCodableWireValuesAndDeniesManualContracts() throws {
+@Test func enumCasePlannerRenamesExplicitRawCodableSiblingAndDeniesManualContracts() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -8484,7 +8484,9 @@ import Testing
         "    StableWire.self,",
         "    from: Data(\"\\\"wire_second\\\"\".utf8)",
         ")",
-        "precondition(decoded == .second)"
+        "precondition(decoded == .second)",
+        "precondition(ImplicitWire.first.rawValue == [\"fi\", \"rst\"].joined())",
+        "precondition(ImplicitWire.second.rawValue == \"wire_second\")"
     ].joined(separator: "\n") + "\n"
     try source.write(to: file, atomically: true, encoding: .utf8)
 
@@ -8543,7 +8545,7 @@ import Testing
     })
     #expect(stableSyntax.blockers.isEmpty)
     #expect(!implicitSyntax.blockers.contains(.rawType))
-    #expect(implicitSyntax.blockers.contains(.serializationContract))
+    #expect(!implicitSyntax.blockers.contains(.serializationContract))
     let implicitFirstSyntax = try #require(implicitSyntax.members.first {
         $0.declarationToken?.name == "first"
     })
@@ -8552,11 +8554,13 @@ import Testing
     })
     #expect(implicitFirstSyntax.blockers.contains(.rawType))
     #expect(!implicitSecondSyntax.blockers.contains(.rawType))
+    #expect(implicitSecondSyntax.blockers.isEmpty)
     #expect(customSyntax.blockers.contains(.serializationContract))
 
     let plannedUSRs = Set(plan.entries.map(\.usr))
     #expect(Set(stableFacts.caseUSRs).isSubset(of: plannedUSRs))
-    #expect(Set(implicitFacts.caseUSRs).isDisjoint(with: plannedUSRs))
+    #expect(!plannedUSRs.contains(implicitFirstSyntax.caseUSR))
+    #expect(plannedUSRs.contains(implicitSecondSyntax.caseUSR))
     #expect(Set(customFacts.caseUSRs).isDisjoint(with: plannedUSRs))
     #expect(plan.conflicts.isEmpty)
 
@@ -8565,6 +8569,7 @@ import Testing
     #expect(patched.contains("= \"wire_first\""))
     #expect(patched.contains("= \"wire_second\""))
     #expect(patched.contains("case first\n"))
+    #expect(!patched.contains("case second = \"wire_second\""))
     #expect(patched.contains("case visible = \"wire_visible\""))
 
     let afterExecutable = directory.appendingPathComponent("After")
