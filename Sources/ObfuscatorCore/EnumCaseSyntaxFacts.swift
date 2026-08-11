@@ -378,7 +378,7 @@ public struct EnumCaseSyntaxFacts: Sendable {
                 continue
             }
             if declarationToken.isBackticked { blockers.insert(.backtickedIdentifier) }
-            if !isPlainSwiftIdentifier(declarationToken.name) {
+            if !isPlainSwiftArgumentLabel(declarationToken.name) {
                 blockers.insert(.nonPlainIdentifier)
             }
             if !member.unresolvedReferenceTokens.isEmpty {

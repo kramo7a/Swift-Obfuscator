@@ -8526,6 +8526,172 @@ import Testing
     )
 }
 
+@Test func enumCasePlannerRenamesContextualKeywordsButKeepsBackticksDenied() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("ContextualEnum.swift")
+    let source = [
+        "private enum ContextualToken {",
+        "    case open",
+        "    case get",
+        "    case left",
+        "}",
+        "private let first = ContextualToken.open",
+        "private let second = ContextualToken.get",
+        "private let third = ContextualToken.left",
+        "private enum EscapedToken {",
+        "    case `public`",
+        "}",
+        "private let escaped = EscapedToken.`public`"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func childOf(_ owner: SymbolRecord) -> RelationRecord {
+        RelationRecord(
+            usr: owner.usr,
+            name: owner.name,
+            rolesRaw: 0,
+            roles: ["childOf"]
+        )
+    }
+
+    let contextual = symbol("s:contextual", "ContextualToken", "enum")
+    let open = symbol("s:contextual-open", "open", "enumConstant")
+    let get = symbol("s:contextual-get", "get", "enumConstant")
+    let left = symbol("s:contextual-left", "left", "enumConstant")
+    let escaped = symbol("s:escaped", "EscapedToken", "enum")
+    let publicCase = symbol("s:escaped-public", "public", "enumConstant")
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [contextual, open, get, left, escaped, publicCase],
+        occurrences: [
+            testOccurrence(
+                contextual,
+                path: file.path,
+                line: 1,
+                token: "ContextualToken",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                open,
+                path: file.path,
+                line: 2,
+                token: "open",
+                roles: ["definition"],
+                relations: [childOf(contextual)]
+            ),
+            testOccurrence(
+                get,
+                path: file.path,
+                line: 3,
+                token: "get",
+                roles: ["definition"],
+                relations: [childOf(contextual)]
+            ),
+            testOccurrence(
+                left,
+                path: file.path,
+                line: 4,
+                token: "left",
+                roles: ["definition"],
+                relations: [childOf(contextual)]
+            ),
+            testOccurrence(
+                contextual,
+                path: file.path,
+                line: 6,
+                token: "ContextualToken",
+                roles: ["reference"]
+            ),
+            testOccurrence(open, path: file.path, line: 6, token: "open", roles: ["reference"]),
+            testOccurrence(
+                contextual,
+                path: file.path,
+                line: 7,
+                token: "ContextualToken",
+                roles: ["reference"]
+            ),
+            testOccurrence(get, path: file.path, line: 7, token: "get", roles: ["reference"]),
+            testOccurrence(
+                contextual,
+                path: file.path,
+                line: 8,
+                token: "ContextualToken",
+                roles: ["reference"]
+            ),
+            testOccurrence(left, path: file.path, line: 8, token: "left", roles: ["reference"]),
+            testOccurrence(
+                escaped,
+                path: file.path,
+                line: 9,
+                token: "EscapedToken",
+                roles: ["definition"]
+            ),
+            testOccurrence(
+                publicCase,
+                path: file.path,
+                line: 10,
+                token: "public",
+                roles: ["definition"],
+                relations: [childOf(escaped)]
+            ),
+            testOccurrence(
+                escaped,
+                path: file.path,
+                line: 12,
+                token: "EscapedToken",
+                roles: ["reference"]
+            ),
+            testOccurrence(
+                publicCase,
+                path: file.path,
+                line: 12,
+                token: "public",
+                roles: ["reference"]
+            )
+        ]
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    let contextualFacts = try #require(plan.enumCaseSyntaxFacts.components.first {
+        $0.ownerUSR == contextual.usr
+    })
+    let escapedFacts = try #require(plan.enumCaseSyntaxFacts.components.first {
+        $0.ownerUSR == escaped.usr
+    })
+    #expect(contextualFacts.blockers.isEmpty)
+    #expect(escapedFacts.blockers == [.backtickedIdentifier])
+    let contextualUSRs = Set([open.usr, get.usr, left.usr])
+    #expect(contextualUSRs.isSubset(of: Set(plan.entries.map(\.usr))))
+    #expect(!plan.entries.contains { $0.usr == publicCase.usr })
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(!patched.contains("case open"))
+    #expect(!patched.contains("case get"))
+    #expect(!patched.contains("case left"))
+    #expect(patched.contains("case `public`"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
 private func utf8Column(of needle: String, in line: String) -> Int {
     let range = line.range(of: needle)!
     return line[..<range.lowerBound].utf8.count + 1

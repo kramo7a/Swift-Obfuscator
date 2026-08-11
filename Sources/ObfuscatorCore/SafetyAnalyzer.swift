@@ -162,11 +162,14 @@ public struct SafetyAnalyzer: Sendable {
                 && token.name == "_"
             let isCompilerValidatedParameterToken = isSupportedParameter
                 && isPlainSwiftArgumentLabel(token.name)
+            let isCompilerValidatedEnumCaseToken = isSupportedEnumCase
+                && isPlainSwiftArgumentLabel(token.name)
             if token.isBackticked {
                 reasons.append("backticked identifier \(token.name)")
             }
             if !isExternalLabelOnlyUnderscore
                 && !isCompilerValidatedParameterToken
+                && !isCompilerValidatedEnumCaseToken
                 && !isPlainSwiftIdentifier(token.name) {
                 reasons.append("non-plain identifier \(token.name)")
             }
