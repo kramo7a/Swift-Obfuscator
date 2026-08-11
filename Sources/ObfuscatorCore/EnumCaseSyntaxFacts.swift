@@ -336,7 +336,10 @@ public struct EnumCaseSyntaxFacts: Sendable {
         members: [EnumCaseMemberSyntaxFact]
     ) -> Set<EnumCaseSyntaxBlocker> {
         var blockers: Set<EnumCaseSyntaxBlocker> = []
-        if semanticComponent.hasRawType { blockers.insert(.rawType) }
+        if semanticComponent.hasRawType
+            && !members.allSatisfy(\.hasExplicitRawValue) {
+            blockers.insert(.rawType)
+        }
         if !semanticComponent.protocolConformanceUSRs.isEmpty {
             blockers.insert(.protocolConformance)
         }

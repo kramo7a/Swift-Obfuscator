@@ -8320,6 +8320,88 @@ import Testing
     )
 }
 
+@Test func enumCasePlannerPreservesExplicitRawValues() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("ExplicitRawEnum.swift")
+    let source = [
+        "private enum ExplicitWire: String {",
+        "    case stable = \"wire_stable\"",
+        "}",
+        "let rawValue = ExplicitWire.stable.rawValue"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    let owner = symbol("s:explicit-wire", "ExplicitWire", "enum")
+    let stable = symbol("s:explicit-wire-stable", "stable", "enumConstant")
+    let rawType = symbol("s:explicit-raw-type", "String", "struct")
+    func relation(_ symbol: SymbolRecord, _ role: String) -> RelationRecord {
+        RelationRecord(usr: symbol.usr, name: symbol.name, rolesRaw: 0, roles: [role])
+    }
+
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [owner, stable, rawType],
+        occurrences: [
+            testOccurrence(owner, path: file.path, line: 1, token: "ExplicitWire", roles: ["definition"]),
+            testOccurrence(
+                rawType,
+                path: file.path,
+                line: 1,
+                token: "String",
+                roles: ["reference", "baseOf"],
+                relations: [relation(owner, "baseOf")]
+            ),
+            testOccurrence(
+                stable,
+                path: file.path,
+                line: 2,
+                token: "stable",
+                roles: ["definition"],
+                relations: [relation(owner, "childOf")]
+            ),
+            testOccurrence(owner, path: file.path, line: 4, token: "ExplicitWire", roles: ["reference"]),
+            testOccurrence(stable, path: file.path, line: 4, token: "stable", roles: ["reference"])
+        ]
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        generator: NameGenerator(prefix: "Case")
+    )
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    let component = try #require(
+        plan.enumCaseSyntaxFacts.components.first { $0.ownerUSR == owner.usr }
+    )
+    #expect(component.blockers.isEmpty)
+    #expect(component.members.first?.hasExplicitRawValue == true)
+    let stableEntry = try #require(plan.entries.first { $0.usr == stable.usr })
+    #expect(stableEntry.replacements.count == 2)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("case \(stableEntry.newName) = \"wire_stable\""))
+    #expect(!patched.contains("case stable"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
+}
+
 private func utf8Column(of needle: String, in line: String) -> Int {
     let range = line.range(of: needle)!
     return line[..<range.lowerBound].utf8.count + 1
