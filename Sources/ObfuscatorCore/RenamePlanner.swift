@@ -25,6 +25,7 @@ public struct RenamePlan: Codable, Sendable {
     public let enumCaseComponentFacts: EnumCaseComponentFactsSummary
     public let enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary
     public let genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary
+    public let typealiasSyntaxFacts: TypealiasSyntaxFactsSummary
 
     public init(
         entries: [RenamePlanEntry],
@@ -42,7 +43,8 @@ public struct RenamePlan: Codable, Sendable {
         parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty,
         enumCaseComponentFacts: EnumCaseComponentFactsSummary = .empty,
         enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary = .empty,
-        genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary = .empty
+        genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary = .empty,
+        typealiasSyntaxFacts: TypealiasSyntaxFactsSummary = .empty
     ) {
         self.entries = entries
         self.denied = denied
@@ -60,6 +62,7 @@ public struct RenamePlan: Codable, Sendable {
         self.enumCaseComponentFacts = enumCaseComponentFacts
         self.enumCaseSyntaxFacts = enumCaseSyntaxFacts
         self.genericParameterSyntaxFacts = genericParameterSyntaxFacts
+        self.typealiasSyntaxFacts = typealiasSyntaxFacts
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -79,6 +82,7 @@ public struct RenamePlan: Codable, Sendable {
         case enumCaseComponentFacts
         case enumCaseSyntaxFacts
         case genericParameterSyntaxFacts
+        case typealiasSyntaxFacts
     }
 
     public init(from decoder: Decoder) throws {
@@ -137,6 +141,10 @@ public struct RenamePlan: Codable, Sendable {
         genericParameterSyntaxFacts = try container.decodeIfPresent(
             GenericParameterSyntaxFactsSummary.self,
             forKey: .genericParameterSyntaxFacts
+        ) ?? .empty
+        typealiasSyntaxFacts = try container.decodeIfPresent(
+            TypealiasSyntaxFactsSummary.self,
+            forKey: .typealiasSyntaxFacts
         ) ?? .empty
     }
 
@@ -210,6 +218,11 @@ public struct RenamePlanner {
             sourceCache: sourceCache,
             obfuscationRoots: analyzer.obfuscationRoots
         )
+        let typealiasSyntaxFacts = TypealiasSyntaxFacts(
+            snapshot: snapshot,
+            sourceCache: sourceCache,
+            obfuscationRoots: analyzer.obfuscationRoots
+        )
         let parameterCallSiteSyntaxFacts = ParameterCallSiteSyntaxFacts(
             components: indexedFacts.parameterRenameComponents,
             sourceCache: sourceCache
@@ -258,10 +271,6 @@ public struct RenamePlanner {
             sourceCache: sourceCache
         )
         let propertyWrapperSupportedUSRs = Set(propertyWrapperComponents.map(\.propertyUSR))
-        let tupleTypealiasRelatedUSRs = Self.tupleTypealiasRelatedUSRs(
-            snapshot: snapshot,
-            sourceCache: sourceCache
-        )
         let coordinatedComponents = Self.coordinatedRenameComponents(
             indexedFacts: indexedFacts,
             groupsByUSR: groupsByUSR
@@ -295,7 +304,8 @@ public struct RenamePlanner {
                         sourceCache: sourceCache,
                         indexedFacts: indexedFacts,
                         overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
-                        tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs,
+                        tupleTypealiasRelatedUSRs:
+                            typealiasSyntaxFacts.unsafeTupleRelatedUSRs,
                         coordinatedRelatedUSRs: coordinationEnabled ? component.memberUSRs : [],
                         coordinatedProtocolRequirementUSRs: coordinationEnabled
                             ? component.protocolRequirementUSRs
@@ -453,7 +463,7 @@ public struct RenamePlanner {
                 sourceCache: sourceCache,
                 indexedFacts: indexedFacts,
                 overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
-                tupleTypealiasRelatedUSRs: tupleTypealiasRelatedUSRs,
+                tupleTypealiasRelatedUSRs: typealiasSyntaxFacts.unsafeTupleRelatedUSRs,
                 genericParameterUSRs: genericParameterSyntaxFacts.genericParameterUSRs,
                 supportedGenericParameterUSRs:
                     genericParameterSyntaxFacts.supportedGenericParameterUSRs,
@@ -849,7 +859,8 @@ public struct RenamePlanner {
             ),
             enumCaseComponentFacts: enumCaseComponentFacts.summary,
             enumCaseSyntaxFacts: enumCaseSyntaxFacts.summary,
-            genericParameterSyntaxFacts: genericParameterSyntaxFacts.summary
+            genericParameterSyntaxFacts: genericParameterSyntaxFacts.summary,
+            typealiasSyntaxFacts: typealiasSyntaxFacts.summary
         )
     }
 
@@ -1263,43 +1274,4 @@ public struct RenamePlanner {
         return result
     }
 
-    private static func tupleTypealiasRelatedUSRs(
-        snapshot: IndexSnapshot,
-        sourceCache: SourceFileCache
-    ) -> Set<String> {
-        var result: Set<String> = []
-        for occurrence in snapshot.occurrences where occurrence.symbol.kind == "typealias" {
-            guard occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"),
-                  let source = sourceCache.file(for: occurrence.path),
-                  let token = source.identifierToken(line: occurrence.line, utf8Column: occurrence.utf8Column),
-                  declarationLooksLikeTupleTypealias(source: source, occurrence: occurrence, token: token) else {
-                continue
-            }
-
-            result.insert(occurrence.usr)
-            for relation in occurrence.relations
-            where relation.roles.contains("childOf") || relation.roles.contains("containedBy") {
-                result.insert(relation.usr)
-            }
-        }
-        return result
-    }
-
-    private static func declarationLooksLikeTupleTypealias(
-        source: SourceFile,
-        occurrence: OccurrenceRecord,
-        token: IdentifierToken
-    ) -> Bool {
-        guard let line = source.lineText(line: occurrence.line),
-              let tokenRange = line.range(of: token.name) else {
-            return true
-        }
-        let afterName = line[tokenRange.upperBound...]
-        guard let equalsIndex = afterName.firstIndex(of: "=") else {
-            return false
-        }
-        let rhsStart = afterName.index(after: equalsIndex)
-        let rhs = afterName[rhsStart...].trimmingCharacters(in: .whitespacesAndNewlines)
-        return rhs.isEmpty || rhs.first == "("
-    }
 }

@@ -71,6 +71,7 @@ struct RunSummary: Codable {
     var enumCaseComponentFacts: EnumCaseComponentFactsSummary?
     var enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary?
     var genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary?
+    var typealiasSyntaxFacts: TypealiasSyntaxFactsSummary?
     var artifacts = RunArtifacts()
     var logs: [String] = []
     var error: RunErrorSummary?
@@ -433,6 +434,7 @@ struct SwiftObfuscatorCLI {
             summary.enumCaseComponentFacts = plan.enumCaseComponentFacts
             summary.enumCaseSyntaxFacts = plan.enumCaseSyntaxFacts
             summary.genericParameterSyntaxFacts = plan.genericParameterSyntaxFacts
+            summary.typealiasSyntaxFacts = plan.typealiasSyntaxFacts
             let dryRunReport = ReportRenderer.renderDryRun(plan: plan, compact: options.compactReport)
             let dryRunReportPath = try output.writeArtifact(named: "dry-run-report.txt", contents: dryRunReport)
             summary.artifacts.dryRunReport = dryRunReportPath.path

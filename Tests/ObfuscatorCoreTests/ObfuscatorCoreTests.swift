@@ -7157,15 +7157,19 @@ import Testing
     })
 }
 
-@Test func renamePlannerDeniesTupleTypealiasesAndTheirNominalOwners() throws {
+@Test func renamePlannerDistinguishesTupleAndFunctionTypealiasesByCompilerSyntax() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let file = directory.appendingPathComponent("Sample.swift")
     let lines = [
         "enum Namespace {",
         "    typealias Payload = (id: Int, value: String)",
+        "    typealias Handler =",
+        "        (Int) -> Void",
         "}",
-        "let payload = Namespace.Payload(id: 1, value: \"one\")"
+        "let payload = Namespace.Payload(id: 1, value: \"one\")",
+        "let handler: Namespace.Handler = { _ in }",
+        "handler(payload.id)"
     ]
     try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
@@ -7177,9 +7181,17 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let typealiasSymbol = SymbolRecord(
+    let payloadTypealias = SymbolRecord(
         usr: "usr-payload",
         name: "Payload",
+        kind: "typealias",
+        language: "swift",
+        propertiesRaw: 0,
+        properties: "[]"
+    )
+    let handlerTypealias = SymbolRecord(
+        usr: "usr-handler",
+        name: "Handler",
         kind: "typealias",
         language: "swift",
         propertiesRaw: 0,
@@ -7198,8 +7210,8 @@ import Testing
         symbolProvider: "swift",
         relations: []
     )
-    let typealiasOccurrence = OccurrenceRecord(
-        symbol: typealiasSymbol,
+    let payloadTypealiasOccurrence = OccurrenceRecord(
+        symbol: payloadTypealias,
         path: file.path,
         line: 2,
         utf8Column: utf8Column(of: "Payload", in: lines[1]),
@@ -7213,6 +7225,34 @@ import Testing
             RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 1, roles: ["childOf"])
         ]
     )
+    let handlerTypealiasOccurrence = OccurrenceRecord(
+        symbol: handlerTypealias,
+        path: file.path,
+        line: 3,
+        utf8Column: utf8Column(of: "Handler", in: lines[2]),
+        moduleName: "Sample",
+        isSystem: false,
+        rolesRaw: 1,
+        roles: ["declaration"],
+        rolesDescription: "decl",
+        symbolProvider: "swift",
+        relations: [
+            RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 1, roles: ["childOf"])
+        ]
+    )
+    let handlerReference = OccurrenceRecord(
+        symbol: handlerTypealias,
+        path: file.path,
+        line: 7,
+        utf8Column: utf8Column(of: "Handler", in: lines[6]),
+        moduleName: "Sample",
+        isSystem: false,
+        rolesRaw: 4,
+        roles: ["reference"],
+        rolesDescription: "ref",
+        symbolProvider: "swift",
+        relations: []
+    )
 
     var planner = RenamePlanner(
         analyzer: SafetyAnalyzer(sourceRoot: directory),
@@ -7221,15 +7261,35 @@ import Testing
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
-            symbols: [owner, typealiasSymbol],
-            occurrences: [ownerOccurrence, typealiasOccurrence]
+            symbols: [owner, payloadTypealias, handlerTypealias],
+            occurrences: [
+                ownerOccurrence,
+                payloadTypealiasOccurrence,
+                handlerTypealiasOccurrence,
+                handlerReference
+            ]
         ),
         sourceCache: cache
     )
 
-    #expect(plan.entries.isEmpty)
+    let handlerEntry = try #require(plan.entries.first { $0.usr == handlerTypealias.usr })
+    #expect(handlerEntry.replacements.count == 2)
     #expect(plan.denied.count == 2)
     #expect(plan.denied.allSatisfy { $0.reasons.contains("tuple typealias constructor occurrences are incomplete") })
+    #expect(Set(plan.denied.map(\.usr)) == [owner.usr, payloadTypealias.usr])
+    #expect(plan.typealiasSyntaxFacts.directTupleTypealiases == 1)
+    #expect(plan.typealiasSyntaxFacts.functionTypealiases == 1)
+    #expect(plan.typealiasSyntaxFacts.tupleRelatedOwnerUSRs == 1)
+    #expect(plan.typealiasSyntaxFacts.unresolvedTypealiasDeclarations == 0)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("typealias \(handlerEntry.newName) =\n        (Int) -> Void"))
+    #expect(patched.contains("Namespace.\(handlerEntry.newName)"))
+    _ = try CommandRunner().run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", "-typecheck", file.path]
+    )
 }
 
 @Test func renamePlannerDoesNotSelectSymbolsDeclaredOutsideSelectedSources() throws {
