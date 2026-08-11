@@ -14,6 +14,7 @@ public struct IndexedSemanticFacts: Sendable {
     public let runtimeSensitiveUSRs: Set<String>
     public let storedPropertyUSRs: Set<String>
     public let serializationSensitiveOwnerUSRs: Set<String>
+    public let explicitCodingKeysEnumUSRs: Set<String>
     public let explicitCodingKeysOwnerUSRs: Set<String>
     public let customSerializationImplementationOwnerUSRs: Set<String>
     public let propertyWrapperDerivedUSRsByPropertyUSR: [String: Set<String>]
@@ -35,6 +36,7 @@ public struct IndexedSemanticFacts: Sendable {
         runtimeSensitiveUSRs: Set<String> = [],
         storedPropertyUSRs: Set<String> = [],
         serializationSensitiveOwnerUSRs: Set<String> = [],
+        explicitCodingKeysEnumUSRs: Set<String> = [],
         explicitCodingKeysOwnerUSRs: Set<String> = [],
         customSerializationImplementationOwnerUSRs: Set<String> = [],
         propertyWrapperDerivedUSRsByPropertyUSR: [String: Set<String>] = [:],
@@ -48,6 +50,7 @@ public struct IndexedSemanticFacts: Sendable {
         self.runtimeSensitiveUSRs = runtimeSensitiveUSRs
         self.storedPropertyUSRs = storedPropertyUSRs
         self.serializationSensitiveOwnerUSRs = serializationSensitiveOwnerUSRs
+        self.explicitCodingKeysEnumUSRs = explicitCodingKeysEnumUSRs
         self.explicitCodingKeysOwnerUSRs = explicitCodingKeysOwnerUSRs
         self.customSerializationImplementationOwnerUSRs = customSerializationImplementationOwnerUSRs
         self.propertyWrapperDerivedUSRsByPropertyUSR = propertyWrapperDerivedUSRsByPropertyUSR
@@ -223,10 +226,11 @@ public struct IndexedSemanticFacts: Sendable {
                 extensionTargetUSRs: extensionTargetUSRs
             )
         })
-        let explicitCodingKeysOwnerUSRs = Set(selectedDeclarationUSRs.compactMap { usr -> String? in
-            guard symbolsByUSR[usr]?.name == "CodingKeys" else {
-                return nil
-            }
+        let explicitCodingKeysEnumUSRs = Set(selectedDeclarationUSRs.filter { usr in
+            symbolsByUSR[usr]?.kind == "enum" && symbolsByUSR[usr]?.name == "CodingKeys"
+        })
+        let explicitCodingKeysOwnerUSRs = Set(explicitCodingKeysEnumUSRs.compactMap {
+            usr -> String? in
             let owners = ownerUSRsByChild[usr] ?? []
             guard owners.count == 1, let ownerUSR = owners.first else {
                 return nil
@@ -291,6 +295,7 @@ public struct IndexedSemanticFacts: Sendable {
         self.runtimeSensitiveUSRs = runtimeSensitiveUSRs
         self.storedPropertyUSRs = storedPropertyUSRs.intersection(explicitDeclarationUSRs)
         self.serializationSensitiveOwnerUSRs = serializationSensitiveOwnerUSRs
+        self.explicitCodingKeysEnumUSRs = explicitCodingKeysEnumUSRs
         self.explicitCodingKeysOwnerUSRs = explicitCodingKeysOwnerUSRs
         self.customSerializationImplementationOwnerUSRs = customSerializationImplementationOwnerUSRs
         self.propertyWrapperDerivedUSRsByPropertyUSR = propertyWrapperDerivedUSRsByPropertyUSR

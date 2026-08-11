@@ -42,6 +42,7 @@ public struct EnumCaseMemberSyntaxFact: Codable, Equatable, Sendable {
     public let caseUSR: String
     public let declarationToken: SourceTokenRange?
     public let hasExplicitRawValue: Bool
+    public let implicitRawValueLiteral: String?
     public let references: [EnumCaseReferenceSyntaxFact]
     public let unresolvedReferenceTokens: [SourceTokenRange]
     public let matchingStringLiteralTokens: [SourceTokenRange]
@@ -140,6 +141,7 @@ public struct EnumCaseSyntaxFacts: Sendable {
     public init(
         snapshot: IndexSnapshot,
         semanticFacts: EnumCaseComponentFacts,
+        compilerRawValueFacts: CompilerRawValueFacts = .empty,
         sourceCache: SourceFileCache,
         obfuscationRoots: [URL]
     ) {
@@ -306,8 +308,12 @@ public struct EnumCaseSyntaxFacts: Sendable {
                     .flatMap { literalTokensBySpelling[$0.token.name] } ?? []
                 let hasExplicitRawValue =
                     caseCandidatesByUSR[semanticMember.usr]?.hasExplicitRawValue ?? false
+                let implicitRawValueLiteral = compilerRawValueFacts
+                    .factsByCaseUSR[semanticMember.usr]?.literalSource
                 var memberBlockers: Set<EnumCaseSyntaxBlocker> = []
-                if semanticComponent.hasRawType && !hasExplicitRawValue {
+                if semanticComponent.hasRawType
+                    && !hasExplicitRawValue
+                    && implicitRawValueLiteral == nil {
                     memberBlockers.insert(.rawType)
                 }
                 if !matchingStringLiteralTokens.isEmpty {
@@ -317,6 +323,7 @@ public struct EnumCaseSyntaxFacts: Sendable {
                     caseUSR: semanticMember.usr,
                     declarationToken: caseCandidatesByUSR[semanticMember.usr]?.token,
                     hasExplicitRawValue: hasExplicitRawValue,
+                    implicitRawValueLiteral: implicitRawValueLiteral,
                     references: references,
                     unresolvedReferenceTokens: unresolvedReferenceTokens,
                     matchingStringLiteralTokens: matchingStringLiteralTokens,

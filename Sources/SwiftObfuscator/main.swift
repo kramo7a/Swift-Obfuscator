@@ -69,6 +69,7 @@ struct RunSummary: Codable {
     var parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary?
     var parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary?
     var enumCaseComponentFacts: EnumCaseComponentFactsSummary?
+    var compilerRawValueFacts: CompilerRawValueFactsSummary?
     var enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary?
     var genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary?
     var typealiasSyntaxFacts: TypealiasSyntaxFactsSummary?
@@ -432,6 +433,7 @@ struct SwiftObfuscatorCLI {
                 plan.parameterExternalLabelRenameOutcome
             summary.parameterLocalBindingOutcome = plan.parameterLocalBindingOutcome
             summary.enumCaseComponentFacts = plan.enumCaseComponentFacts
+            summary.compilerRawValueFacts = plan.compilerRawValueFacts
             summary.enumCaseSyntaxFacts = plan.enumCaseSyntaxFacts
             summary.genericParameterSyntaxFacts = plan.genericParameterSyntaxFacts
             summary.typealiasSyntaxFacts = plan.typealiasSyntaxFacts

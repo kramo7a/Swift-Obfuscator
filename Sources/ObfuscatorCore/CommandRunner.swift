@@ -76,7 +76,8 @@ public final class CommandRunner {
         executable: String,
         arguments: [String],
         workingDirectory: URL? = nil,
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil,
+        allowNonZeroExit: Bool = false
     ) throws -> CommandResult {
         let logDirectory = logDirectory?.standardizedFileURL
         let tempDirectory = logDirectory ?? fileManager.temporaryDirectory
@@ -136,7 +137,7 @@ public final class CommandRunner {
             stderrLogPath: logDirectory == nil ? nil : stderrURL.path
         )
 
-        guard result.succeeded else {
+        guard result.succeeded || allowNonZeroExit else {
             throw CommandRunnerError.failed(result)
         }
         return result

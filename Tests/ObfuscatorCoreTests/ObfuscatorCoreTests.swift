@@ -56,6 +56,18 @@ import Testing
     }
 }
 
+@Test func commandRunnerCanReturnARequestedNonZeroResult() throws {
+    let result = try CommandRunner().run(
+        executable: "/bin/sh",
+        arguments: ["-c", "printf partial-output; exit 9"],
+        allowNonZeroExit: true
+    )
+
+    #expect(result.exitCode == 9)
+    #expect(result.stdout == "partial-output")
+    #expect(!result.succeeded)
+}
+
 @Test func sourceFileFinderSkipsConfiguredOutputDirectory() throws {
     let project = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     let sources = project.appendingPathComponent("Sources", isDirectory: true)
@@ -8826,7 +8838,7 @@ import Testing
     )
 }
 
-@Test func enumCasePlannerRenamesExplicitRawCaseWithoutChangingImplicitSibling() throws {
+@Test func enumCasePlannerRenamesExplicitAndCompilerMaterializedRawCases() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -8909,19 +8921,24 @@ import Testing
     let implicitFacts = try #require(component.members.first { $0.caseUSR == implicit.usr })
     let stableFacts = try #require(component.members.first { $0.caseUSR == stable.usr })
     #expect(!implicitFacts.hasExplicitRawValue)
-    #expect(implicitFacts.blockers == [.rawType])
+    #expect(implicitFacts.implicitRawValueLiteral == "\"implicit\"")
+    #expect(implicitFacts.blockers.isEmpty)
     #expect(stableFacts.hasExplicitRawValue)
     #expect(stableFacts.blockers.isEmpty)
+    let implicitEntry = try #require(plan.entries.first { $0.usr == implicit.usr })
     let stableEntry = try #require(plan.entries.first { $0.usr == stable.usr })
+    #expect(implicitEntry.replacements.count == 2)
     #expect(stableEntry.replacements.count == 2)
-    #expect(!plan.entries.contains { $0.usr == implicit.usr })
-    let implicitDenial = try #require(plan.denied.first { $0.usr == implicit.usr })
-    #expect(implicitDenial.reasons.contains { $0.contains("enum case blocker: rawType") })
+    let implicitSupportUSR = "implicit-raw-value:\(implicit.usr)"
+    let implicitSupport = plan.supportReplacements.first { replacement in
+        replacement.usr == implicitSupportUSR
+    }
+    #expect(implicitSupport?.newName == " = \"implicit\"")
     #expect(plan.conflicts.isEmpty)
 
     try SourcePatcher().apply(plan.replacements)
     let patched = try String(contentsOf: file, encoding: .utf8)
-    #expect(patched.contains("case implicit"))
+    #expect(patched.contains("case \(implicitEntry.newName) = \"implicit\""))
     #expect(patched.contains("case \(stableEntry.newName) = \"wire_stable\""))
     #expect(!patched.contains("case stable"))
     let executable = directory.appendingPathComponent("ExplicitRawEnum")
@@ -9034,14 +9051,15 @@ import Testing
     let implicitSecondSyntax = try #require(implicitSyntax.members.first {
         $0.declarationToken?.name == "second"
     })
-    #expect(implicitFirstSyntax.blockers.contains(.rawType))
+    #expect(implicitFirstSyntax.implicitRawValueLiteral == "\"first\"")
+    #expect(implicitFirstSyntax.blockers.isEmpty)
     #expect(!implicitSecondSyntax.blockers.contains(.rawType))
     #expect(implicitSecondSyntax.blockers.isEmpty)
     #expect(customSyntax.blockers.contains(.serializationContract))
 
     let plannedUSRs = Set(plan.entries.map(\.usr))
     #expect(Set(stableFacts.caseUSRs).isSubset(of: plannedUSRs))
-    #expect(!plannedUSRs.contains(implicitFirstSyntax.caseUSR))
+    #expect(plannedUSRs.contains(implicitFirstSyntax.caseUSR))
     #expect(plannedUSRs.contains(implicitSecondSyntax.caseUSR))
     #expect(Set(customFacts.caseUSRs).isDisjoint(with: plannedUSRs))
     #expect(plan.conflicts.isEmpty)
@@ -9050,7 +9068,8 @@ import Testing
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("= \"wire_first\""))
     #expect(patched.contains("= \"wire_second\""))
-    #expect(patched.contains("case first\n"))
+    #expect(patched.contains("= \"first\""))
+    #expect(!patched.contains("case first\n"))
     #expect(!patched.contains("case second = \"wire_second\""))
     #expect(patched.contains("case visible = \"wire_visible\""))
 
@@ -9180,6 +9199,115 @@ import Testing
         executable: "/usr/bin/xcrun",
         arguments: ["swiftc", "-typecheck", file.path]
     )
+}
+
+@Test func enumCasePlannerMaterializesCompilerDerivedImplicitRawValues() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("ImplicitRawValues.swift")
+    let source = [
+        "import Foundation",
+        "enum Word: String {",
+        "    case alpha",
+        "    case beta",
+        "}",
+        "enum Number: Int {",
+        "    case zero",
+        "    case two = 2",
+        "    case three",
+        "}",
+        "enum Reflected: String {",
+        "    case visible",
+        "}",
+        "struct Payload: Codable {",
+        "    let value: Int",
+        "    enum CodingKeys: String, CodingKey { case value }",
+        "}",
+        "precondition(Word.alpha.rawValue == [\"a\", \"l\", \"p\", \"h\", \"a\"].joined())",
+        "precondition(Word.beta.rawValue == [\"b\", \"e\", \"t\", \"a\"].joined())",
+        "precondition(Number.zero.rawValue == 0)",
+        "precondition(Number.three.rawValue == 3)",
+        "_ = \"value=\\(Reflected.visible)\"",
+        "let data = try JSONEncoder().encode(Payload(value: 7))",
+        "precondition(String(data: data, encoding: .utf8) == \"{\\\"value\\\":7}\")"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    let store = directory.appendingPathComponent("IndexStore", isDirectory: true)
+    let database = directory.appendingPathComponent("IndexDatabase", isDirectory: true)
+    let beforeExecutable = directory.appendingPathComponent("Before")
+    let runner = CommandRunner(
+        logDirectory: directory.appendingPathComponent("logs", isDirectory: true)
+    )
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: [
+            "swiftc",
+            "-module-name", "ImplicitRawValuesFixture",
+            "-index-store-path", store.path,
+            file.path,
+            "-o", beforeExecutable.path
+        ]
+    )
+    _ = try runner.run(executable: beforeExecutable.path, arguments: [])
+
+    let snapshot = try IndexReader().read(
+        storePath: store,
+        databasePath: database,
+        sourceRoot: directory
+    )
+    let cache = try SourceFileCache(paths: [file.path])
+    var planner = RenamePlanner(
+        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        generator: NameGenerator(prefix: "Raw")
+    )
+    let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
+
+    func entry(_ name: String) throws -> RenamePlanEntry {
+        try #require(plan.entries.first {
+            $0.kind == "enumConstant" && $0.oldName == name
+        })
+    }
+    let alpha = try entry("alpha")
+    let beta = try entry("beta")
+    let zero = try entry("zero")
+    _ = try entry("two")
+    let three = try entry("three")
+    #expect(!plan.entries.contains {
+        $0.kind == "enumConstant" && $0.oldName == "visible"
+    })
+    let codingKeyUSR = try #require(snapshot.groupsByUSR.first {
+        $0.symbol.kind == "enumConstant"
+            && $0.symbol.name == "value"
+            && $0.occurrences.contains { occurrence in
+                occurrence.relations.contains { relation in
+                    relation.roles.contains("childOf") && relation.name == "CodingKeys"
+                }
+            }
+    }).usr
+    #expect(!plan.entries.contains { $0.usr == codingKeyUSR })
+    #expect(plan.compilerRawValueFacts.resolvedImplicitRawValues >= 5)
+    #expect(plan.supportReplacements.count { replacement in
+        replacement.usr.hasPrefix("implicit-raw-value:")
+    } == 4)
+    #expect(plan.conflicts.isEmpty)
+
+    try SourcePatcher().apply(plan.replacements)
+    let patched = try String(contentsOf: file, encoding: .utf8)
+    #expect(patched.contains("case \(alpha.newName) = \"alpha\""))
+    #expect(patched.contains("case \(beta.newName) = \"beta\""))
+    #expect(patched.contains("case \(zero.newName) = 0"))
+    #expect(patched.contains("case \(three.newName) = 3"))
+    #expect(patched.contains("case value }"))
+
+    let afterExecutable = directory.appendingPathComponent("After")
+    _ = try runner.run(
+        executable: "/usr/bin/xcrun",
+        arguments: ["swiftc", file.path, "-o", afterExecutable.path]
+    )
+    _ = try runner.run(executable: afterExecutable.path, arguments: [])
 }
 
 @Test func plannerRenamesCompilerAcceptedContextualIdentifiersAndPreservesSemanticSelf() throws {

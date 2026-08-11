@@ -23,6 +23,7 @@ public struct RenamePlan: Codable, Sendable {
     public let parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary
     public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
     public let enumCaseComponentFacts: EnumCaseComponentFactsSummary
+    public let compilerRawValueFacts: CompilerRawValueFactsSummary
     public let enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary
     public let genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary
     public let typealiasSyntaxFacts: TypealiasSyntaxFactsSummary
@@ -42,6 +43,7 @@ public struct RenamePlan: Codable, Sendable {
         parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary = .empty,
         parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty,
         enumCaseComponentFacts: EnumCaseComponentFactsSummary = .empty,
+        compilerRawValueFacts: CompilerRawValueFactsSummary = .empty,
         enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary = .empty,
         genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary = .empty,
         typealiasSyntaxFacts: TypealiasSyntaxFactsSummary = .empty
@@ -60,6 +62,7 @@ public struct RenamePlan: Codable, Sendable {
         self.parameterExternalLabelRenameOutcome = parameterExternalLabelRenameOutcome
         self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
         self.enumCaseComponentFacts = enumCaseComponentFacts
+        self.compilerRawValueFacts = compilerRawValueFacts
         self.enumCaseSyntaxFacts = enumCaseSyntaxFacts
         self.genericParameterSyntaxFacts = genericParameterSyntaxFacts
         self.typealiasSyntaxFacts = typealiasSyntaxFacts
@@ -80,6 +83,7 @@ public struct RenamePlan: Codable, Sendable {
         case parameterExternalLabelRenameOutcome
         case parameterLocalBindingOutcome
         case enumCaseComponentFacts
+        case compilerRawValueFacts
         case enumCaseSyntaxFacts
         case genericParameterSyntaxFacts
         case typealiasSyntaxFacts
@@ -133,6 +137,10 @@ public struct RenamePlan: Codable, Sendable {
         enumCaseComponentFacts = try container.decodeIfPresent(
             EnumCaseComponentFactsSummary.self,
             forKey: .enumCaseComponentFacts
+        ) ?? .empty
+        compilerRawValueFacts = try container.decodeIfPresent(
+            CompilerRawValueFactsSummary.self,
+            forKey: .compilerRawValueFacts
         ) ?? .empty
         enumCaseSyntaxFacts = try container.decodeIfPresent(
             EnumCaseSyntaxFactsSummary.self,
@@ -194,9 +202,16 @@ public struct RenamePlanner {
             indexedFacts: indexedFacts,
             obfuscationRoots: analyzer.obfuscationRoots
         )
+        let compilerRawValueFacts = CompilerRawValueFacts(
+            snapshot: snapshot,
+            semanticFacts: enumCaseComponentFacts,
+            indexedFacts: indexedFacts,
+            sourceCache: sourceCache
+        )
         let enumCaseSyntaxFacts = EnumCaseSyntaxFacts(
             snapshot: snapshot,
             semanticFacts: enumCaseComponentFacts,
+            compilerRawValueFacts: compilerRawValueFacts,
             sourceCache: sourceCache,
             obfuscationRoots: analyzer.obfuscationRoots
         )
@@ -928,6 +943,9 @@ public struct RenamePlanner {
         ) + Self.propertyWrapperSupportReplacements(
             components: propertyWrapperComponents,
             entries: entries
+        ) + Self.implicitRawValueSupportReplacements(
+            facts: enumCaseSyntaxFacts,
+            entries: entries
         )
 
         return RenamePlan(
@@ -955,6 +973,7 @@ public struct RenamePlanner {
                 groupsByUSR: groupsByUSR
             ),
             enumCaseComponentFacts: enumCaseComponentFacts.summary,
+            compilerRawValueFacts: compilerRawValueFacts.summary,
             enumCaseSyntaxFacts: enumCaseSyntaxFacts.summary,
             genericParameterSyntaxFacts: genericParameterSyntaxFacts.summary,
             typealiasSyntaxFacts: typealiasSyntaxFacts.summary
@@ -1044,6 +1063,35 @@ public struct RenamePlanner {
             }
         }
         return components.sorted { $0.propertyUSR < $1.propertyUSR }
+    }
+
+    private static func implicitRawValueSupportReplacements(
+        facts: EnumCaseSyntaxFacts,
+        entries: [RenamePlanEntry]
+    ) -> [SourceReplacement] {
+        let entriesByUSR = Dictionary(uniqueKeysWithValues: entries.map { ($0.usr, $0) })
+        return facts.components.flatMap { component in
+            component.members.compactMap { member -> SourceReplacement? in
+                guard entriesByUSR[member.caseUSR] != nil,
+                      !member.hasExplicitRawValue,
+                      let literal = member.implicitRawValueLiteral,
+                      let token = member.declarationToken else {
+                    return nil
+                }
+                return SourceReplacement(
+                    path: token.path,
+                    byteOffset: token.byteRange.upperBound,
+                    length: 0,
+                    line: 1,
+                    utf8Column: 1,
+                    oldName: "",
+                    newName: " = \(literal)",
+                    usr: "implicit-raw-value:\(member.caseUSR)"
+                )
+            }
+        }.sorted { lhs, rhs in
+            (lhs.path, lhs.byteOffset, lhs.usr) < (rhs.path, rhs.byteOffset, rhs.usr)
+        }
     }
 
     private static func propertyWrapperSupportReplacements(
