@@ -7770,11 +7770,18 @@ import Testing
     #expect(runtime.isRuntimeSensitive)
 }
 
-@Test func enumCaseSyntaxFactsProtectVisibilityReflectionAndProtocolContracts() throws {
+@Test func enumCaseSyntaxFactsAllowSourceClosedVisibilityAndProtectExternalReferences() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
+    let outsideDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: outsideDirectory,
+        withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: outsideDirectory) }
     let file = directory.appendingPathComponent("EnumSyntax.swift")
     let source = [
         "private enum Safe {",
@@ -7801,9 +7808,15 @@ import Testing
         "}",
         "private enum Conforming: Equatable {",
         "    case equal",
+        "}",
+        "public enum Escaping {",
+        "    case exported",
         "}"
     ].joined(separator: "\n") + "\n"
     try source.write(to: file, atomically: true, encoding: .utf8)
+    let outsideFile = outsideDirectory.appendingPathComponent("ExternalUse.swift")
+    try "let escaped = Escaping.exported\n"
+        .write(to: outsideFile, atomically: true, encoding: .utf8)
 
     func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
         SymbolRecord(
@@ -7835,6 +7848,8 @@ import Testing
     let conforming = symbol("s:conforming", "Conforming", "enum")
     let equal = symbol("s:conforming-equal", "equal", "enumConstant")
     let equatable = symbol("s:SQ", "Equatable", "protocol")
+    let escaping = symbol("s:escaping", "Escaping", "enum")
+    let exported = symbol("s:escaping-exported", "exported", "enumConstant")
 
     let occurrences = [
         testOccurrence(safe, path: file.path, line: 1, token: "Safe", roles: ["definition"]),
@@ -7852,16 +7867,20 @@ import Testing
         testOccurrence(marked, path: file.path, line: 21, token: "marked", roles: ["definition"], relations: [childOf(attributed)]),
         testOccurrence(conforming, path: file.path, line: 23, token: "Conforming", roles: ["definition"]),
         testOccurrence(equatable, path: file.path, line: 23, token: "Equatable", roles: ["reference", "baseOf"], relations: [baseOf(conforming)]),
-        testOccurrence(equal, path: file.path, line: 24, token: "equal", roles: ["definition"], relations: [childOf(conforming)])
+        testOccurrence(equal, path: file.path, line: 24, token: "equal", roles: ["definition"], relations: [childOf(conforming)]),
+        testOccurrence(escaping, path: file.path, line: 26, token: "Escaping", roles: ["definition"]),
+        testOccurrence(exported, path: file.path, line: 27, token: "exported", roles: ["definition"], relations: [childOf(escaping)]),
+        testOccurrence(exported, path: outsideFile.path, line: 1, token: "exported", roles: ["reference"])
     ]
     let snapshot = IndexSnapshot(
-        sourceFiles: [file.path],
+        sourceFiles: [file.path, outsideFile.path],
         symbols: [
             safe, idle, payload, value,
             reflected, logged,
             visible, shown,
             attributed, marked,
-            conforming, equal, equatable
+            conforming, equal, equatable,
+            escaping, exported
         ],
         occurrences: occurrences
     )
@@ -7879,17 +7898,17 @@ import Testing
         obfuscationRoots: [directory]
     )
 
-    #expect(facts.summary.explicitEnumCases == 6)
-    #expect(facts.summary.resolvedEnumCases == 6)
+    #expect(facts.summary.explicitEnumCases == 7)
+    #expect(facts.summary.resolvedEnumCases == 7)
     #expect(facts.summary.unresolvedEnumCases == 0)
     #expect(facts.summary.indexedReferenceOccurrences == 3)
     #expect(facts.summary.resolvedReferenceOccurrences == 3)
     #expect(facts.summary.unresolvedReferenceOccurrences == 0)
     #expect(facts.summary.casesWithMatchingStringLiterals == 1)
     #expect(facts.summary.casesDirectlyInterpolated == 1)
-    #expect(facts.summary.preliminaryEligibleOwnerComponents == 1)
-    #expect(facts.summary.preliminaryEligibleCases == 2)
-    #expect(facts.summary.preliminaryEligibleSimpleCases == 1)
+    #expect(facts.summary.preliminaryEligibleOwnerComponents == 2)
+    #expect(facts.summary.preliminaryEligibleCases == 3)
+    #expect(facts.summary.preliminaryEligibleSimpleCases == 2)
     #expect(facts.summary.preliminaryEligibleAssociatedValueCases == 1)
     #expect(facts.summary.preliminaryEligibleAssociatedValueParameters == 1)
 
@@ -7905,7 +7924,13 @@ import Testing
 
     let visibleFacts = try #require(facts.components.first { $0.ownerUSR == visible.usr })
     #expect(visibleFacts.accessLevel == .public)
-    #expect(visibleFacts.blockers.contains(.nonFileScopedAccess))
+    #expect(visibleFacts.blockers.isEmpty)
+
+    let escapingFacts = try #require(
+        facts.components.first { $0.ownerUSR == escaping.usr }
+    )
+    #expect(escapingFacts.accessLevel == .public)
+    #expect(escapingFacts.blockers.contains(.occurrenceLeavesSelectedRoots))
 
     let attributedFacts = try #require(
         facts.components.first { $0.ownerUSR == attributed.usr }
@@ -8159,12 +8184,11 @@ import Testing
     #expect(internalEntries.flatMap(\.replacements).count == 9)
     let valueEntry = try #require(plan.entries.first { $0.usr == value.usr })
     #expect(valueEntry.replacements.count == 3)
-    #expect(!plan.entries.contains { $0.usr == visible.usr })
-    #expect(plan.denied.first { $0.usr == visible.usr }?.reasons.contains { reason in
-        reason.contains("nonFileScopedAccess")
-    } == true)
-    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleOwnerComponents == 2)
-    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleCases == 3)
+    let visibleEntry = try #require(plan.entries.first { $0.usr == visible.usr })
+    #expect(visibleEntry.replacements.count == 1)
+    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleOwnerComponents == 3)
+    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleCases == 4)
+    #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleSimpleCases == 3)
     #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleAssociatedValueCases == 1)
     #expect(plan.enumCaseSyntaxFacts.preliminaryEligibleAssociatedValueParameters == 1)
     #expect(plan.parameterCallSiteSyntaxFacts.resolvedEnumCasePatterns == 1)
@@ -8181,7 +8205,7 @@ import Testing
     #expect(patchedUses.contains("(\(valueEntry.newName): 1)"))
     #expect(patchedUses.contains("(let value)"))
     #expect(patchedUses.contains("(\(valueEntry.newName): let value)"))
-    #expect(patchedDeclarations.contains("case visible"))
+    #expect(patchedDeclarations.contains("case \(visibleEntry.newName)"))
     _ = try CommandRunner().run(
         executable: "/usr/bin/xcrun",
         arguments: ["swiftc", "-typecheck", declarationsFile.path, usesFile.path]

@@ -354,8 +354,12 @@ public struct EnumCaseSyntaxFacts: Sendable {
             blockers.insert(.unresolvedDeclarationSyntax)
             return blockers
         }
-        if !ownerCandidate.accessLevel.isFileScoped
-            && ownerCandidate.accessLevel != .internal {
+        // Visibility alone is not an external contract. Public and package
+        // declarations follow the same selected-root closure model as the
+        // rest of the planner; actual out-of-root occurrences, runtime,
+        // serialization, raw-value, protocol, and reflection contracts are
+        // represented by independent semantic blockers above.
+        if ownerCandidate.accessLevel == .unknown {
             blockers.insert(.nonFileScopedAccess)
         }
         if !ownerCandidate.attributes.isEmpty { blockers.insert(.declarationAttribute) }
