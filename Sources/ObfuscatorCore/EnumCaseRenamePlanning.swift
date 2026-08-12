@@ -45,27 +45,35 @@ enum EnumCaseRenamePlanning {
         groupsByUSR: [String: USROccurrenceGroup],
         indexedFacts: IndexedSemanticFacts,
         analyzer: SafetyAnalyzer,
-        sourceCache: SourceFileCache
+        sourceCache: SourceFileCache,
+        handledCaseUSRs: Set<String> = []
     ) -> EnumCaseRenamePlanningResult {
         let eligibleCaseUSRs = Set(
             facts.components.flatMap { component in
                 component.preliminaryEligibleMembers.map(\.caseUSR)
             }
-        )
+        ).subtracting(handledCaseUSRs)
         var componentTemplates: [EnumCaseOwnerRenameTemplate] = []
         var denied: [SafetyDecision] = []
 
         for component in facts.components {
+            let unhandledMembers = component.members.filter {
+                !handledCaseUSRs.contains($0.caseUSR)
+            }
+            guard !unhandledMembers.isEmpty else {
+                continue
+            }
             guard component.blockers.isEmpty else {
                 denied.append(contentsOf: denialDecisions(
                     component: component,
+                    members: unhandledMembers,
                     groupsByUSR: groupsByUSR,
                     reasons: component.blockers.map { "enum case blocker: \($0.rawValue)" }
                 ))
                 continue
             }
 
-            let blockedMembers = component.members.filter {
+            let blockedMembers = unhandledMembers.filter {
                 !$0.isPreliminaryEligible
             }
             for member in blockedMembers {
@@ -76,7 +84,9 @@ enum EnumCaseRenamePlanning {
                     reasons: member.blockers.map { "enum case blocker: \($0.rawValue)" }
                 ))
             }
-            let candidateMembers = component.preliminaryEligibleMembers
+            let candidateMembers = component.preliminaryEligibleMembers.filter {
+                !handledCaseUSRs.contains($0.caseUSR)
+            }
             guard !candidateMembers.isEmpty else {
                 continue
             }
@@ -84,83 +94,18 @@ enum EnumCaseRenamePlanning {
             var failures: Set<String> = []
             var memberTemplates: [EnumCaseMemberRenameTemplate] = []
             for member in candidateMembers {
-                guard let group = groupsByUSR[member.caseUSR] else {
-                    failures.insert("enum case occurrence group unavailable: \(member.caseUSR)")
-                    continue
-                }
-                guard group.symbol.kind == "enumConstant" else {
-                    failures.insert("component member is not an enum case: \(member.caseUSR)")
-                    continue
-                }
-                guard let declarationToken = member.declarationToken else {
-                    failures.insert("enum case declaration syntax unavailable: \(member.caseUSR)")
-                    continue
-                }
-
-                let decision = analyzer.analyze(
-                    group: group,
-                    sourceCache: sourceCache,
+                let result = memberTemplate(
+                    member: member,
+                    groupsByUSR: groupsByUSR,
                     indexedFacts: indexedFacts,
-                    overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
+                    analyzer: analyzer,
+                    sourceCache: sourceCache,
                     coordinatedEnumCaseUSRs: eligibleCaseUSRs
                 )
-                guard decision.allowed, decision.oldName == declarationToken.name else {
-                    let details = decision.reasons.joined(separator: "; ")
-                    failures.insert(
-                        "\(member.caseUSR): enum case safety analysis disagrees with syntax: \(details)"
-                    )
-                    continue
+                failures.formUnion(result.failures)
+                if let template = result.template {
+                    memberTemplates.append(template)
                 }
-
-                var replacements: Set<EnumCaseReplacementTemplate> = []
-                add(
-                    token: declarationToken,
-                    expectedName: declarationToken.name,
-                    usr: member.caseUSR,
-                    sourceCache: sourceCache,
-                    replacements: &replacements,
-                    failures: &failures
-                )
-                for reference in member.references {
-                    add(
-                        token: reference.token,
-                        expectedName: declarationToken.name,
-                        usr: member.caseUSR,
-                        sourceCache: sourceCache,
-                        replacements: &replacements,
-                        failures: &failures
-                    )
-                }
-
-                let syntaxAnchors = Set(replacements.map { "\($0.path):\($0.byteOffset)" })
-                for occurrence in group.occurrences where !occurrence.roles.contains("implicit") {
-                    guard let source = sourceCache.file(for: occurrence.path),
-                          let token = source.identifierToken(
-                            line: occurrence.line,
-                            utf8Column: occurrence.utf8Column
-                          ) else {
-                        failures.insert(
-                            "indexed enum case token unavailable at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
-                        )
-                        continue
-                    }
-                    let anchor = "\(source.path):\(token.byteRange.lowerBound)"
-                    if token.name != declarationToken.name || !syntaxAnchors.contains(anchor) {
-                        failures.insert(
-                            "indexed enum case occurrence lacks an exact syntax anchor at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
-                        )
-                    }
-                }
-
-                guard !replacements.isEmpty else {
-                    failures.insert("enum case has no source replacements: \(member.caseUSR)")
-                    continue
-                }
-                memberTemplates.append(EnumCaseMemberRenameTemplate(
-                    usr: member.caseUSR,
-                    oldName: declarationToken.name,
-                    replacements: replacements
-                ))
             }
 
             if memberTemplates.count != candidateMembers.count {
@@ -185,6 +130,96 @@ enum EnumCaseRenamePlanning {
             componentTemplates: componentTemplates.sorted { $0.ownerUSR < $1.ownerUSR },
             denied: denied
         )
+    }
+
+    static func memberTemplate(
+        member: EnumCaseMemberSyntaxFact,
+        groupsByUSR: [String: USROccurrenceGroup],
+        indexedFacts: IndexedSemanticFacts,
+        analyzer: SafetyAnalyzer,
+        sourceCache: SourceFileCache,
+        coordinatedEnumCaseUSRs: Set<String>
+    ) -> (template: EnumCaseMemberRenameTemplate?, failures: Set<String>) {
+        var failures: Set<String> = []
+        guard let group = groupsByUSR[member.caseUSR] else {
+            failures.insert("enum case occurrence group unavailable: \(member.caseUSR)")
+            return (nil, failures)
+        }
+        guard group.symbol.kind == "enumConstant" else {
+            failures.insert("component member is not an enum case: \(member.caseUSR)")
+            return (nil, failures)
+        }
+        guard let declarationToken = member.declarationToken else {
+            failures.insert("enum case declaration syntax unavailable: \(member.caseUSR)")
+            return (nil, failures)
+        }
+
+        let decision = analyzer.analyze(
+            group: group,
+            sourceCache: sourceCache,
+            indexedFacts: indexedFacts,
+            overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
+            coordinatedEnumCaseUSRs: coordinatedEnumCaseUSRs
+        )
+        guard decision.allowed, decision.oldName == declarationToken.name else {
+            let details = decision.reasons.joined(separator: "; ")
+            failures.insert(
+                "\(member.caseUSR): enum case safety analysis disagrees with syntax: \(details)"
+            )
+            return (nil, failures)
+        }
+
+        var replacements: Set<EnumCaseReplacementTemplate> = []
+        add(
+            token: declarationToken,
+            expectedName: declarationToken.name,
+            usr: member.caseUSR,
+            sourceCache: sourceCache,
+            replacements: &replacements,
+            failures: &failures
+        )
+        for reference in member.references {
+            add(
+                token: reference.token,
+                expectedName: declarationToken.name,
+                usr: member.caseUSR,
+                sourceCache: sourceCache,
+                replacements: &replacements,
+                failures: &failures
+            )
+        }
+
+        let syntaxAnchors = Set(replacements.map { "\($0.path):\($0.byteOffset)" })
+        for occurrence in group.occurrences where !occurrence.roles.contains("implicit") {
+            guard let source = sourceCache.file(for: occurrence.path),
+                  let token = source.identifierToken(
+                    line: occurrence.line,
+                    utf8Column: occurrence.utf8Column
+                  ) else {
+                failures.insert(
+                    "indexed enum case token unavailable at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
+                )
+                continue
+            }
+            let anchor = "\(source.path):\(token.byteRange.lowerBound)"
+            if token.name != declarationToken.name || !syntaxAnchors.contains(anchor) {
+                failures.insert(
+                    "indexed enum case occurrence lacks an exact syntax anchor at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
+                )
+            }
+        }
+
+        guard failures.isEmpty, !replacements.isEmpty else {
+            if replacements.isEmpty {
+                failures.insert("enum case has no source replacements: \(member.caseUSR)")
+            }
+            return (nil, failures)
+        }
+        return (EnumCaseMemberRenameTemplate(
+            usr: member.caseUSR,
+            oldName: declarationToken.name,
+            replacements: replacements
+        ), [])
     }
 
     static func denialDecisions(
@@ -212,7 +247,7 @@ enum EnumCaseRenamePlanning {
         }
     }
 
-    private static func add(
+    static func add(
         token: SourceTokenRange,
         expectedName: String,
         usr: String,

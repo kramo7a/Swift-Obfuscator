@@ -13,9 +13,14 @@ public struct IndexedSemanticFacts: Sendable {
     public let externallyOwnedUSRs: Set<String>
     public let runtimeSensitiveUSRs: Set<String>
     public let storedPropertyUSRs: Set<String>
+    public let decodingSensitiveOwnerUSRs: Set<String>
+    public let encodingSensitiveOwnerUSRs: Set<String>
     public let serializationSensitiveOwnerUSRs: Set<String>
     public let explicitCodingKeysEnumUSRs: Set<String>
+    public let explicitCodingKeysOwnerUSRByEnumUSR: [String: String]
     public let explicitCodingKeysOwnerUSRs: Set<String>
+    public let customDecodingImplementationOwnerUSRs: Set<String>
+    public let customEncodingImplementationOwnerUSRs: Set<String>
     public let customSerializationImplementationOwnerUSRs: Set<String>
     public let propertyWrapperDerivedUSRsByPropertyUSR: [String: Set<String>]
     public let overrideRelationNeighbors: [String: Set<String>]
@@ -35,9 +40,14 @@ public struct IndexedSemanticFacts: Sendable {
         externallyOwnedUSRs: Set<String> = [],
         runtimeSensitiveUSRs: Set<String> = [],
         storedPropertyUSRs: Set<String> = [],
+        decodingSensitiveOwnerUSRs: Set<String> = [],
+        encodingSensitiveOwnerUSRs: Set<String> = [],
         serializationSensitiveOwnerUSRs: Set<String> = [],
         explicitCodingKeysEnumUSRs: Set<String> = [],
+        explicitCodingKeysOwnerUSRByEnumUSR: [String: String] = [:],
         explicitCodingKeysOwnerUSRs: Set<String> = [],
+        customDecodingImplementationOwnerUSRs: Set<String> = [],
+        customEncodingImplementationOwnerUSRs: Set<String> = [],
         customSerializationImplementationOwnerUSRs: Set<String> = [],
         propertyWrapperDerivedUSRsByPropertyUSR: [String: Set<String>] = [:],
         overrideRelationNeighbors: [String: Set<String>] = [:],
@@ -49,9 +59,14 @@ public struct IndexedSemanticFacts: Sendable {
         self.externallyOwnedUSRs = externallyOwnedUSRs
         self.runtimeSensitiveUSRs = runtimeSensitiveUSRs
         self.storedPropertyUSRs = storedPropertyUSRs
+        self.decodingSensitiveOwnerUSRs = decodingSensitiveOwnerUSRs
+        self.encodingSensitiveOwnerUSRs = encodingSensitiveOwnerUSRs
         self.serializationSensitiveOwnerUSRs = serializationSensitiveOwnerUSRs
         self.explicitCodingKeysEnumUSRs = explicitCodingKeysEnumUSRs
+        self.explicitCodingKeysOwnerUSRByEnumUSR = explicitCodingKeysOwnerUSRByEnumUSR
         self.explicitCodingKeysOwnerUSRs = explicitCodingKeysOwnerUSRs
+        self.customDecodingImplementationOwnerUSRs = customDecodingImplementationOwnerUSRs
+        self.customEncodingImplementationOwnerUSRs = customEncodingImplementationOwnerUSRs
         self.customSerializationImplementationOwnerUSRs = customSerializationImplementationOwnerUSRs
         self.propertyWrapperDerivedUSRsByPropertyUSR = propertyWrapperDerivedUSRsByPropertyUSR
         self.overrideRelationNeighbors = overrideRelationNeighbors
@@ -83,8 +98,15 @@ public struct IndexedSemanticFacts: Sendable {
         var overrideRelationNeighbors: [String: Set<String>] = [:]
         var runtimeDispatchNeighbors: [String: Set<String>] = [:]
         var storedPropertyUSRs: Set<String> = []
-        var serializationConformanceTargets: Set<String> = []
-        var customSerializationImplementationTargets: Set<String> = []
+        var decodingConformanceTargets: Set<String> = []
+        var encodingConformanceTargets: Set<String> = []
+        var serializationImplementationTargetsByCallableUSR: [String: Set<String>] = [:]
+        var serializationImplementationNameByCallableUSR: [String: String] = [:]
+        var knownDecodingWitnessUSRs: Set<String> = []
+        var knownEncodingWitnessUSRs: Set<String> = []
+        var parameterDeclarationSitesByCallableUSR: [String: Set<DeclarationLineSite>] = [:]
+        var protocolUSRsByCallableAndSite:
+            [String: [DeclarationLineSite: Set<String>]] = [:]
         var explicitPropertyUSRsBySite: [PropertyDeclarationSite: Set<String>] = [:]
         var implicitPropertyUSRsBySite: [PropertyDeclarationSite: Set<String>] = [:]
         var runtimeSeeds = Set(symbolsByUSR.values.compactMap { symbol -> String? in
@@ -102,6 +124,32 @@ public struct IndexedSemanticFacts: Sendable {
                 for relation in occurrence.relations where relation.roles.contains("childOf") {
                     ownerUSRsByChild[occurrence.usr, default: []].insert(relation.usr)
                     childUSRsByOwner[relation.usr, default: []].insert(occurrence.usr)
+                }
+            }
+
+            if isDeclaration,
+               occurrence.symbol.kind == "parameter",
+               !occurrence.roles.contains("implicit") {
+                let site = DeclarationLineSite(
+                    path: SourcePathNormalizer.canonicalPath(occurrence.path),
+                    line: occurrence.line
+                )
+                for relation in occurrence.relations where relation.roles.contains("childOf") {
+                    parameterDeclarationSitesByCallableUSR[relation.usr, default: []]
+                        .insert(site)
+                }
+            }
+            if occurrence.symbol.kind == "protocol" {
+                let site = DeclarationLineSite(
+                    path: SourcePathNormalizer.canonicalPath(occurrence.path),
+                    line: occurrence.line
+                )
+                for relation in occurrence.relations
+                where relation.roles.contains("containedBy") {
+                    protocolUSRsByCallableAndSite[relation.usr, default: [:]][
+                        site,
+                        default: []
+                    ].insert(occurrence.usr)
                 }
             }
 
@@ -141,20 +189,34 @@ public struct IndexedSemanticFacts: Sendable {
                 }
             }
 
-            if Self.synthesizedCodingKeyProtocolUSRs.contains(occurrence.usr) {
+            if occurrence.usr == Self.decodableProtocolUSR {
                 for relation in occurrence.relations where relation.roles.contains("baseOf") {
-                    serializationConformanceTargets.insert(relation.usr)
+                    decodingConformanceTargets.insert(relation.usr)
+                }
+            } else if occurrence.usr == Self.encodableProtocolUSR {
+                for relation in occurrence.relations where relation.roles.contains("baseOf") {
+                    encodingConformanceTargets.insert(relation.usr)
                 }
             }
 
             if isDeclaration,
                !occurrence.roles.contains("implicit"),
-               occurrence.relations.contains(where: {
-                   $0.roles.contains("overrideOf")
-                       && Self.serializationRequirementNames.contains($0.name)
-               }) {
+               Self.isSerializationImplementationSymbol(occurrence.symbol),
+               Self.isPath(occurrence.path, underRootPaths: rootPaths) {
                 for relation in occurrence.relations where relation.roles.contains("childOf") {
-                    customSerializationImplementationTargets.insert(relation.usr)
+                    serializationImplementationTargetsByCallableUSR[
+                        occurrence.usr,
+                        default: []
+                    ].insert(relation.usr)
+                }
+                serializationImplementationNameByCallableUSR[occurrence.usr] =
+                    occurrence.symbol.name
+                for relation in occurrence.relations where relation.roles.contains("overrideOf") {
+                    if relation.name == Self.decodingRequirementName {
+                        knownDecodingWitnessUSRs.insert(occurrence.usr)
+                    } else if relation.name == Self.encodingRequirementName {
+                        knownEncodingWitnessUSRs.insert(occurrence.usr)
+                    }
                 }
             }
 
@@ -219,37 +281,103 @@ public struct IndexedSemanticFacts: Sendable {
             return targets.count != 1 || targets.isDisjoint(with: localNominalUSRs)
         })
 
-        let serializationSensitiveOwnerUSRs = Set(serializationConformanceTargets.compactMap {
-            Self.nominalTarget(
-                for: $0,
-                symbolsByUSR: symbolsByUSR,
-                extensionTargetUSRs: extensionTargetUSRs
-            )
-        })
-        let explicitCodingKeysEnumUSRs = Set(selectedDeclarationUSRs.filter { usr in
-            symbolsByUSR[usr]?.kind == "enum" && symbolsByUSR[usr]?.name == "CodingKeys"
-        })
-        let explicitCodingKeysOwnerUSRs = Set(explicitCodingKeysEnumUSRs.compactMap {
-            usr -> String? in
-            let owners = ownerUSRsByChild[usr] ?? []
-            guard owners.count == 1, let ownerUSR = owners.first else {
-                return nil
-            }
-            return Self.nominalTarget(
-                for: ownerUSR,
-                symbolsByUSR: symbolsByUSR,
-                extensionTargetUSRs: extensionTargetUSRs
-            )
-        })
-        let customSerializationImplementationOwnerUSRs = Set(
-            customSerializationImplementationTargets.compactMap {
+        func nominalTargets(_ targets: Set<String>) -> Set<String> {
+            Set(targets.compactMap {
                 Self.nominalTarget(
                     for: $0,
                     symbolsByUSR: symbolsByUSR,
                     extensionTargetUSRs: extensionTargetUSRs
                 )
+            })
+        }
+        func signatureProtocolUSRs(for callableUSR: String) -> Set<String> {
+            let parameterSites = parameterDeclarationSitesByCallableUSR[callableUSR] ?? []
+            return parameterSites.reduce(into: Set<String>()) { result, site in
+                result.formUnion(
+                    protocolUSRsByCallableAndSite[callableUSR]?[site] ?? []
+                )
             }
-        ).intersection(serializationSensitiveOwnerUSRs)
+        }
+        func commonSignatureProtocolUSRs(for callableUSRs: Set<String>) -> Set<String> {
+            let signatures = callableUSRs.compactMap { callableUSR -> Set<String>? in
+                let protocols = signatureProtocolUSRs(for: callableUSR)
+                return protocols.isEmpty ? nil : protocols
+            }
+            guard var common = signatures.first else {
+                return []
+            }
+            for protocols in signatures.dropFirst() {
+                common.formIntersection(protocols)
+            }
+            return common
+        }
+
+        // A missing witness relation can be recovered only when the compiler
+        // index gives us one unambiguous protocol identity shared by known
+        // witnesses. Multiple common protocols are not guessed between.
+        let commonDecodingParameterProtocolUSRs = commonSignatureProtocolUSRs(
+            for: knownDecodingWitnessUSRs
+        )
+        let decodingParameterProtocolUSR = commonDecodingParameterProtocolUSRs.count == 1
+            ? commonDecodingParameterProtocolUSRs.first
+            : nil
+        let commonEncodingParameterProtocolUSRs = commonSignatureProtocolUSRs(
+            for: knownEncodingWitnessUSRs
+        )
+        let encodingParameterProtocolUSR = commonEncodingParameterProtocolUSRs.count == 1
+            ? commonEncodingParameterProtocolUSRs.first
+            : nil
+        var customDecodingImplementationTargets: Set<String> = []
+        var customEncodingImplementationTargets: Set<String> = []
+        for (callableUSR, name) in serializationImplementationNameByCallableUSR {
+            let signatureProtocols = signatureProtocolUSRs(for: callableUSR)
+            if name == Self.decodingRequirementName,
+               knownDecodingWitnessUSRs.contains(callableUSR)
+                || decodingParameterProtocolUSR.map(signatureProtocols.contains) == true {
+                customDecodingImplementationTargets.formUnion(
+                    serializationImplementationTargetsByCallableUSR[callableUSR] ?? []
+                )
+            } else if name == Self.encodingRequirementName,
+                      knownEncodingWitnessUSRs.contains(callableUSR)
+                        || encodingParameterProtocolUSR.map(signatureProtocols.contains) == true {
+                customEncodingImplementationTargets.formUnion(
+                    serializationImplementationTargetsByCallableUSR[callableUSR] ?? []
+                )
+            }
+        }
+
+        let decodingSensitiveOwnerUSRs = nominalTargets(decodingConformanceTargets)
+        let encodingSensitiveOwnerUSRs = nominalTargets(encodingConformanceTargets)
+        let serializationSensitiveOwnerUSRs = decodingSensitiveOwnerUSRs
+            .union(encodingSensitiveOwnerUSRs)
+        let explicitCodingKeysEnumUSRs = Set(selectedDeclarationUSRs.filter { usr in
+            symbolsByUSR[usr]?.kind == "enum" && symbolsByUSR[usr]?.name == "CodingKeys"
+        })
+        let explicitCodingKeysOwnerUSRByEnumUSR = Dictionary(uniqueKeysWithValues:
+            explicitCodingKeysEnumUSRs.compactMap { enumUSR -> (String, String)? in
+            let owners = ownerUSRsByChild[enumUSR] ?? []
+            guard owners.count == 1, let ownerUSR = owners.first else {
+                return nil
+            }
+            guard let nominalOwnerUSR = Self.nominalTarget(
+                for: ownerUSR,
+                symbolsByUSR: symbolsByUSR,
+                extensionTargetUSRs: extensionTargetUSRs
+            ) else {
+                return nil
+            }
+            return (enumUSR, nominalOwnerUSR)
+        })
+        let explicitCodingKeysOwnerUSRs = Set(explicitCodingKeysOwnerUSRByEnumUSR.values)
+        let customDecodingImplementationOwnerUSRs = nominalTargets(
+            customDecodingImplementationTargets
+        ).intersection(decodingSensitiveOwnerUSRs)
+        let customEncodingImplementationOwnerUSRs = nominalTargets(
+            customEncodingImplementationTargets
+        ).intersection(encodingSensitiveOwnerUSRs)
+        let customSerializationImplementationOwnerUSRs =
+            customDecodingImplementationOwnerUSRs
+                .union(customEncodingImplementationOwnerUSRs)
         var propertyWrapperDerivedUSRsByPropertyUSR: [String: Set<String>] = [:]
         for (site, implicitUSRs) in implicitPropertyUSRsBySite {
             let explicitUSRs = explicitPropertyUSRsBySite[site] ?? []
@@ -294,9 +422,14 @@ public struct IndexedSemanticFacts: Sendable {
         self.externallyOwnedUSRs = externallyOwnedUSRs
         self.runtimeSensitiveUSRs = runtimeSensitiveUSRs
         self.storedPropertyUSRs = storedPropertyUSRs.intersection(explicitDeclarationUSRs)
+        self.decodingSensitiveOwnerUSRs = decodingSensitiveOwnerUSRs
+        self.encodingSensitiveOwnerUSRs = encodingSensitiveOwnerUSRs
         self.serializationSensitiveOwnerUSRs = serializationSensitiveOwnerUSRs
         self.explicitCodingKeysEnumUSRs = explicitCodingKeysEnumUSRs
+        self.explicitCodingKeysOwnerUSRByEnumUSR = explicitCodingKeysOwnerUSRByEnumUSR
         self.explicitCodingKeysOwnerUSRs = explicitCodingKeysOwnerUSRs
+        self.customDecodingImplementationOwnerUSRs = customDecodingImplementationOwnerUSRs
+        self.customEncodingImplementationOwnerUSRs = customEncodingImplementationOwnerUSRs
         self.customSerializationImplementationOwnerUSRs = customSerializationImplementationOwnerUSRs
         self.propertyWrapperDerivedUSRsByPropertyUSR = propertyWrapperDerivedUSRsByPropertyUSR
         self.overrideRelationNeighbors = overrideRelationNeighbors
@@ -479,12 +612,24 @@ public struct IndexedSemanticFacts: Sendable {
     // two protocols whose synthesized implementations derive external keys
     // from stored-property spellings. The rule stays independent of any target
     // project's model names or framework types.
-    private static let synthesizedCodingKeyProtocolUSRs: Set<String> = ["s:Se", "s:SE"]
+    private static let decodableProtocolUSR = "s:Se"
+    private static let encodableProtocolUSR = "s:SE"
 
     // Explicit witnesses are distinguished from compiler-synthesized Codable
     // implementations by IndexStore roles and their protocol-requirement
     // relations. No declaration-body parsing is needed.
-    private static let serializationRequirementNames: Set<String> = ["init(from:)", "encode(to:)"]
+    private static let decodingRequirementName = "init(from:)"
+    private static let encodingRequirementName = "encode(to:)"
+
+    private static func isSerializationImplementationSymbol(_ symbol: SymbolRecord) -> Bool {
+        (symbol.kind == "constructor" && symbol.name == decodingRequirementName)
+            || (symbol.kind == "instanceMethod" && symbol.name == encodingRequirementName)
+    }
+
+    private struct DeclarationLineSite: Hashable {
+        let path: String
+        let line: Int
+    }
 
     private struct PropertyDeclarationSite: Hashable {
         let path: String

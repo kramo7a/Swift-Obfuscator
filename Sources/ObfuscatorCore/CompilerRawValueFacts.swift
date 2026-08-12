@@ -59,10 +59,7 @@ public struct CompilerRawValueFacts: Sendable {
             uniqueKeysWithValues: snapshot.groupsByUSR.map { ($0.usr, $0) }
         )
         let candidateCaseUSRs = Set(semanticFacts.components
-            .filter { component in
-                component.hasRawType
-                    && !indexedFacts.explicitCodingKeysEnumUSRs.contains(component.ownerUSR)
-            }
+            .filter(\.hasRawType)
             .flatMap(\.caseUSRs))
 
         var anchorsByPath: [String: [Int: [CompilerRawValueAnchor]]] = [:]

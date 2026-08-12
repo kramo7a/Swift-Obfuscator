@@ -43,6 +43,7 @@ public struct EnumCaseMemberSyntaxFact: Codable, Equatable, Sendable {
     public let caseUSR: String
     public let declarationToken: SourceTokenRange?
     public let hasExplicitRawValue: Bool
+    public let explicitRawValueStringLiteralToken: SourceTokenRange?
     public let implicitRawValueLiteral: String?
     public let references: [EnumCaseReferenceSyntaxFact]
     public let unresolvedReferenceTokens: [SourceTokenRange]
@@ -305,10 +306,14 @@ public struct EnumCaseSyntaxFacts: Sendable {
                     ($0.path, $0.byteRange.lowerBound)
                         < ($1.path, $1.byteRange.lowerBound)
                 }
-                let matchingStringLiteralTokens = caseCandidatesByUSR[semanticMember.usr]
+                let syntaxCandidate = caseCandidatesByUSR[semanticMember.usr]
+                let allMatchingStringLiteralTokens = syntaxCandidate
                     .flatMap { literalTokensBySpelling[$0.token.name] } ?? []
+                let matchingStringLiteralTokens = allMatchingStringLiteralTokens.filter {
+                    $0 != syntaxCandidate?.explicitRawValueStringLiteralToken
+                }
                 let hasExplicitRawValue =
-                    caseCandidatesByUSR[semanticMember.usr]?.hasExplicitRawValue ?? false
+                    syntaxCandidate?.hasExplicitRawValue ?? false
                 let implicitRawValueLiteral = compilerRawValueFacts
                     .factsByCaseUSR[semanticMember.usr]?.literalSource
                 var memberBlockers: Set<EnumCaseSyntaxBlocker> = []
@@ -322,8 +327,10 @@ public struct EnumCaseSyntaxFacts: Sendable {
                 }
                 members.append(EnumCaseMemberSyntaxFact(
                     caseUSR: semanticMember.usr,
-                    declarationToken: caseCandidatesByUSR[semanticMember.usr]?.token,
+                    declarationToken: syntaxCandidate?.token,
                     hasExplicitRawValue: hasExplicitRawValue,
+                    explicitRawValueStringLiteralToken:
+                        syntaxCandidate?.explicitRawValueStringLiteralToken,
                     implicitRawValueLiteral: implicitRawValueLiteral,
                     references: references,
                     unresolvedReferenceTokens: unresolvedReferenceTokens,
@@ -608,6 +615,7 @@ private struct EnumCaseSyntaxCandidate {
     let token: SourceTokenRange
     let ownerToken: SourceTokenRange
     let hasExplicitRawValue: Bool
+    let explicitRawValueStringLiteralToken: SourceTokenRange?
 }
 
 private struct EnumCaseReferenceSyntaxCandidate {
@@ -650,7 +658,10 @@ private final class EnumCaseSyntaxVisitor: SyntaxVisitor {
             EnumCaseSyntaxCandidate(
                 token: token,
                 ownerToken: ownerToken,
-                hasExplicitRawValue: node.rawValue != nil
+                hasExplicitRawValue: node.rawValue != nil,
+                explicitRawValueStringLiteralToken: stringLiteralContentToken(
+                    node.rawValue?.value
+                )
             )
         )
         return .visitChildren
@@ -789,5 +800,16 @@ private final class EnumCaseSyntaxVisitor: SyntaxVisitor {
             name: String(decoding: source.data[start..<end], as: UTF8.self),
             byteRange: start..<end
         )
+    }
+
+    private func stringLiteralContentToken(
+        _ expression: ExprSyntax?
+    ) -> SourceTokenRange? {
+        guard let literal = expression?.as(StringLiteralExprSyntax.self),
+              literal.segments.count == 1,
+              let segment = literal.segments.first?.as(StringSegmentSyntax.self) else {
+            return nil
+        }
+        return rawToken(segment.content)
     }
 }

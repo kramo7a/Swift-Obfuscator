@@ -6399,7 +6399,7 @@ import Testing
     })
 }
 
-@Test func explicitCodingKeysTypeAndCasesRemainStableUntilCoordinated() throws {
+@Test func explicitCodingKeysPropertiesAndCasesRenameTogetherWhileWireKeysStayStable() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -6407,14 +6407,29 @@ import Testing
     let file = directory.appendingPathComponent("ExplicitCodingKeys.swift")
     let source = [
         "import Foundation",
-        "struct Payload: Codable {",
+        "struct Payload: Codable, Equatable {",
         "    let value: Int",
+        "    let other: Int",
+        "    let equal: Int",
         "    enum CodingKeys: String, CodingKey {",
         "        case value = \"wire_value\"",
+        "        case other",
+        "        case equal = \"equal\"",
         "    }",
         "}",
-        "let data = try JSONEncoder().encode(Payload(value: 7))",
-        "precondition(String(data: data, encoding: .utf8) == \"{\\\"wire_value\\\":7}\")"
+        "let original = Payload(value: 7, other: 8, equal: 9)",
+        "let data = try JSONEncoder().encode(original)",
+        "let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]",
+        "let otherKey = \"other\"",
+        "let equalKey = \"equal\"",
+        "precondition(object[\"wire_value\"] as? Int == 7)",
+        "precondition(object[otherKey] as? Int == 8)",
+        "precondition(object[equalKey] as? Int == 9)",
+        "precondition(String(describing: Payload.CodingKeys.value).contains(\"wire_value\"))",
+        "precondition(String(describing: Payload.CodingKeys.other).contains(\"other\"))",
+        "precondition(String(reflecting: Payload.CodingKeys.equal).contains(\"equal\"))",
+        "let decoded = try JSONDecoder().decode(Payload.self, from: data)",
+        "precondition(decoded == original)"
     ].joined(separator: "\n") + "\n"
     try source.write(to: file, atomically: true, encoding: .utf8)
 
@@ -6444,23 +6459,36 @@ import Testing
     let codingKeysUSR = try #require(snapshot.groupsByUSR.first { group in
         group.symbol.kind == "enum" && group.symbol.name == "CodingKeys"
     }).usr
-    let codingCaseUSR = try #require(snapshot.groupsByUSR.first { group in
-        group.symbol.kind == "enumConstant"
-            && group.symbol.name == "value"
-            && group.occurrences.contains { occurrence in
-                occurrence.relations.contains { relation in
-                    relation.roles.contains("childOf") && relation.usr == codingKeysUSR
+    let payloadUSR = try #require(snapshot.groupsByUSR.first { group in
+        group.symbol.kind == "struct" && group.symbol.name == "Payload"
+    }).usr
+    let sourceNames = ["value", "other", "equal"]
+    let caseUSRsByName = Dictionary(uniqueKeysWithValues: try sourceNames.map { name in
+        let usr = try #require(snapshot.groupsByUSR.first { group in
+            group.symbol.kind == "enumConstant"
+                && group.symbol.name == name
+                && group.occurrences.contains { occurrence in
+                    occurrence.relations.contains { relation in
+                        relation.roles.contains("childOf") && relation.usr == codingKeysUSR
+                    }
                 }
-            }
-    }).usr
-    let propertyUSR = try #require(snapshot.groupsByUSR.first { group in
-        group.symbol.kind == "instanceProperty"
-            && group.symbol.name == "value"
-            && group.occurrences.contains { occurrence in
-                !occurrence.roles.contains("implicit")
-                    && occurrence.roles.contains("definition")
-            }
-    }).usr
+        }).usr
+        return (name, usr)
+    })
+    let propertyUSRsByName = Dictionary(uniqueKeysWithValues: try sourceNames.map { name in
+        let usr = try #require(snapshot.groupsByUSR.first { group in
+            group.symbol.kind == "instanceProperty"
+                && group.symbol.name == name
+                && group.occurrences.contains { occurrence in
+                    !occurrence.roles.contains("implicit")
+                        && occurrence.roles.contains("definition")
+                        && occurrence.relations.contains { relation in
+                            relation.roles.contains("childOf") && relation.usr == payloadUSR
+                        }
+                }
+        }).usr
+        return (name, usr)
+    })
 
     let cache = try SourceFileCache(paths: [file.path])
     var planner = RenamePlanner(
@@ -6470,8 +6498,17 @@ import Testing
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
     #expect(!plan.entries.contains { $0.usr == codingKeysUSR })
-    #expect(!plan.entries.contains { $0.usr == codingCaseUSR })
-    #expect(!plan.entries.contains { $0.usr == propertyUSR })
+    for name in sourceNames {
+        let caseEntry = try #require(plan.entries.first {
+            $0.usr == caseUSRsByName[name]
+        })
+        let propertyEntry = try #require(plan.entries.first {
+            $0.usr == propertyUSRsByName[name]
+        })
+        #expect(caseEntry.oldName == name)
+        #expect(propertyEntry.oldName == name)
+        #expect(caseEntry.newName == propertyEntry.newName)
+    }
     #expect(plan.denied.first { $0.usr == codingKeysUSR }?.reasons.contains {
         $0.contains("explicit CodingKeys type name is required")
     } == true)
@@ -6479,12 +6516,27 @@ import Testing
         $0.ownerUSR == codingKeysUSR
     })
     #expect(codingCaseComponent.blockers.contains(.codingKeyContract))
+    let otherCaseUSR = try #require(caseUSRsByName["other"])
+    #expect(plan.supportReplacements.contains {
+        $0.usr == "implicit-raw-value:\(otherCaseUSR)" && $0.newName == " = \"other\""
+    })
     #expect(plan.conflicts.isEmpty)
 
     try SourcePatcher().apply(plan.replacements)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("enum CodingKeys: String, CodingKey"))
-    #expect(patched.contains("case value = \"wire_value\""))
+    let valueCaseEntry = try #require(plan.entries.first {
+        $0.usr == caseUSRsByName["value"]
+    })
+    let otherCaseEntry = try #require(plan.entries.first {
+        $0.usr == caseUSRsByName["other"]
+    })
+    let equalCaseEntry = try #require(plan.entries.first {
+        $0.usr == caseUSRsByName["equal"]
+    })
+    #expect(patched.contains("case \(valueCaseEntry.newName) = \"wire_value\""))
+    #expect(patched.contains("case \(otherCaseEntry.newName) = \"other\""))
+    #expect(patched.contains("case \(equalCaseEntry.newName) = \"equal\""))
 
     let afterExecutable = directory.appendingPathComponent("After")
     _ = try runner.run(
@@ -6636,6 +6688,160 @@ import Testing
         arguments: ["swiftc", sourceURL.path, "-o", executable.path]
     )
     _ = try runner.run(executable: executable.path, arguments: [])
+}
+
+@Test func indexedSemanticFactsRecoverMissingCodableWitnessRelationsFromCompilerSignatureFacts() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let file = directory.appendingPathComponent("DirectionAwareCodable.swift")
+    let source = [
+        "struct Linked: Decodable {",
+        "    init(from decoder: Decoder) throws {}",
+        "}",
+        "struct Unlinked: Decodable {",
+        "    init(from decoder: Decoder) throws {}",
+        "}",
+        "struct Partial: Codable {",
+        "    init(from decoder: Decoder) throws {}",
+        "}"
+    ].joined(separator: "\n") + "\n"
+    try source.write(to: file, atomically: true, encoding: .utf8)
+
+    func symbol(_ usr: String, _ name: String, _ kind: String) -> SymbolRecord {
+        SymbolRecord(
+            usr: usr,
+            name: name,
+            kind: kind,
+            language: "swift",
+            propertiesRaw: 0,
+            properties: "[]"
+        )
+    }
+    func relation(_ target: SymbolRecord, _ roles: [String]) -> RelationRecord {
+        RelationRecord(
+            usr: target.usr,
+            name: target.name,
+            rolesRaw: 0,
+            roles: roles
+        )
+    }
+
+    let linked = symbol("s:direction-linked", "Linked", "struct")
+    let unlinked = symbol("s:direction-unlinked", "Unlinked", "struct")
+    let partial = symbol("s:direction-partial", "Partial", "struct")
+    let linkedDecoder = symbol("s:direction-linked-decoder", "init(from:)", "constructor")
+    let unlinkedDecoder = symbol("s:direction-unlinked-decoder", "init(from:)", "constructor")
+    let partialDecoder = symbol("s:direction-partial-decoder", "init(from:)", "constructor")
+    let linkedParameter = symbol("s:direction-linked-parameter", "decoder", "parameter")
+    let unlinkedParameter = symbol("s:direction-unlinked-parameter", "decoder", "parameter")
+    let partialParameter = symbol("s:direction-partial-parameter", "decoder", "parameter")
+    let decodingRequirement = symbol(
+        "s:Se4fromxs7Decoder_p_tKcfc",
+        "init(from:)",
+        "constructor"
+    )
+    let decodable = symbol("s:Se", "Decodable", "protocol")
+    let encodable = symbol("s:SE", "Encodable", "protocol")
+    let decoder = symbol("s:s7DecoderP", "Decoder", "protocol")
+
+    let callableFacts: [(SymbolRecord, SymbolRecord, SymbolRecord, Int, Bool)] = [
+        (linkedDecoder, linkedParameter, linked, 2, true),
+        (unlinkedDecoder, unlinkedParameter, unlinked, 5, false),
+        (partialDecoder, partialParameter, partial, 8, false)
+    ]
+    var occurrences = [
+        testOccurrence(linked, path: file.path, line: 1, token: "Linked", roles: ["definition"]),
+        testOccurrence(unlinked, path: file.path, line: 4, token: "Unlinked", roles: ["definition"]),
+        testOccurrence(partial, path: file.path, line: 7, token: "Partial", roles: ["definition"]),
+        testOccurrence(
+            decodable,
+            path: file.path,
+            line: 1,
+            token: "Decodable",
+            roles: ["reference", "baseOf"],
+            relations: [relation(linked, ["baseOf"])]
+        ),
+        testOccurrence(
+            decodable,
+            path: file.path,
+            line: 4,
+            token: "Decodable",
+            roles: ["reference", "baseOf"],
+            relations: [relation(unlinked, ["baseOf"])]
+        ),
+        testOccurrence(
+            decodable,
+            path: file.path,
+            line: 7,
+            token: "Codable",
+            roles: ["reference", "implicit", "baseOf"],
+            relations: [relation(partial, ["baseOf"])]
+        ),
+        testOccurrence(
+            encodable,
+            path: file.path,
+            line: 7,
+            token: "Codable",
+            roles: ["reference", "implicit", "baseOf"],
+            relations: [relation(partial, ["baseOf"])]
+        )
+    ]
+    for (callable, parameter, owner, line, hasWitnessRelation) in callableFacts {
+        var callableRelations = [relation(owner, ["childOf"])]
+        var callableRoles = ["definition", "childOf"]
+        if hasWitnessRelation {
+            callableRelations.append(relation(decodingRequirement, ["overrideOf"]))
+            callableRoles.append("overrideOf")
+        }
+        occurrences.append(testOccurrence(
+            callable,
+            path: file.path,
+            line: line,
+            token: "init",
+            roles: callableRoles,
+            relations: callableRelations
+        ))
+        occurrences.append(testOccurrence(
+            parameter,
+            path: file.path,
+            line: line,
+            token: "decoder",
+            roles: ["definition", "childOf"],
+            relations: [relation(callable, ["childOf"])]
+        ))
+        occurrences.append(testOccurrence(
+            decoder,
+            path: file.path,
+            line: line,
+            token: "Decoder",
+            roles: ["reference", "containedBy"],
+            relations: [relation(callable, ["containedBy"])]
+        ))
+    }
+
+    let snapshot = IndexSnapshot(
+        sourceFiles: [file.path],
+        symbols: [
+            linked, unlinked, partial,
+            linkedDecoder, unlinkedDecoder, partialDecoder,
+            linkedParameter, unlinkedParameter, partialParameter,
+            decodingRequirement, decodable, encodable, decoder
+        ],
+        occurrences: occurrences
+    )
+    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+
+    #expect(facts.decodingSensitiveOwnerUSRs == [linked.usr, unlinked.usr, partial.usr])
+    #expect(facts.encodingSensitiveOwnerUSRs == [partial.usr])
+    #expect(facts.customDecodingImplementationOwnerUSRs == [
+        linked.usr, unlinked.usr, partial.usr
+    ])
+    #expect(facts.customEncodingImplementationOwnerUSRs.isEmpty)
+    #expect(facts.customSerializationImplementationOwnerUSRs == [
+        linked.usr, unlinked.usr, partial.usr
+    ])
 }
 
 @Test func safetyAnalyzerAllowsTypeStoredPropertiesWithoutMemberwiseInitializerSupport() throws {
@@ -9382,11 +9588,15 @@ import Testing
                 }
             }
     }).usr
-    #expect(!plan.entries.contains { $0.usr == codingKeyUSR })
+    let codingKeyEntry = try #require(plan.entries.first { $0.usr == codingKeyUSR })
+    let codingPropertyEntry = try #require(plan.entries.first {
+        $0.kind == "instanceProperty" && $0.oldName == "value"
+    })
+    #expect(codingKeyEntry.newName == codingPropertyEntry.newName)
     #expect(plan.compilerRawValueFacts.resolvedImplicitRawValues >= 5)
     #expect(plan.supportReplacements.count { replacement in
         replacement.usr.hasPrefix("implicit-raw-value:")
-    } == 4)
+    } == 5)
     #expect(plan.conflicts.isEmpty)
 
     try SourcePatcher().apply(plan.replacements)
@@ -9395,7 +9605,7 @@ import Testing
     #expect(patched.contains("case \(beta.newName) = \"beta\""))
     #expect(patched.contains("case \(zero.newName) = 0"))
     #expect(patched.contains("case \(three.newName) = 3"))
-    #expect(patched.contains("case value }"))
+    #expect(patched.contains("case \(codingKeyEntry.newName) = \"value\" }"))
 
     let afterExecutable = directory.appendingPathComponent("After")
     _ = try runner.run(

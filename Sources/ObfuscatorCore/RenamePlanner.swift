@@ -293,9 +293,6 @@ public struct RenamePlanner {
             sourceCache: sourceCache,
             obfuscationRoots: analyzer.obfuscationRoots
         )
-        let serializationKeyPreservedUSRs = Set(
-            codingKeyComponents.flatMap(\.propertyUSRs)
-        )
         let propertyWrapperComponents = Self.propertyWrapperRenameComponents(
             indexedFacts: indexedFacts,
             groupsByUSR: groupsByUSR,
@@ -311,6 +308,38 @@ public struct RenamePlanner {
                 groupsByUSR[usr] == nil ? nil : (usr, component)
             }
         })
+        let explicitCodingKeyPlanning = ExplicitCodingKeyRenamePlanning.makeResult(
+            syntaxFacts: enumCaseSyntaxFacts,
+            semanticFacts: enumCaseComponentFacts,
+            indexedFacts: indexedFacts,
+            groupsByUSR: groupsByUSR,
+            analyzer: analyzer,
+            sourceCache: sourceCache,
+            excludedPropertyUSRs: Set(coordinatedComponentByUSR.keys)
+        )
+        let explicitCodingKeyPairByUSR = Dictionary(
+            explicitCodingKeyPlanning.pairTemplates.flatMap { pair in
+                [(pair.propertyUSR, pair), (pair.caseUSR, pair)]
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let fullyManualSerializationOwnerUSRs = Set(
+            indexedFacts.serializationSensitiveOwnerUSRs.filter { ownerUSR in
+                (!indexedFacts.decodingSensitiveOwnerUSRs.contains(ownerUSR)
+                    || indexedFacts.customDecodingImplementationOwnerUSRs.contains(ownerUSR))
+                    && (!indexedFacts.encodingSensitiveOwnerUSRs.contains(ownerUSR)
+                        || indexedFacts.customEncodingImplementationOwnerUSRs.contains(ownerUSR))
+            }
+        )
+        let manualSerializationPropertyUSRs = Set(
+            fullyManualSerializationOwnerUSRs.flatMap {
+                indexedFacts.directStoredPropertyUSRs(of: $0)
+            }
+        )
+        let serializationKeyPreservedUSRs = Set(
+            codingKeyComponents.flatMap(\.propertyUSRs)
+        ).union(explicitCodingKeyPlanning.propertyUSRs)
+            .union(manualSerializationPropertyUSRs)
         var processedCoordinatedComponents: Set<String> = []
 
         for group in groups {
@@ -628,7 +657,8 @@ public struct RenamePlanner {
             groupsByUSR: groupsByUSR,
             indexedFacts: indexedFacts,
             analyzer: analyzer,
-            sourceCache: sourceCache
+            sourceCache: sourceCache,
+            handledCaseUSRs: explicitCodingKeyPlanning.caseUSRs
         )
         denied.append(contentsOf: enumCasePlanning.denied)
         for componentTemplate in enumCasePlanning.componentTemplates {
@@ -694,6 +724,69 @@ public struct RenamePlanner {
                     }
                 ))
             }
+        }
+
+        for pair in explicitCodingKeyPlanning.pairTemplates {
+            guard let propertyEntry = entries.first(where: {
+                $0.usr == pair.propertyUSR
+            }) else {
+                denied.append(contentsOf: ExplicitCodingKeyRenamePlanning.denialDecisions(
+                    pair: pair,
+                    groupsByUSR: groupsByUSR,
+                    reasons: ["paired stored property was not eligible for renaming"]
+                ))
+                continue
+            }
+
+            var mappingFailures: Set<String> = []
+            if propertyEntry.kind != "instanceProperty"
+                || propertyEntry.oldName != pair.caseTemplate.oldName {
+                mappingFailures.insert(
+                    "stored property and CodingKeys case do not resolve to one source spelling"
+                )
+            }
+            if let existing = mappingStore.entry(for: pair.caseUSR) {
+                if existing.originalName != pair.caseTemplate.oldName
+                    || existing.kind != "enumConstant" {
+                    mappingFailures.insert(
+                        "persisted mapping metadata disagrees for \(pair.caseUSR)"
+                    )
+                } else if existing.obfuscatedName != propertyEntry.newName {
+                    mappingFailures.insert(
+                        "persisted property and CodingKeys case mappings are inconsistent"
+                    )
+                }
+            }
+            guard mappingFailures.isEmpty else {
+                entries.removeAll { $0.usr == pair.propertyUSR }
+                denied.append(contentsOf: ExplicitCodingKeyRenamePlanning.denialDecisions(
+                    pair: pair,
+                    groupsByUSR: groupsByUSR,
+                    reasons: mappingFailures.sorted()
+                ))
+                continue
+            }
+
+            if mappingStore.entry(for: pair.caseUSR) == nil {
+                mappingStore.record(
+                    usr: pair.caseUSR,
+                    originalName: pair.caseTemplate.oldName,
+                    obfuscatedName: propertyEntry.newName,
+                    kind: "enumConstant"
+                )
+            }
+            entries.append(RenamePlanEntry(
+                usr: pair.caseUSR,
+                kind: "enumConstant",
+                oldName: pair.caseTemplate.oldName,
+                newName: propertyEntry.newName,
+                replacements: pair.caseTemplate.replacements.map {
+                    $0.replacement(newName: propertyEntry.newName)
+                }.sorted { lhs, rhs in
+                    (lhs.path, lhs.byteOffset, lhs.usr)
+                        < (rhs.path, rhs.byteOffset, rhs.usr)
+                }
+            ))
         }
 
         let externalLabelPlanning = ParameterExternalLabelRenamePlanning.makeResult(
@@ -873,6 +966,21 @@ public struct RenamePlanner {
                 }
                 return enumCaseOwnerComponentByCaseUSR[entry.usr]?.ownerUSR
             })
+            let directlyConflictedExplicitCodingKeyPairs = Set(entries.compactMap {
+                entry -> String? in
+                guard entry.replacements.contains(where: {
+                    conflictKeys.contains("\($0.path):\($0.byteOffset)")
+                }) else {
+                    return nil
+                }
+                return explicitCodingKeyPairByUSR[entry.usr]?.key
+            })
+            let conflictedExplicitCodingKeyPairs = directlyConflictedExplicitCodingKeyPairs
+                .union(explicitCodingKeyPlanning.pairTemplates.compactMap { pair in
+                    conflictedEnumCaseOwners.contains(pair.codingKeysEnumUSR)
+                        ? pair.key
+                        : nil
+                })
             entries = entries.compactMap { entry in
                 if let componentKey = coordinatedComponentByUSR[entry.usr]?.key,
                    conflictedCoordinatedComponents.contains(componentKey) {
@@ -884,6 +992,10 @@ public struct RenamePlanner {
                 }
                 if let ownerUSR = enumCaseOwnerComponentByCaseUSR[entry.usr]?.ownerUSR,
                    conflictedEnumCaseOwners.contains(ownerUSR) {
+                    return nil
+                }
+                if let pairKey = explicitCodingKeyPairByUSR[entry.usr]?.key,
+                   conflictedExplicitCodingKeyPairs.contains(pairKey) {
                     return nil
                 }
                 return entry.replacements.contains {
@@ -919,6 +1031,16 @@ public struct RenamePlanner {
             where conflictedEnumCaseOwners.contains(component.ownerUSR) {
                 denied.append(contentsOf: EnumCaseRenamePlanning.denialDecisions(
                     component: component,
+                    groupsByUSR: groupsByUSR,
+                    reasons: [
+                        "component contains a replacement conflict and was removed atomically"
+                    ]
+                ))
+            }
+            for pair in explicitCodingKeyPlanning.pairTemplates
+            where conflictedExplicitCodingKeyPairs.contains(pair.key) {
+                denied.append(contentsOf: ExplicitCodingKeyRenamePlanning.denialDecisions(
+                    pair: pair,
                     groupsByUSR: groupsByUSR,
                     reasons: [
                         "component contains a replacement conflict and was removed atomically"
