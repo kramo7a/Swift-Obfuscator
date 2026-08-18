@@ -1,135 +1,6 @@
 import Foundation
 import ObfuscatorCore
 
-enum CLIError: LocalizedError {
-    case invalidArguments(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidArguments(let message):
-            return message
-        }
-    }
-}
-
-enum Command: String {
-    case dump
-    case dryRun = "dry-run"
-    case apply
-}
-
-enum OutputVerbosity: Int {
-    case quiet = 0
-    case normal = 1
-    case verbose = 2
-}
-
-struct CLIOptions {
-    var command: Command = .dryRun
-    var projectRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-    var sourceRootPaths: [String] = []
-    var outputDirectory: URL?
-    var obfuscatedCodeOutputPath: String?
-    var scheme: String?
-    var configuration: String?
-    var destination: String? = "platform=macOS"
-    var derivedDataPath: URL?
-    var databasePath: URL?
-    var mappingPath: URL?
-    var coverageCohortPath: URL?
-    var createCoverageCohortPath: URL?
-    var coverageCohortIdentifier: String?
-    var coverageExpectedCount: Int?
-    var dumpIndex = false
-    var verifyBuild = false
-    var reuseIndex = false
-    var compactReport = false
-    var extraXcodebuildArguments: [String] = []
-    var verbosity: OutputVerbosity = .normal
-    var printSummaryJSON = false
-}
-
-struct RunSummary: Codable {
-    var status = "running"
-    var command: String
-    var phase = "parse-arguments"
-    var projectRoot: String?
-    var outputDirectory: String?
-    var obfuscatedCodeOutput: String?
-    var sourceRoots: [SourceRootSummary] = []
-    var build: BuildSummary?
-    var counters = RunCounters()
-    var parameterFacts: ParameterFactsSummary?
-    var parameterSyntaxFacts: ParameterSyntaxFactsSummary?
-    var parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary?
-    var parameterCallArgumentBindingFacts: ParameterCallArgumentBindingFactsSummary?
-    var parameterCallableReferenceSyntaxFacts: ParameterCallableReferenceSyntaxFactsSummary?
-    var parameterCallableReferenceBindingFacts: ParameterCallableReferenceBindingFactsSummary?
-    var parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary?
-    var parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary?
-    var parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary?
-    var enumCaseComponentFacts: EnumCaseComponentFactsSummary?
-    var compilerRawValueFacts: CompilerRawValueFactsSummary?
-    var enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary?
-    var genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary?
-    var typealiasSyntaxFacts: TypealiasSyntaxFactsSummary?
-    var artifacts = RunArtifacts()
-    var logs: [String] = []
-    var error: RunErrorSummary?
-}
-
-struct SourceRootSummary: Codable {
-    var path: String
-    var outputPath: String?
-}
-
-struct BuildSummary: Codable {
-    var scheme: String
-    var derivedDataPath: String
-    var indexStorePath: String
-}
-
-struct RunCounters: Codable {
-    var sourceRoots: Int?
-    var indexedSymbols: Int?
-    var indexedOccurrences: Int?
-    var selectedSourceFiles: Int?
-    var plannedSymbols: Int?
-    var plannedReplacements: Int?
-    var deniedSymbols: Int?
-    var conflicts: Int?
-    var appliedReplacements: Int?
-    var writtenSourceFiles: Int?
-    var cohortDenominator: Int?
-    var cohortRenamed: Int?
-    var cohortDenied: Int?
-    var cohortMissingFromIndex: Int?
-    var cohortUnclassified: Int?
-    var cohortCoveragePercent: Double?
-}
-
-struct RunArtifacts: Codable {
-    var runSummary: String?
-    var runLog: String?
-    var indexDump: String?
-    var dryRunReport: String?
-    var mapping: String?
-    var indexSourceManifest: String?
-    var indexSnapshotCache: String?
-    var renamePlanCache: String?
-    var coverageCohort: String?
-    var coverageReport: String?
-}
-
-struct RunErrorSummary: Codable {
-    var message: String
-    var commandLine: String?
-    var exitCode: Int32?
-    var stdoutLogPath: String?
-    var stderrLogPath: String?
-    var outputTail: String?
-}
-
 @main
 struct SwiftObfuscatorCLI {
     static func main() {
@@ -149,52 +20,11 @@ struct SwiftObfuscatorCLI {
             summary.command = options.command.rawValue
             summary.phase = "prepare"
             options.projectRoot = options.projectRoot.standardizedFileURL
-            let outputDirectory = (options.outputDirectory ?? options.projectRoot.appendingPathComponent(".obfuscator", isDirectory: true)).standardizedFileURL
-            let obfuscatedCodeOutputDirectory = try options.obfuscatedCodeOutputPath.map {
-                try resolveObfuscatedCodeOutput($0, projectRoot: options.projectRoot)
-            }
-            var excludedRoots = [outputDirectory.standardizedFileURL]
-            if let obfuscatedCodeOutputDirectory {
-                excludedRoots.append(obfuscatedCodeOutputDirectory.standardizedFileURL)
-            }
-            let derivedDataPath = (options.derivedDataPath ?? outputDirectory.appendingPathComponent("DerivedData", isDirectory: true)).standardizedFileURL
-            let databasePath = (options.databasePath ?? outputDirectory.appendingPathComponent("IndexDatabase", isDirectory: true)).standardizedFileURL
-            let mappingPath = (options.mappingPath ?? outputDirectory.appendingPathComponent("mapping.json")).standardizedFileURL
-            let coverageCohortPath = options.coverageCohortPath?.standardizedFileURL
-            let createCoverageCohortPath = options.createCoverageCohortPath?.standardizedFileURL
-            let indexSourceManifestPath = outputDirectory.appendingPathComponent("index-source-manifest.json").standardizedFileURL
-            let indexSnapshotCachePath = databasePath.appendingPathExtension("snapshot.plist")
-            let renamePlanCachePath = databasePath.appendingPathExtension("rename-plan.plist")
-            let projectSourceRoots = try resolveSourceRoots(
-                options.sourceRootPaths,
-                projectRoot: options.projectRoot,
-                excludedRoots: excludedRoots,
-                fileManager: fileManager
-            )
-
-            summary.projectRoot = options.projectRoot.path
-            summary.outputDirectory = outputDirectory.path
-            summary.obfuscatedCodeOutput = obfuscatedCodeOutputDirectory?.path
-            summary.sourceRoots = try projectSourceRoots.map { sourceRoot in
-                if let obfuscatedCodeOutputDirectory {
-                    return SourceRootSummary(
-                        path: sourceRoot.path,
-                        outputPath: try mapProjectPath(sourceRoot, fromProjectRoot: options.projectRoot, toOutputRoot: obfuscatedCodeOutputDirectory).path
-                    )
-                }
-                return SourceRootSummary(path: sourceRoot.path, outputPath: nil)
-            }
-            summary.counters.sourceRoots = projectSourceRoots.count
-
-            if let obfuscatedCodeOutputDirectory {
-                guard !isSameOrDescendant(options.projectRoot, of: obfuscatedCodeOutputDirectory) else {
-                    throw CLIError.invalidArguments("Obfuscated code output cannot be the project root or its ancestor: \(obfuscatedCodeOutputDirectory.path)")
-                }
-                try prepareOutputDirectory(obfuscatedCodeOutputDirectory, fileManager: fileManager)
-            }
+            let paths = try resolveRunPaths(for: options, fileManager: fileManager)
+            try recordRunConfiguration(options: options, paths: paths, summary: &summary)
 
             output = try CLIOutput(
-                outputDirectory: outputDirectory,
+                outputDirectory: paths.outputDirectory,
                 verbosity: options.verbosity,
                 printsHumanOutput: !options.printSummaryJSON,
                 fileManager: fileManager
@@ -203,295 +33,56 @@ struct SwiftObfuscatorCLI {
                 throw CLIError.invalidArguments("Failed to initialize output writer.")
             }
 
-            output.write("Output directory: \(outputDirectory.path)")
-            if let obfuscatedCodeOutputDirectory {
-                output.write("Obfuscated code output: \(obfuscatedCodeOutputDirectory.path)")
-            } else {
-                output.write("Obfuscated code output: in-place project sources")
-            }
-            output.write("Source paths selected for obfuscation:")
-            for sourceRoot in projectSourceRoots {
-                if let obfuscatedCodeOutputDirectory {
-                    let outputRoot = try mapProjectPath(sourceRoot, fromProjectRoot: options.projectRoot, toOutputRoot: obfuscatedCodeOutputDirectory)
-                    output.write("  \(sourceRoot.path) -> \(outputRoot.path)")
-                } else {
-                    output.write("  \(sourceRoot.path)")
-                }
-            }
+            try writeRunConfiguration(options: options, paths: paths, output: output)
             let runner = CommandRunner(logDirectory: output.logsDirectory)
             let builder = ProjectBuilder(runner: runner)
-            let buildScheme: String
-            let indexStorePath: URL
-            if options.reuseIndex {
-                summary.phase = "validate-index-sources"
-                output.write("Reusing existing index database after validating all Swift sources...", visibility: .quiet)
-                buildScheme = try options.scheme ?? builder.inferScheme(projectRoot: options.projectRoot)
-                indexStorePath = derivedDataPath.appendingPathComponent("Index.noindex/DataStore", isDirectory: true)
-            } else {
-                output.write("Building original project with xcodebuild index store...", visibility: .quiet)
-                summary.phase = "build-original"
-                let buildResult = try builder.build(ProjectBuildOptions(
-                    projectRoot: options.projectRoot,
-                    scheme: options.scheme,
-                    configuration: options.configuration,
-                    destination: options.destination,
-                    derivedDataPath: derivedDataPath,
-                    extraXcodebuildArguments: options.extraXcodebuildArguments
-                ))
-                buildScheme = buildResult.scheme
-                indexStorePath = buildResult.indexStorePath
-                output.write("Build succeeded: scheme=\(buildResult.scheme)", visibility: .quiet)
-            }
-            summary.build = BuildSummary(
-                scheme: buildScheme,
-                derivedDataPath: derivedDataPath.path,
-                indexStorePath: indexStorePath.path
+            let indexedBuild = try prepareIndex(
+                options: options,
+                paths: paths,
+                builder: builder,
+                output: output,
+                summary: &summary
             )
-            output.write("Index store: \(indexStorePath.path)")
 
-            var sourceCache: SourceFileCache?
-            var sourceManifest: IndexSourceManifest?
-            if options.reuseIndex {
-                let currentSourceFiles = try SourceFileFinder.swiftFiles(
-                    in: options.projectRoot,
-                    excluding: excludedRoots,
-                    fileManager: fileManager
-                )
-                let currentSourceCache = try SourceFileCache(paths: currentSourceFiles.map(\.path))
-                let manifest = try IndexSourceManifest.load(from: indexSourceManifestPath)
-                try manifest.validate(sourceCache: currentSourceCache)
-                sourceCache = currentSourceCache
-                sourceManifest = manifest
-                summary.artifacts.indexSourceManifest = indexSourceManifestPath.path
-                output.write("Index source manifest validated: \(currentSourceFiles.count) files", visibility: .quiet)
+            let preparedPlan: PreparedPlan
+            switch try preparePlan(
+                options: options,
+                paths: paths,
+                indexedBuild: indexedBuild,
+                runner: runner,
+                output: output,
+                fileManager: fileManager,
+                summary: &summary
+            ) {
+            case .dumpOnly:
+                summary.status = "success"
+                summary.phase = "completed"
+                finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
+                return
+            case .ready(let result):
+                preparedPlan = result
             }
 
-            let inputMappingStore = try MappingStore.load(from: mappingPath)
-            let executableURL = URL(
-                fileURLWithPath: CommandLine.arguments[0],
-                relativeTo: URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
-            ).standardizedFileURL
-            var cachedPlan: CachedRenamePlan?
-            if options.reuseIndex,
-               options.command != .dump,
-               !options.dumpIndex,
-               coverageCohortPath == nil,
-               createCoverageCohortPath == nil,
-               let sourceManifest {
-                let key = try RenamePlanCacheKey.make(
-                    toolURL: executableURL,
-                    sourceManifest: sourceManifest,
-                    obfuscationRoots: projectSourceRoots,
-                    mappingStore: inputMappingStore
-                )
-                cachedPlan = try RenamePlanCache.load(from: renamePlanCachePath, matching: key)
-            }
-
-            let plan: RenamePlan
-            let outputMappingStore: MappingStore
-            let selectedSourceFiles: [String]
-            var snapshotForCoverage: IndexSnapshot?
-            if let cachedPlan {
-                summary.phase = "load-rename-plan"
-                plan = cachedPlan.plan
-                outputMappingStore = MappingStore(entries: cachedPlan.outputMappingEntries)
-                selectedSourceFiles = SwiftObfuscatorCLI.selectedSourceFiles(from: cachedPlan.sourceFiles, under: projectSourceRoots)
-                summary.counters.indexedSymbols = cachedPlan.indexedSymbolCount
-                summary.counters.indexedOccurrences = cachedPlan.indexedOccurrenceCount
-                summary.artifacts.renamePlanCache = renamePlanCachePath.path
-                output.write("Rename plan cache loaded: \(renamePlanCachePath.path)", visibility: .quiet)
-            } else {
-                let snapshot: IndexSnapshot
-                if options.reuseIndex, fileManager.fileExists(atPath: indexSnapshotCachePath.path) {
-                    guard let sourceManifest else {
-                        throw CLIError.invalidArguments("Failed to validate indexed Swift sources.")
-                    }
-                    summary.phase = "load-index-snapshot"
-                    snapshot = try IndexSnapshotCache.load(
-                        from: indexSnapshotCachePath,
-                        sourceManifest: sourceManifest
-                    )
-                    summary.artifacts.indexSnapshotCache = indexSnapshotCachePath.path
-                    output.write("Index snapshot cache loaded: \(indexSnapshotCachePath.path)", visibility: .quiet)
-                } else {
-                    let reader = IndexReader(runner: runner)
-                    summary.phase = "read-index"
-                    snapshot = try reader.read(
-                        storePath: indexStorePath,
-                        databasePath: databasePath,
-                        sourceRoot: options.projectRoot,
-                        excludedSourceRoots: excludedRoots,
-                        reuseExistingDatabase: options.reuseIndex
-                    )
-                }
-                snapshotForCoverage = snapshot
-
-                if let sourceCache {
-                    guard sourceCache.allPaths == snapshot.sourceFiles.map(SourcePathNormalizer.canonicalPath).sorted() else {
-                        throw CLIError.invalidArguments("Index database source paths do not match the validated source manifest. Run again without --reuse-index.")
-                    }
-                } else {
-                    let currentSourceCache = try SourceFileCache(paths: snapshot.sourceFiles)
-                    let manifest = try IndexSourceManifest.capture(sourceCache: currentSourceCache)
-                    try manifest.save(to: indexSourceManifestPath)
-                    sourceCache = currentSourceCache
-                    sourceManifest = manifest
-                    summary.artifacts.indexSourceManifest = indexSourceManifestPath.path
-                    output.write("Index source manifest saved: \(indexSourceManifestPath.path)")
-                }
-
-                if !fileManager.fileExists(atPath: indexSnapshotCachePath.path) || !options.reuseIndex {
-                    guard let sourceManifest else {
-                        throw CLIError.invalidArguments("Failed to capture indexed Swift source manifest.")
-                    }
-                    summary.phase = "save-index-snapshot"
-                    try IndexSnapshotCache.save(
-                        snapshot: snapshot,
-                        sourceManifest: sourceManifest,
-                        to: indexSnapshotCachePath,
-                        fileManager: fileManager
-                    )
-                    summary.artifacts.indexSnapshotCache = indexSnapshotCachePath.path
-                    output.write("Index snapshot cache saved: \(indexSnapshotCachePath.path)")
-                }
-
-                summary.counters.indexedSymbols = snapshot.symbols.count
-                summary.counters.indexedOccurrences = snapshot.occurrences.count
-                output.write("Indexed symbols=\(snapshot.symbols.count), occurrences=\(snapshot.occurrences.count)", visibility: .quiet)
-
-                if options.command == .dump || options.dumpIndex {
-                    summary.phase = "dump-index"
-                    let dump = ReportRenderer.renderDump(snapshot: snapshot)
-                    let dumpPath = try output.writeArtifact(named: "index-dump.txt", contents: dump)
-                    summary.artifacts.indexDump = dumpPath.path
-                    let dumpVisibility: ConsoleVisibility = options.verbosity == .quiet ? .verbose : .normal
-                    output.write(dump, visibility: dumpVisibility)
-                    output.write("Index dump saved: \(dumpPath.path)", visibility: .quiet)
-                    if options.command == .dump {
-                        summary.status = "success"
-                        summary.phase = "completed"
-                        finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
-                        return
-                    }
-                }
-
-                summary.phase = "plan-renames"
-                guard let sourceCache, let sourceManifest else {
-                    throw CLIError.invalidArguments("Failed to load indexed Swift sources.")
-                }
-                var planner = RenamePlanner(
-                    analyzer: SafetyAnalyzer(
-                        sourceRoot: options.projectRoot,
-                        obfuscationRoots: projectSourceRoots
-                    ),
-                    mappingStore: inputMappingStore
-                )
-                plan = planner.makePlan(snapshot: snapshot, sourceCache: sourceCache)
-                outputMappingStore = planner.mappingStore
-                selectedSourceFiles = SwiftObfuscatorCLI.selectedSourceFiles(from: snapshot.sourceFiles, under: projectSourceRoots)
-
-                let planCacheKey = try RenamePlanCacheKey.make(
-                    toolURL: executableURL,
-                    sourceManifest: sourceManifest,
-                    obfuscationRoots: projectSourceRoots,
-                    mappingStore: inputMappingStore
-                )
-                try RenamePlanCache.save(
-                    CachedRenamePlan(
-                        plan: plan,
-                        outputMappingEntries: outputMappingStore.allEntries(),
-                        sourceFiles: snapshot.sourceFiles,
-                        indexedSymbolCount: snapshot.symbols.count,
-                        indexedOccurrenceCount: snapshot.occurrences.count
-                    ),
-                    key: planCacheKey,
-                    to: renamePlanCachePath,
-                    fileManager: fileManager
-                )
-                summary.artifacts.renamePlanCache = renamePlanCachePath.path
-                output.write("Rename plan cache saved: \(renamePlanCachePath.path)")
-            }
-
-            summary.counters.selectedSourceFiles = selectedSourceFiles.count
-            output.write("Selected source files=\(selectedSourceFiles.count)", visibility: .quiet)
-            try SourcePatcher().validate(plan.replacements)
-            summary.counters.plannedSymbols = plan.entries.count
-            summary.counters.plannedReplacements = plan.replacements.count
-            summary.counters.deniedSymbols = plan.denied.count
-            summary.counters.conflicts = plan.conflicts.count
-            summary.parameterFacts = plan.parameterFacts
-            summary.parameterSyntaxFacts = plan.parameterSyntaxFacts
-            summary.parameterCallSiteSyntaxFacts = plan.parameterCallSiteSyntaxFacts
-            summary.parameterCallArgumentBindingFacts = plan.parameterCallArgumentBindingFacts
-            summary.parameterCallableReferenceSyntaxFacts =
-                plan.parameterCallableReferenceSyntaxFacts
-            summary.parameterCallableReferenceBindingFacts =
-                plan.parameterCallableReferenceBindingFacts
-            summary.parameterExternalLabelComponentFacts =
-                plan.parameterExternalLabelComponentFacts
-            summary.parameterExternalLabelRenameOutcome =
-                plan.parameterExternalLabelRenameOutcome
-            summary.parameterLocalBindingOutcome = plan.parameterLocalBindingOutcome
-            summary.enumCaseComponentFacts = plan.enumCaseComponentFacts
-            summary.compilerRawValueFacts = plan.compilerRawValueFacts
-            summary.enumCaseSyntaxFacts = plan.enumCaseSyntaxFacts
-            summary.genericParameterSyntaxFacts = plan.genericParameterSyntaxFacts
-            summary.typealiasSyntaxFacts = plan.typealiasSyntaxFacts
-            let dryRunReport = ReportRenderer.renderDryRun(plan: plan, compact: options.compactReport)
-            let dryRunReportPath = try output.writeArtifact(named: "dry-run-report.txt", contents: dryRunReport)
-            summary.artifacts.dryRunReport = dryRunReportPath.path
-            output.write(dryRunReport, visibility: .verbose)
-            output.write("Dry-run summary: planned=\(plan.entries.count), replacements=\(plan.replacements.count), denied=\(plan.denied.count), conflicts=\(plan.conflicts.count)", visibility: .quiet)
-            output.write("Dry-run report saved: \(dryRunReportPath.path)", visibility: .quiet)
-
-            if let cohortPath = coverageCohortPath ?? createCoverageCohortPath {
-                guard let snapshotForCoverage else {
-                    throw CLIError.invalidArguments("Coverage reporting requires an index snapshot. Run without a cached rename plan.")
-                }
-
-                let cohort: CoverageCohort
-                if let createCoverageCohortPath {
-                    guard let identifier = options.coverageCohortIdentifier,
-                          let expectedCount = options.coverageExpectedCount else {
-                        throw CLIError.invalidArguments("Creating a coverage cohort requires --coverage-cohort-id and --coverage-expected-count.")
-                    }
-                    cohort = try CoverageAnalyzer.makeBaselineCohort(
-                        identifier: identifier,
-                        expectedCount: expectedCount,
-                        snapshot: snapshotForCoverage,
-                        plan: plan,
-                        selectedSourceFiles: selectedSourceFiles
-                    )
-                    try cohort.save(to: createCoverageCohortPath, fileManager: fileManager)
-                    output.write("Immutable coverage cohort saved: \(createCoverageCohortPath.path)", visibility: .quiet)
-                } else {
-                    cohort = try CoverageCohort.load(from: cohortPath)
-                    output.write("Coverage cohort loaded: \(cohortPath.path)", visibility: .quiet)
-                }
-
-                let coverageReport = try CoverageAnalyzer.makeReport(
-                    cohort: cohort,
-                    snapshot: snapshotForCoverage,
-                    plan: plan
-                )
-                let coverageReportPath = outputDirectory.appendingPathComponent("coverage-report.json")
-                try coverageReport.save(to: coverageReportPath, fileManager: fileManager)
-                summary.artifacts.coverageCohort = cohortPath.path
-                summary.artifacts.coverageReport = coverageReportPath.path
-                summary.counters.cohortDenominator = coverageReport.denominator
-                summary.counters.cohortRenamed = coverageReport.renamed
-                summary.counters.cohortDenied = coverageReport.denied
-                summary.counters.cohortMissingFromIndex = coverageReport.missingFromIndex
-                summary.counters.cohortUnclassified = coverageReport.unclassified
-                summary.counters.cohortCoveragePercent = coverageReport.coveragePercent
-                output.write(
-                    "Coverage cohort: renamed=\(coverageReport.renamed)/\(coverageReport.denominator) "
-                        + "(\(String(format: "%.2f", coverageReport.coveragePercent))%), "
-                        + "missing=\(coverageReport.missingFromIndex), unclassified=\(coverageReport.unclassified)",
-                    visibility: .quiet
-                )
-                output.write("Coverage report saved: \(coverageReportPath.path)", visibility: .quiet)
-            }
+            try recordPlanningResults(
+                preparedPlan.plan,
+                selectedSourceFiles: preparedPlan.selectedSourceFiles,
+                compactReport: options.compactReport,
+                output: output,
+                summary: &summary
+            )
+            try writeCoverageReportIfRequested(
+                plan: preparedPlan.plan,
+                snapshot: preparedPlan.snapshotForCoverage,
+                selectedSourceFiles: preparedPlan.selectedSourceFiles,
+                existingCohortPath: paths.existingCoverageCohortPath,
+                newCohortPath: paths.newCoverageCohortPath,
+                cohortIdentifier: options.coverageCohortIdentifier,
+                expectedCount: options.coverageExpectedCount,
+                outputDirectory: paths.outputDirectory,
+                output: output,
+                fileManager: fileManager,
+                summary: &summary
+            )
 
             switch options.command {
             case .dump:
@@ -501,46 +92,25 @@ struct SwiftObfuscatorCLI {
                     output.write("Verify build: initial indexed build succeeded; dry-run did not modify sources.")
                 }
             case .apply:
-                summary.phase = "apply"
-                if let obfuscatedCodeOutputDirectory {
-                    let writtenFiles = try SourcePatcher().writePatchedCopies(
-                        sourceFiles: selectedSourceFiles,
-                        replacements: plan.replacements,
-                        sourceRoot: options.projectRoot,
-                        outputRoot: obfuscatedCodeOutputDirectory
-                    )
-                    summary.counters.appliedReplacements = plan.replacements.count
-                    summary.counters.writtenSourceFiles = writtenFiles.count
-                    output.write("Applied replacements: \(plan.replacements.count)", visibility: .quiet)
-                    output.write("Written source files: \(writtenFiles.count)", visibility: .quiet)
-                } else {
-                    try SourcePatcher().apply(plan.replacements)
-                    summary.counters.appliedReplacements = plan.replacements.count
-                    output.write("Applied replacements to project source files: \(plan.replacements.count)", visibility: .quiet)
-                }
-                if !plan.replacements.isEmpty {
-                    try outputMappingStore.save(to: mappingPath)
-                    summary.artifacts.mapping = mappingPath.path
-                    output.write("Mapping saved: \(mappingPath.path)")
-                }
-
-                if options.verifyBuild {
-                    if obfuscatedCodeOutputDirectory == nil {
-                        summary.phase = "verify-build"
-                        output.write("Verifying patched build...")
-                        _ = try builder.build(ProjectBuildOptions(
-                            projectRoot: options.projectRoot,
-                            scheme: buildScheme,
-                            configuration: options.configuration,
-                            destination: options.destination,
-                            derivedDataPath: derivedDataPath,
-                            extraXcodebuildArguments: options.extraXcodebuildArguments
-                        ))
-                        output.write("Verify build succeeded.")
-                    } else {
-                        output.write("Verify build: initial indexed build succeeded; source-only output was not rebuilt.")
-                    }
-                }
+                try applyPlan(
+                    preparedPlan.plan,
+                    to: paths.obfuscatedCodeOutputDirectory,
+                    selectedSourceFiles: preparedPlan.selectedSourceFiles,
+                    projectRoot: options.projectRoot,
+                    mappingStore: preparedPlan.mappingStore,
+                    mappingPath: paths.mappingPath,
+                    output: output,
+                    summary: &summary
+                )
+                try verifyAppliedBuildIfRequested(
+                    options: options,
+                    obfuscatedCodeOutputDirectory: paths.obfuscatedCodeOutputDirectory,
+                    builder: builder,
+                    scheme: indexedBuild.scheme,
+                    derivedDataPath: paths.derivedDataPath,
+                    output: output,
+                    summary: &summary
+                )
             }
             summary.status = "success"
             summary.phase = "completed"
@@ -562,6 +132,590 @@ struct SwiftObfuscatorCLI {
             exit(1)
         }
     }
+
+    // MARK: - Run preparation
+
+    static func resolveRunPaths(
+        for options: CLIOptions,
+        fileManager: FileManager
+    ) throws -> RunPaths {
+        let outputDirectory =
+            (options.outputDirectory
+            ?? options.projectRoot.appendingPathComponent(".obfuscator", isDirectory: true)).standardizedFileURL
+        let obfuscatedCodeOutputDirectory = try options.obfuscatedCodeOutputPath.map {
+            try resolveObfuscatedCodeOutput($0, projectRoot: options.projectRoot)
+        }
+        var excludedSourceRoots = [outputDirectory]
+        if let obfuscatedCodeOutputDirectory {
+            excludedSourceRoots.append(obfuscatedCodeOutputDirectory)
+        }
+
+        let derivedData =
+            (options.derivedDataPath
+            ?? outputDirectory.appendingPathComponent("DerivedData", isDirectory: true)).standardizedFileURL
+        let indexDatabase =
+            (options.databasePath
+            ?? outputDirectory.appendingPathComponent("IndexDatabase", isDirectory: true)).standardizedFileURL
+        let mapping =
+            (options.mappingPath
+            ?? outputDirectory.appendingPathComponent("mapping.json")).standardizedFileURL
+        let selectedSourceRoots = try resolveSourceRoots(
+            options.sourceRootPaths,
+            projectRoot: options.projectRoot,
+            excludedRoots: excludedSourceRoots,
+            fileManager: fileManager
+        )
+
+        if let obfuscatedCodeOutputDirectory {
+            guard
+                !isSameOrDescendant(
+                    options.projectRoot,
+                    of: obfuscatedCodeOutputDirectory
+                )
+            else {
+                throw CLIError.invalidArguments(
+                    "Obfuscated code output cannot be the project root or its ancestor: "
+                        + obfuscatedCodeOutputDirectory.path
+                )
+            }
+            try prepareOutputDirectory(obfuscatedCodeOutputDirectory, fileManager: fileManager)
+        }
+
+        return RunPaths(
+            outputDirectory: outputDirectory,
+            obfuscatedCodeOutputDirectory: obfuscatedCodeOutputDirectory,
+            excludedSourceRoots: excludedSourceRoots,
+            derivedDataPath: derivedData,
+            indexDatabasePath: indexDatabase,
+            mappingPath: mapping,
+            existingCoverageCohortPath: options.coverageCohortPath?.standardizedFileURL,
+            newCoverageCohortPath: options.createCoverageCohortPath?.standardizedFileURL,
+            indexSourceManifestPath:
+                outputDirectory
+                .appendingPathComponent("index-source-manifest.json")
+                .standardizedFileURL,
+            indexSnapshotCachePath: indexDatabase.appendingPathExtension("snapshot.plist"),
+            renamePlanCachePath: indexDatabase.appendingPathExtension("rename-plan.plist"),
+            selectedSourceRoots: selectedSourceRoots
+        )
+    }
+
+    static func recordRunConfiguration(
+        options: CLIOptions,
+        paths: RunPaths,
+        summary: inout RunSummary
+    ) throws {
+        summary.projectRoot = options.projectRoot.path
+        summary.outputDirectory = paths.outputDirectory.path
+        summary.obfuscatedCodeOutput = paths.obfuscatedCodeOutputDirectory?.path
+        summary.sourceRoots = try paths.selectedSourceRoots.map { sourceRoot in
+            let outputPath = try paths.obfuscatedCodeOutputDirectory.map { outputDirectory in
+                try mapProjectPath(
+                    sourceRoot,
+                    fromProjectRoot: options.projectRoot,
+                    toOutputRoot: outputDirectory
+                ).path
+            }
+            return SourceRootSummary(path: sourceRoot.path, outputPath: outputPath)
+        }
+        summary.counters.sourceRoots = paths.selectedSourceRoots.count
+    }
+
+    static func writeRunConfiguration(
+        options: CLIOptions,
+        paths: RunPaths,
+        output: CLIOutput
+    ) throws {
+        output.write("Output directory: \(paths.outputDirectory.path)")
+        if let obfuscatedCodeOutputDirectory = paths.obfuscatedCodeOutputDirectory {
+            output.write("Obfuscated code output: \(obfuscatedCodeOutputDirectory.path)")
+        } else {
+            output.write("Obfuscated code output: in-place project sources")
+        }
+
+        output.write("Source paths selected for obfuscation:")
+        for sourceRoot in paths.selectedSourceRoots {
+            if let obfuscatedCodeOutputDirectory = paths.obfuscatedCodeOutputDirectory {
+                let outputRoot = try mapProjectPath(
+                    sourceRoot,
+                    fromProjectRoot: options.projectRoot,
+                    toOutputRoot: obfuscatedCodeOutputDirectory
+                )
+                output.write("  \(sourceRoot.path) -> \(outputRoot.path)")
+            } else {
+                output.write("  \(sourceRoot.path)")
+            }
+        }
+    }
+
+    static func prepareIndex(
+        options: CLIOptions,
+        paths: RunPaths,
+        builder: ProjectBuilder,
+        output: CLIOutput,
+        summary: inout RunSummary
+    ) throws -> IndexedBuild {
+        let indexedBuild: IndexedBuild
+        if options.reuseIndex {
+            summary.phase = "validate-index-sources"
+            output.write(
+                "Reusing existing index database after validating all Swift sources...",
+                visibility: .quiet
+            )
+            indexedBuild = IndexedBuild(
+                scheme: try options.scheme ?? builder.inferScheme(projectRoot: options.projectRoot),
+                indexStorePath: paths.derivedDataPath
+                    .appendingPathComponent("Index.noindex/DataStore", isDirectory: true)
+            )
+        } else {
+            summary.phase = "build-original"
+            output.write(
+                "Building original project with xcodebuild index store...",
+                visibility: .quiet
+            )
+            let result = try builder.build(
+                ProjectBuildOptions(
+                    projectRoot: options.projectRoot,
+                    scheme: options.scheme,
+                    configuration: options.configuration,
+                    destination: options.destination,
+                    derivedDataPath: paths.derivedDataPath,
+                    extraXcodebuildArguments: options.extraXcodebuildArguments
+                ))
+            indexedBuild = IndexedBuild(
+                scheme: result.scheme,
+                indexStorePath: result.indexStorePath
+            )
+            output.write("Build succeeded: scheme=\(result.scheme)", visibility: .quiet)
+        }
+
+        summary.build = BuildSummary(
+            scheme: indexedBuild.scheme,
+            derivedDataPath: paths.derivedDataPath.path,
+            indexStorePath: indexedBuild.indexStorePath.path
+        )
+        output.write("Index store: \(indexedBuild.indexStorePath.path)")
+        return indexedBuild
+    }
+
+    // MARK: - Plan preparation
+
+    static func preparePlan(
+        options: CLIOptions,
+        paths: RunPaths,
+        indexedBuild: IndexedBuild,
+        runner: CommandRunner,
+        output: CLIOutput,
+        fileManager: FileManager,
+        summary: inout RunSummary
+    ) throws -> PlanPreparation {
+        var sourceCache: SourceFileCache?
+        var sourceManifest: IndexSourceManifest?
+        if options.reuseIndex {
+            let currentSourceFiles = try SourceFileFinder.swiftFiles(
+                in: options.projectRoot,
+                excluding: paths.excludedSourceRoots,
+                fileManager: fileManager
+            )
+            let currentSourceCache = try SourceFileCache(paths: currentSourceFiles.map(\.path))
+            let manifest = try IndexSourceManifest.load(from: paths.indexSourceManifestPath)
+            try manifest.validate(sourceCache: currentSourceCache)
+            sourceCache = currentSourceCache
+            sourceManifest = manifest
+            summary.artifacts.indexSourceManifest = paths.indexSourceManifestPath.path
+            output.write(
+                "Index source manifest validated: \(currentSourceFiles.count) files",
+                visibility: .quiet
+            )
+        }
+
+        let inputMappingStore = try MappingStore.load(from: paths.mappingPath)
+        let executableURL = URL(
+            fileURLWithPath: CommandLine.arguments[0],
+            relativeTo: URL(
+                fileURLWithPath: fileManager.currentDirectoryPath,
+                isDirectory: true
+            )
+        ).standardizedFileURL
+        let cachedPlan = try loadCachedPlanIfAvailable(
+            options: options,
+            paths: paths,
+            executableURL: executableURL,
+            sourceManifest: sourceManifest,
+            mappingStore: inputMappingStore
+        )
+
+        if let cachedPlan {
+            summary.phase = "load-rename-plan"
+            summary.counters.indexedSymbols = cachedPlan.indexedSymbolCount
+            summary.counters.indexedOccurrences = cachedPlan.indexedOccurrenceCount
+            summary.artifacts.renamePlanCache = paths.renamePlanCachePath.path
+            output.write(
+                "Rename plan cache loaded: \(paths.renamePlanCachePath.path)",
+                visibility: .quiet
+            )
+            return .ready(
+                PreparedPlan(
+                    plan: cachedPlan.plan,
+                    mappingStore: MappingStore(entries: cachedPlan.outputMappingEntries),
+                    selectedSourceFiles: selectedSourceFiles(
+                        from: cachedPlan.sourceFiles,
+                        under: paths.selectedSourceRoots
+                    ),
+                    snapshotForCoverage: nil
+                ))
+        }
+
+        let snapshot: IndexSnapshot
+        if options.reuseIndex, fileManager.fileExists(atPath: paths.indexSnapshotCachePath.path) {
+            guard let sourceManifest else {
+                throw CLIError.invalidArguments("Failed to validate indexed Swift sources.")
+            }
+            summary.phase = "load-index-snapshot"
+            snapshot = try IndexSnapshotCache.load(
+                from: paths.indexSnapshotCachePath,
+                sourceManifest: sourceManifest
+            )
+            summary.artifacts.indexSnapshotCache = paths.indexSnapshotCachePath.path
+            output.write(
+                "Index snapshot cache loaded: \(paths.indexSnapshotCachePath.path)",
+                visibility: .quiet
+            )
+        } else {
+            summary.phase = "read-index"
+            snapshot = try IndexReader(runner: runner).read(
+                storePath: indexedBuild.indexStorePath,
+                databasePath: paths.indexDatabasePath,
+                sourceRoot: options.projectRoot,
+                excludedSourceRoots: paths.excludedSourceRoots,
+                reuseExistingDatabase: options.reuseIndex
+            )
+        }
+
+        if let sourceCache {
+            let indexedPaths = snapshot.sourceFiles
+                .map(SourcePathNormalizer.canonicalPath)
+                .sorted()
+            guard sourceCache.allPaths == indexedPaths else {
+                throw CLIError.invalidArguments(
+                    "Index database source paths do not match the validated source manifest. "
+                        + "Run again without --reuse-index."
+                )
+            }
+        } else {
+            let currentSourceCache = try SourceFileCache(paths: snapshot.sourceFiles)
+            let manifest = try IndexSourceManifest.capture(sourceCache: currentSourceCache)
+            try manifest.save(to: paths.indexSourceManifestPath)
+            sourceCache = currentSourceCache
+            sourceManifest = manifest
+            summary.artifacts.indexSourceManifest = paths.indexSourceManifestPath.path
+            output.write("Index source manifest saved: \(paths.indexSourceManifestPath.path)")
+        }
+
+        if !fileManager.fileExists(atPath: paths.indexSnapshotCachePath.path)
+            || !options.reuseIndex
+        {
+            guard let sourceManifest else {
+                throw CLIError.invalidArguments(
+                    "Failed to capture indexed Swift source manifest."
+                )
+            }
+            summary.phase = "save-index-snapshot"
+            try IndexSnapshotCache.save(
+                snapshot: snapshot,
+                sourceManifest: sourceManifest,
+                to: paths.indexSnapshotCachePath,
+                fileManager: fileManager
+            )
+            summary.artifacts.indexSnapshotCache = paths.indexSnapshotCachePath.path
+            output.write("Index snapshot cache saved: \(paths.indexSnapshotCachePath.path)")
+        }
+
+        summary.counters.indexedSymbols = snapshot.symbols.count
+        summary.counters.indexedOccurrences = snapshot.occurrences.count
+        output.write(
+            "Indexed symbols=\(snapshot.symbols.count), occurrences=\(snapshot.occurrences.count)",
+            visibility: .quiet
+        )
+
+        if options.command == .dump || options.dumpIndex {
+            summary.phase = "dump-index"
+            let dump = ReportRenderer.renderDump(snapshot: snapshot)
+            let dumpPath = try output.writeArtifact(named: "index-dump.txt", contents: dump)
+            summary.artifacts.indexDump = dumpPath.path
+            let visibility: ConsoleVisibility = options.verbosity == .quiet ? .verbose : .normal
+            output.write(dump, visibility: visibility)
+            output.write("Index dump saved: \(dumpPath.path)", visibility: .quiet)
+            if options.command == .dump {
+                return .dumpOnly
+            }
+        }
+
+        summary.phase = "plan-renames"
+        guard let sourceCache, let sourceManifest else {
+            throw CLIError.invalidArguments("Failed to load indexed Swift sources.")
+        }
+        var planner = RenamePlanner(
+            analyzer: SafetyAnalyzer(
+                sourceRoot: options.projectRoot,
+                obfuscationRoots: paths.selectedSourceRoots
+            ),
+            mappingStore: inputMappingStore
+        )
+        let plan = planner.makePlan(snapshot: snapshot, sourceCache: sourceCache)
+        let sourceFilesForPlan = selectedSourceFiles(
+            from: snapshot.sourceFiles,
+            under: paths.selectedSourceRoots
+        )
+
+        let planCacheKey = try RenamePlanCacheKey.make(
+            toolURL: executableURL,
+            sourceManifest: sourceManifest,
+            obfuscationRoots: paths.selectedSourceRoots,
+            mappingStore: inputMappingStore
+        )
+        try RenamePlanCache.save(
+            CachedRenamePlan(
+                plan: plan,
+                outputMappingEntries: planner.mappingStore.allEntries(),
+                sourceFiles: snapshot.sourceFiles,
+                indexedSymbolCount: snapshot.symbols.count,
+                indexedOccurrenceCount: snapshot.occurrences.count
+            ),
+            key: planCacheKey,
+            to: paths.renamePlanCachePath,
+            fileManager: fileManager
+        )
+        summary.artifacts.renamePlanCache = paths.renamePlanCachePath.path
+        output.write("Rename plan cache saved: \(paths.renamePlanCachePath.path)")
+
+        return .ready(
+            PreparedPlan(
+                plan: plan,
+                mappingStore: planner.mappingStore,
+                selectedSourceFiles: sourceFilesForPlan,
+                snapshotForCoverage: snapshot
+            ))
+    }
+
+    static func loadCachedPlanIfAvailable(
+        options: CLIOptions,
+        paths: RunPaths,
+        executableURL: URL,
+        sourceManifest: IndexSourceManifest?,
+        mappingStore: MappingStore
+    ) throws -> CachedRenamePlan? {
+        guard options.reuseIndex,
+            options.command != .dump,
+            !options.dumpIndex,
+            paths.existingCoverageCohortPath == nil,
+            paths.newCoverageCohortPath == nil,
+            let sourceManifest
+        else {
+            return nil
+        }
+        let key = try RenamePlanCacheKey.make(
+            toolURL: executableURL,
+            sourceManifest: sourceManifest,
+            obfuscationRoots: paths.selectedSourceRoots,
+            mappingStore: mappingStore
+        )
+        return try RenamePlanCache.load(from: paths.renamePlanCachePath, matching: key)
+    }
+
+    // MARK: - Plan execution and reporting
+
+    static func applyPlan(
+        _ plan: RenamePlan,
+        to obfuscatedCodeOutputDirectory: URL?,
+        selectedSourceFiles: [String],
+        projectRoot: URL,
+        mappingStore: MappingStore,
+        mappingPath: URL,
+        output: CLIOutput,
+        summary: inout RunSummary
+    ) throws {
+        summary.phase = "apply"
+        let replacements = plan.replacements
+
+        if let obfuscatedCodeOutputDirectory {
+            let writtenFiles = try SourcePatcher().writePatchedCopies(
+                sourceFiles: selectedSourceFiles,
+                replacements: replacements,
+                sourceRoot: projectRoot,
+                outputRoot: obfuscatedCodeOutputDirectory
+            )
+            summary.counters.writtenSourceFiles = writtenFiles.count
+            output.write("Applied replacements: \(replacements.count)", visibility: .quiet)
+            output.write("Written source files: \(writtenFiles.count)", visibility: .quiet)
+        } else {
+            try SourcePatcher().apply(replacements)
+            output.write(
+                "Applied replacements to project source files: \(replacements.count)",
+                visibility: .quiet
+            )
+        }
+        summary.counters.appliedReplacements = replacements.count
+
+        guard !replacements.isEmpty else {
+            return
+        }
+        try mappingStore.save(to: mappingPath)
+        summary.artifacts.mapping = mappingPath.path
+        output.write("Mapping saved: \(mappingPath.path)")
+    }
+
+    static func verifyAppliedBuildIfRequested(
+        options: CLIOptions,
+        obfuscatedCodeOutputDirectory: URL?,
+        builder: ProjectBuilder,
+        scheme: String,
+        derivedDataPath: URL,
+        output: CLIOutput,
+        summary: inout RunSummary
+    ) throws {
+        guard options.verifyBuild else {
+            return
+        }
+        guard obfuscatedCodeOutputDirectory == nil else {
+            output.write(
+                "Verify build: initial indexed build succeeded; source-only output was not rebuilt."
+            )
+            return
+        }
+
+        summary.phase = "verify-build"
+        output.write("Verifying patched build...")
+        _ = try builder.build(
+            ProjectBuildOptions(
+                projectRoot: options.projectRoot,
+                scheme: scheme,
+                configuration: options.configuration,
+                destination: options.destination,
+                derivedDataPath: derivedDataPath,
+                extraXcodebuildArguments: options.extraXcodebuildArguments
+            ))
+        output.write("Verify build succeeded.")
+    }
+
+    static func recordPlanningResults(
+        _ plan: RenamePlan,
+        selectedSourceFiles: [String],
+        compactReport: Bool,
+        output: CLIOutput,
+        summary: inout RunSummary
+    ) throws {
+        summary.counters.selectedSourceFiles = selectedSourceFiles.count
+        output.write("Selected source files=\(selectedSourceFiles.count)", visibility: .quiet)
+
+        let replacements = plan.replacements
+        try SourcePatcher().validate(replacements)
+        summary.counters.plannedSymbols = plan.entries.count
+        summary.counters.plannedReplacements = replacements.count
+        summary.counters.deniedSymbols = plan.denied.count
+        summary.counters.conflicts = plan.conflicts.count
+        summary.parameterFacts = plan.parameterFacts
+        summary.parameterSyntaxFacts = plan.parameterSyntaxFacts
+        summary.parameterCallSiteSyntaxFacts = plan.parameterCallSiteSyntaxFacts
+        summary.parameterCallArgumentBindingFacts = plan.parameterCallArgumentBindingFacts
+        summary.parameterCallableReferenceSyntaxFacts = plan.parameterCallableReferenceSyntaxFacts
+        summary.parameterCallableReferenceBindingFacts = plan.parameterCallableReferenceBindingFacts
+        summary.parameterExternalLabelComponentFacts = plan.parameterExternalLabelComponentFacts
+        summary.parameterExternalLabelRenameOutcome = plan.parameterExternalLabelRenameOutcome
+        summary.parameterLocalBindingOutcome = plan.parameterLocalBindingOutcome
+        summary.enumCaseComponentFacts = plan.enumCaseComponentFacts
+        summary.compilerRawValueFacts = plan.compilerRawValueFacts
+        summary.enumCaseSyntaxFacts = plan.enumCaseSyntaxFacts
+        summary.genericParameterSyntaxFacts = plan.genericParameterSyntaxFacts
+        summary.typealiasSyntaxFacts = plan.typealiasSyntaxFacts
+
+        let report = ReportRenderer.renderDryRun(plan: plan, compact: compactReport)
+        let reportPath = try output.writeArtifact(
+            named: "dry-run-report.txt",
+            contents: report
+        )
+        summary.artifacts.dryRunReport = reportPath.path
+        output.write(report, visibility: .verbose)
+        output.write(
+            "Dry-run summary: planned=\(plan.entries.count), replacements=\(replacements.count), "
+                + "denied=\(plan.denied.count), conflicts=\(plan.conflicts.count)",
+            visibility: .quiet
+        )
+        output.write("Dry-run report saved: \(reportPath.path)", visibility: .quiet)
+    }
+
+    static func writeCoverageReportIfRequested(
+        plan: RenamePlan,
+        snapshot: IndexSnapshot?,
+        selectedSourceFiles: [String],
+        existingCohortPath: URL?,
+        newCohortPath: URL?,
+        cohortIdentifier: String?,
+        expectedCount: Int?,
+        outputDirectory: URL,
+        output: CLIOutput,
+        fileManager: FileManager,
+        summary: inout RunSummary
+    ) throws {
+        guard let cohortPath = existingCohortPath ?? newCohortPath else {
+            return
+        }
+        guard let snapshot else {
+            throw CLIError.invalidArguments(
+                "Coverage reporting requires an index snapshot. Run without a cached rename plan."
+            )
+        }
+
+        let cohort: CoverageCohort
+        if let newCohortPath {
+            guard let cohortIdentifier, let expectedCount else {
+                throw CLIError.invalidArguments(
+                    "Creating a coverage cohort requires --coverage-cohort-id "
+                        + "and --coverage-expected-count."
+                )
+            }
+            cohort = try CoverageAnalyzer.makeBaselineCohort(
+                identifier: cohortIdentifier,
+                expectedCount: expectedCount,
+                snapshot: snapshot,
+                plan: plan,
+                selectedSourceFiles: selectedSourceFiles
+            )
+            try cohort.save(to: newCohortPath, fileManager: fileManager)
+            output.write(
+                "Immutable coverage cohort saved: \(newCohortPath.path)",
+                visibility: .quiet
+            )
+        } else {
+            cohort = try CoverageCohort.load(from: cohortPath)
+            output.write("Coverage cohort loaded: \(cohortPath.path)", visibility: .quiet)
+        }
+
+        let report = try CoverageAnalyzer.makeReport(
+            cohort: cohort,
+            snapshot: snapshot,
+            plan: plan
+        )
+        let reportPath = outputDirectory.appendingPathComponent("coverage-report.json")
+        try report.save(to: reportPath, fileManager: fileManager)
+        summary.artifacts.coverageCohort = cohortPath.path
+        summary.artifacts.coverageReport = reportPath.path
+        summary.counters.cohortDenominator = report.denominator
+        summary.counters.cohortRenamed = report.renamed
+        summary.counters.cohortDenied = report.denied
+        summary.counters.cohortMissingFromIndex = report.missingFromIndex
+        summary.counters.cohortUnclassified = report.unclassified
+        summary.counters.cohortCoveragePercent = report.coveragePercent
+        output.write(
+            "Coverage cohort: renamed=\(report.renamed)/\(report.denominator) "
+                + "(\(String(format: "%.2f", report.coveragePercent))%), "
+                + "missing=\(report.missingFromIndex), unclassified=\(report.unclassified)",
+            visibility: .quiet
+        )
+        output.write("Coverage report saved: \(reportPath.path)", visibility: .quiet)
+    }
+
+    // MARK: - Run reporting
 
     static func finish(summary: RunSummary, output: CLIOutput?, printSummaryJSON: Bool) {
         var summary = summary
@@ -592,7 +746,8 @@ struct SwiftObfuscatorCLI {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(summary),
-              let json = String(data: data, encoding: .utf8) else {
+            let json = String(data: data, encoding: .utf8)
+        else {
             return #"{"status":"failure","error":{"message":"Failed to encode run summary"}}"#
         }
         return json
@@ -618,7 +773,9 @@ struct SwiftObfuscatorCLI {
         return RunErrorSummary(message: error.localizedDescription)
     }
 
-    static func logPaths(in logsDirectory: URL, including runLogURL: URL, fileManager: FileManager = .default) -> [String] {
+    static func logPaths(in logsDirectory: URL, including runLogURL: URL, fileManager: FileManager = .default)
+        -> [String]
+    {
         var paths: [String] = []
         var seenCanonicalPaths: Set<String> = []
         func append(_ url: URL) {
@@ -637,6 +794,8 @@ struct SwiftObfuscatorCLI {
         }
         return paths.sorted()
     }
+
+    // MARK: - Arguments
 
     static func parse(_ arguments: [String]) throws -> CLIOptions {
         if arguments.contains("--help") || arguments.contains("-h") {
@@ -682,9 +841,11 @@ struct SwiftObfuscatorCLI {
             case "--mapping":
                 options.mappingPath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--coverage-cohort":
-                options.coverageCohortPath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+                options.coverageCohortPath = URL(
+                    fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--create-coverage-cohort":
-                options.createCoverageCohortPath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+                options.createCoverageCohortPath = URL(
+                    fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--coverage-cohort-id":
                 options.coverageCohortIdentifier = try value(after: argument, in: arguments, index: &index)
             case "--coverage-expected-count":
@@ -726,13 +887,17 @@ struct SwiftObfuscatorCLI {
                 throw CLIError.invalidArguments("--create-coverage-cohort requires --coverage-cohort-id.")
             }
             guard options.coverageExpectedCount != nil else {
-                throw CLIError.invalidArguments("--create-coverage-cohort requires --coverage-expected-count so the denominator cannot drift silently.")
+                throw CLIError.invalidArguments(
+                    "--create-coverage-cohort requires --coverage-expected-count so the denominator cannot drift silently."
+                )
             }
         } else if options.coverageCohortIdentifier != nil || options.coverageExpectedCount != nil {
-            throw CLIError.invalidArguments("--coverage-cohort-id and --coverage-expected-count are only valid with --create-coverage-cohort.")
+            throw CLIError.invalidArguments(
+                "--coverage-cohort-id and --coverage-expected-count are only valid with --create-coverage-cohort.")
         }
         if options.command == .dump,
-           options.coverageCohortPath != nil || options.createCoverageCohortPath != nil {
+            options.coverageCohortPath != nil || options.createCoverageCohortPath != nil
+        {
             throw CLIError.invalidArguments("Coverage reporting is available for dry-run and apply, not dump.")
         }
     }
@@ -758,6 +923,8 @@ struct SwiftObfuscatorCLI {
         return value
     }
 
+    // MARK: - Paths
+
     static func resolveSourceRoots(
         _ paths: [String],
         projectRoot: URL,
@@ -781,7 +948,9 @@ struct SwiftObfuscatorCLI {
                 throw CLIError.invalidArguments("Source path must be inside project root: \(root.path)")
             }
             if let excludedRoot = excludedRoots.first(where: { isSameOrDescendant(root, of: $0) }) {
-                throw CLIError.invalidArguments("Source path cannot be inside generated output directory: \(root.path) (output: \(excludedRoot.path))")
+                throw CLIError.invalidArguments(
+                    "Source path cannot be inside generated output directory: \(root.path) (output: \(excludedRoot.path))"
+                )
             }
 
             let normalized = normalizedPath(root)
@@ -826,7 +995,8 @@ struct SwiftObfuscatorCLI {
         return root.appendingPathComponent(path, isDirectory: true)
     }
 
-    static func mapProjectPath(_ url: URL, fromProjectRoot projectRoot: URL, toOutputRoot outputRoot: URL) throws -> URL {
+    static func mapProjectPath(_ url: URL, fromProjectRoot projectRoot: URL, toOutputRoot outputRoot: URL) throws -> URL
+    {
         guard isSameOrDescendant(url, of: projectRoot) else {
             throw CLIError.invalidArguments("Path must be inside project root: \(url.path)")
         }
@@ -869,95 +1039,8 @@ struct SwiftObfuscatorCLI {
     }
 }
 
-enum ConsoleVisibility: Int {
-    case quiet = 0
-    case normal = 1
-    case verbose = 2
-}
-
-final class CLIOutput {
-    let outputDirectory: URL
-    let logsDirectory: URL
-    let runLogURL: URL
-
-    private let logHandle: FileHandle
-    private let verbosity: OutputVerbosity
-    private let printsHumanOutput: Bool
-    private var isClosed = false
-
-    init(
-        outputDirectory: URL,
-        verbosity: OutputVerbosity = .normal,
-        printsHumanOutput: Bool = true,
-        fileManager: FileManager = .default
-    ) throws {
-        self.outputDirectory = outputDirectory.standardizedFileURL
-        let runID = Self.sanitizedLogName(ProcessInfo.processInfo.globallyUniqueString)
-        self.logsDirectory = self.outputDirectory
-            .appendingPathComponent("logs", isDirectory: true)
-            .appendingPathComponent(runID, isDirectory: true)
-        self.runLogURL = logsDirectory.appendingPathComponent("swift-obfuscator.log")
-        self.verbosity = verbosity
-        self.printsHumanOutput = printsHumanOutput
-
-        try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
-        fileManager.createFile(atPath: runLogURL.path, contents: nil)
-        self.logHandle = try FileHandle(forWritingTo: runLogURL)
-    }
-
-    func write(_ message: String = "", visibility: ConsoleVisibility = .normal) {
-        if printsHumanOutput, visibility.rawValue <= verbosity.rawValue {
-            print(message)
-        }
-        writeToLog(message + "\n")
-    }
-
-    func writeError(_ message: String) {
-        fputs(message + "\n", stderr)
-        writeToLog(message + "\n")
-    }
-
-    func writeJSONToStdout(_ json: String) {
-        print(json)
-        writeToLog(json + "\n")
-    }
-
-    func writeArtifact(named fileName: String, contents: String) throws -> URL {
-        let url = outputDirectory.appendingPathComponent(fileName)
-        try contents.write(to: url, atomically: true, encoding: .utf8)
-        return url
-    }
-
-    func close() {
-        guard !isClosed else {
-            return
-        }
-        try? logHandle.synchronize()
-        try? logHandle.close()
-        isClosed = true
-    }
-
-    private func writeToLog(_ message: String) {
-        guard !isClosed, let data = message.data(using: .utf8) else {
-            return
-        }
-        logHandle.write(data)
-    }
-
-    private static func sanitizedLogName(_ value: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(.init(charactersIn: "-_"))
-        let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
-        let name = String(scalars)
-        return name.isEmpty ? "run" : name
-    }
-
-    deinit {
-        close()
-    }
-}
-
-private extension String {
-    func tailLines(_ lineLimit: Int) -> String {
+extension String {
+    fileprivate func tailLines(_ lineLimit: Int) -> String {
         guard lineLimit > 0 else {
             return ""
         }
@@ -967,38 +1050,38 @@ private extension String {
 }
 
 let helpText = """
-Usage:
-  swift-obfuscator dump [options]
-  swift-obfuscator dry-run [options]
-  swift-obfuscator apply [options] [--verify-build]
+    Usage:
+      swift-obfuscator dump [options]
+      swift-obfuscator dry-run [options]
+      swift-obfuscator apply [options] [--verify-build]
 
-Options:
-  --project PATH             Project, workspace, or SwiftPM package root. Default: current directory.
-  --source-root PATH         Source file or directory to obfuscate. Repeatable. Relative paths resolve under --project. Default: --project.
-  --source PATH              Alias for --source-root.
-  --obfuscated-code-output PATH
-                             Write obfuscated Swift files to PATH instead of patching project sources in-place. Relative paths resolve under --project.
-  --output PATH              Artifact directory for logs, reports, DerivedData, IndexDatabase, and mapping. Default: <project>/.obfuscator.
-  --scheme NAME              xcodebuild scheme. If omitted, the first listed scheme is used.
-  --configuration NAME       xcodebuild configuration.
-  --destination SPEC         xcodebuild destination. Default: platform=macOS.
-  --no-destination           Do not pass -destination.
-  --derived-data PATH        DerivedData path. Default: <output>/DerivedData.
-  --database PATH            IndexStoreDB database path. Default: <output>/IndexDatabase.
-  --mapping PATH             Mapping JSON path. Default: <output>/mapping.json.
-  --coverage-cohort PATH     Compare the current plan with an immutable USR cohort and write coverage-report.json.
-  --create-coverage-cohort PATH
-                             Create an immutable baseline cohort, refusing to overwrite an existing file.
-  --coverage-cohort-id ID    Stable revision/configuration identifier required when creating a cohort.
-  --coverage-expected-count N
-                             Required expected denominator when creating a cohort; generation fails on drift.
-  --dump                     Print full symbol/USR/occurrence dump before planning.
-  --verify-build             After in-place apply, run xcodebuild again. For external code output, report the initial indexed build status.
-  --reuse-index              Skip the initial build/import and reuse the existing IndexStoreDB only after every Swift source matches the saved SHA-256 manifest.
-  --compact-report           Omit per-occurrence and per-symbol denial details from dry-run-report.txt while preserving counters and planned rename entries.
-  --quiet                    Print only phase-level progress, counters, and artifact paths.
-  --verbose                  Print full dry-run and dump reports to stdout. Reports are always saved as artifacts.
-  --summary-json, --json     Print only run-summary JSON to stdout. Human output still goes to logs.
-  --xcodebuild-arg VALUE     Extra xcodebuild argument. Repeatable.
-  --                         Pass the remaining arguments directly to xcodebuild before "build".
-"""
+    Options:
+      --project PATH             Project, workspace, or SwiftPM package root. Default: current directory.
+      --source-root PATH         Source file or directory to obfuscate. Repeatable. Relative paths resolve under --project. Default: --project.
+      --source PATH              Alias for --source-root.
+      --obfuscated-code-output PATH
+                                 Write obfuscated Swift files to PATH instead of patching project sources in-place. Relative paths resolve under --project.
+      --output PATH              Artifact directory for logs, reports, DerivedData, IndexDatabase, and mapping. Default: <project>/.obfuscator.
+      --scheme NAME              xcodebuild scheme. If omitted, the first listed scheme is used.
+      --configuration NAME       xcodebuild configuration.
+      --destination SPEC         xcodebuild destination. Default: platform=macOS.
+      --no-destination           Do not pass -destination.
+      --derived-data PATH        DerivedData path. Default: <output>/DerivedData.
+      --database PATH            IndexStoreDB database path. Default: <output>/IndexDatabase.
+      --mapping PATH             Mapping JSON path. Default: <output>/mapping.json.
+      --coverage-cohort PATH     Compare the current plan with an immutable USR cohort and write coverage-report.json.
+      --create-coverage-cohort PATH
+                                 Create an immutable baseline cohort, refusing to overwrite an existing file.
+      --coverage-cohort-id ID    Stable revision/configuration identifier required when creating a cohort.
+      --coverage-expected-count N
+                                 Required expected denominator when creating a cohort; generation fails on drift.
+      --dump                     Print full symbol/USR/occurrence dump before planning.
+      --verify-build             After in-place apply, run xcodebuild again. For external code output, report the initial indexed build status.
+      --reuse-index              Skip the initial build/import and reuse the existing IndexStoreDB only after every Swift source matches the saved SHA-256 manifest.
+      --compact-report           Omit per-occurrence and per-symbol denial details from dry-run-report.txt while preserving counters and planned rename entries.
+      --quiet                    Print only phase-level progress, counters, and artifact paths.
+      --verbose                  Print full dry-run and dump reports to stdout. Reports are always saved as artifacts.
+      --summary-json, --json     Print only run-summary JSON to stdout. Human output still goes to logs.
+      --xcodebuild-arg VALUE     Extra xcodebuild argument. Repeatable.
+      --                         Pass the remaining arguments directly to xcodebuild before "build".
+    """

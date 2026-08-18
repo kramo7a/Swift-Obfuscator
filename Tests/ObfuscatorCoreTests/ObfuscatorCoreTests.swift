@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import ObfuscatorCore
 
+// MARK: - Naming and infrastructure
+
 @Test func nameGeneratorProducesStableNames() {
     var generator = NameGenerator(prefix: "_o")
     #expect(generator.nextName(avoiding: []) == "_oa")
@@ -611,6 +613,8 @@ import Testing
     #expect(try String(contentsOf: referenceFile, encoding: .utf8) == referenceLine + "\n")
 }
 
+// MARK: - Safety and parameter foundations
+
 @Test func safetyAnalyzerDeniesUnsupportedKindsByDefault() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1000,6 +1004,8 @@ import Testing
     #expect(summary.enumCaseComponents == 1)
     #expect(summary.enumCaseParameters == 1)
 }
+
+// MARK: - Parameter syntax and local binding scopes
 
 @Test func parameterSyntaxFactsResolveExactRolesWithoutDeclarationTextScanning() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -2667,6 +2673,8 @@ import Testing
         arguments: ["swiftc", "-typecheck", file.path]
     )
 }
+
+// MARK: - Parameter calls and callable references
 
 @Test func parameterCallSiteSyntaxFactsResolveCompilerAnchoredLabelsAndCallShapes() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -4840,6 +4848,8 @@ import Testing
     ])
 }
 
+// MARK: - Runtime and declaration safety
+
 @Test func safetyAnalyzerDeniesClassesNamedByInterfaceBuilderResources() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -5360,6 +5370,8 @@ import Testing
         ""
     ].joined(separator: "\n"))
 }
+
+// MARK: - Protocol and override coordination
 
 @Test func safetyAnalyzerDeniesProtocolMembersUntilWitnessesAreRenamedTogether() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -5978,6 +5990,8 @@ import Testing
             && decision.reasons.contains("override relations require coordinated renaming")
     })
 }
+
+// MARK: - Serialization and generated names
 
 @Test func safetyAnalyzerAllowsStoredPropertiesBecauseMemberwiseLabelsAreIndexedByPropertyUSR() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -7043,6 +7057,8 @@ import Testing
     #expect(decision.allowed == false)
     #expect(decision.reasons.contains("language-required declaration name appendInterpolation"))
 }
+
+// MARK: - Extensions, generics, and type relations
 
 @Test func safetyAnalyzerDeniesExtensionsOnExternalOwners() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -8159,6 +8175,8 @@ import Testing
     #expect(plan.denied.first?.reasons.contains { $0.contains("no declaration or definition occurrence inside selected source roots") } == true)
 }
 
+// MARK: - Coverage
+
 @Test func coverageCohortUsesExplicitSourceSurfaceIndependentOfRenameEligibility() throws {
     let path = "/tmp/CoverageSample.swift"
     let outsidePath = "/tmp/OutsideSelection.swift"
@@ -8430,6 +8448,8 @@ import Testing
         #expect(error.localizedDescription.contains("expected 6"))
     }
 }
+
+// MARK: - Enum-case planning
 
 @Test func enumCaseComponentFactsUseIndexedOwnersAndSemanticContracts() throws {
     let root = URL(fileURLWithPath: "/tmp/enum-case-component-facts", isDirectory: true)
@@ -9615,6 +9635,8 @@ import Testing
     _ = try runner.run(executable: afterExecutable.path, arguments: [])
 }
 
+// MARK: - Identifier spellings
+
 @Test func plannerRenamesCompilerAcceptedContextualIdentifiersAndPreservesSemanticSelf() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -9977,6 +9999,8 @@ import Testing
         arguments: ["swiftc", "-typecheck", file.path]
     )
 }
+
+// MARK: - Test support
 
 private func utf8Column(of needle: String, in line: String) -> Int {
     let range = line.range(of: needle)!

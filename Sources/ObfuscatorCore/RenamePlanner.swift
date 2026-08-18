@@ -1,556 +1,516 @@
 import Foundation
 
-public struct RenamePlanEntry: Codable, Sendable {
-    public let usr: String
-    public let kind: String
-    public let oldName: String
-    public let newName: String
-    public let replacements: [SourceReplacement]
-}
-
-public struct RenamePlan: Codable, Sendable {
-    public let entries: [RenamePlanEntry]
-    public let denied: [SafetyDecision]
-    public let conflicts: [String]
-    public let supportReplacements: [SourceReplacement]
-    public let parameterFacts: ParameterFactsSummary
-    public let parameterSyntaxFacts: ParameterSyntaxFactsSummary
-    public let parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary
-    public let parameterCallArgumentBindingFacts: ParameterCallArgumentBindingFactsSummary
-    public let parameterCallableReferenceSyntaxFacts: ParameterCallableReferenceSyntaxFactsSummary
-    public let parameterCallableReferenceBindingFacts: ParameterCallableReferenceBindingFactsSummary
-    public let parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary
-    public let parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary
-    public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
-    public let enumCaseComponentFacts: EnumCaseComponentFactsSummary
-    public let compilerRawValueFacts: CompilerRawValueFactsSummary
-    public let enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary
-    public let genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary
-    public let typealiasSyntaxFacts: TypealiasSyntaxFactsSummary
-
-    public init(
-        entries: [RenamePlanEntry],
-        denied: [SafetyDecision],
-        conflicts: [String],
-        supportReplacements: [SourceReplacement] = [],
-        parameterFacts: ParameterFactsSummary = .empty,
-        parameterSyntaxFacts: ParameterSyntaxFactsSummary = .empty,
-        parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary = .empty,
-        parameterCallArgumentBindingFacts: ParameterCallArgumentBindingFactsSummary = .empty,
-        parameterCallableReferenceSyntaxFacts: ParameterCallableReferenceSyntaxFactsSummary = .empty,
-        parameterCallableReferenceBindingFacts: ParameterCallableReferenceBindingFactsSummary = .empty,
-        parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary = .empty,
-        parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary = .empty,
-        parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty,
-        enumCaseComponentFacts: EnumCaseComponentFactsSummary = .empty,
-        compilerRawValueFacts: CompilerRawValueFactsSummary = .empty,
-        enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary = .empty,
-        genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary = .empty,
-        typealiasSyntaxFacts: TypealiasSyntaxFactsSummary = .empty
-    ) {
-        self.entries = entries
-        self.denied = denied
-        self.conflicts = conflicts
-        self.supportReplacements = supportReplacements
-        self.parameterFacts = parameterFacts
-        self.parameterSyntaxFacts = parameterSyntaxFacts
-        self.parameterCallSiteSyntaxFacts = parameterCallSiteSyntaxFacts
-        self.parameterCallArgumentBindingFacts = parameterCallArgumentBindingFacts
-        self.parameterCallableReferenceSyntaxFacts = parameterCallableReferenceSyntaxFacts
-        self.parameterCallableReferenceBindingFacts = parameterCallableReferenceBindingFacts
-        self.parameterExternalLabelComponentFacts = parameterExternalLabelComponentFacts
-        self.parameterExternalLabelRenameOutcome = parameterExternalLabelRenameOutcome
-        self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
-        self.enumCaseComponentFacts = enumCaseComponentFacts
-        self.compilerRawValueFacts = compilerRawValueFacts
-        self.enumCaseSyntaxFacts = enumCaseSyntaxFacts
-        self.genericParameterSyntaxFacts = genericParameterSyntaxFacts
-        self.typealiasSyntaxFacts = typealiasSyntaxFacts
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case entries
-        case denied
-        case conflicts
-        case supportReplacements
-        case parameterFacts
-        case parameterSyntaxFacts
-        case parameterCallSiteSyntaxFacts
-        case parameterCallArgumentBindingFacts
-        case parameterCallableReferenceSyntaxFacts
-        case parameterCallableReferenceBindingFacts
-        case parameterExternalLabelComponentFacts
-        case parameterExternalLabelRenameOutcome
-        case parameterLocalBindingOutcome
-        case enumCaseComponentFacts
-        case compilerRawValueFacts
-        case enumCaseSyntaxFacts
-        case genericParameterSyntaxFacts
-        case typealiasSyntaxFacts
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        entries = try container.decode([RenamePlanEntry].self, forKey: .entries)
-        denied = try container.decode([SafetyDecision].self, forKey: .denied)
-        conflicts = try container.decode([String].self, forKey: .conflicts)
-        supportReplacements = try container.decodeIfPresent(
-            [SourceReplacement].self,
-            forKey: .supportReplacements
-        ) ?? []
-        parameterFacts = try container.decodeIfPresent(
-            ParameterFactsSummary.self,
-            forKey: .parameterFacts
-        ) ?? .empty
-        parameterSyntaxFacts = try container.decodeIfPresent(
-            ParameterSyntaxFactsSummary.self,
-            forKey: .parameterSyntaxFacts
-        ) ?? .empty
-        parameterCallSiteSyntaxFacts = try container.decodeIfPresent(
-            ParameterCallSiteSyntaxFactsSummary.self,
-            forKey: .parameterCallSiteSyntaxFacts
-        ) ?? .empty
-        parameterCallArgumentBindingFacts = try container.decodeIfPresent(
-            ParameterCallArgumentBindingFactsSummary.self,
-            forKey: .parameterCallArgumentBindingFacts
-        ) ?? .empty
-        parameterCallableReferenceSyntaxFacts = try container.decodeIfPresent(
-            ParameterCallableReferenceSyntaxFactsSummary.self,
-            forKey: .parameterCallableReferenceSyntaxFacts
-        ) ?? .empty
-        parameterCallableReferenceBindingFacts = try container.decodeIfPresent(
-            ParameterCallableReferenceBindingFactsSummary.self,
-            forKey: .parameterCallableReferenceBindingFacts
-        ) ?? .empty
-        parameterExternalLabelComponentFacts = try container.decodeIfPresent(
-            ParameterExternalLabelComponentFactsSummary.self,
-            forKey: .parameterExternalLabelComponentFacts
-        ) ?? .empty
-        parameterExternalLabelRenameOutcome = try container.decodeIfPresent(
-            ParameterExternalLabelRenameOutcomeSummary.self,
-            forKey: .parameterExternalLabelRenameOutcome
-        ) ?? .empty
-        parameterLocalBindingOutcome = try container.decodeIfPresent(
-            ParameterLocalBindingOutcomeSummary.self,
-            forKey: .parameterLocalBindingOutcome
-        ) ?? .empty
-        enumCaseComponentFacts = try container.decodeIfPresent(
-            EnumCaseComponentFactsSummary.self,
-            forKey: .enumCaseComponentFacts
-        ) ?? .empty
-        compilerRawValueFacts = try container.decodeIfPresent(
-            CompilerRawValueFactsSummary.self,
-            forKey: .compilerRawValueFacts
-        ) ?? .empty
-        enumCaseSyntaxFacts = try container.decodeIfPresent(
-            EnumCaseSyntaxFactsSummary.self,
-            forKey: .enumCaseSyntaxFacts
-        ) ?? .empty
-        genericParameterSyntaxFacts = try container.decodeIfPresent(
-            GenericParameterSyntaxFactsSummary.self,
-            forKey: .genericParameterSyntaxFacts
-        ) ?? .empty
-        typealiasSyntaxFacts = try container.decodeIfPresent(
-            TypealiasSyntaxFactsSummary.self,
-            forKey: .typealiasSyntaxFacts
-        ) ?? .empty
-    }
-
-    public var replacements: [SourceReplacement] {
-        var seen: Set<String> = []
-        return (entries.flatMap(\.replacements) + supportReplacements)
-            .sorted { lhs, rhs in
-                (lhs.path, lhs.byteOffset, lhs.usr) < (rhs.path, rhs.byteOffset, rhs.usr)
-            }
-            .filter { replacement in
-                // One source token can carry more than one semantic USR (for
-                // example a witness satisfying two protocol requirements).
-                // Applying the identical byte edit twice would fail validation,
-                // so keep one physical edit while retaining every semantic plan
-                // entry and mapping.
-                let key = "\(replacement.path):\(replacement.byteOffset):\(replacement.length):\(replacement.oldName)->\(replacement.newName)"
-                return seen.insert(key).inserted
-            }
-    }
-}
-
 public struct RenamePlanner {
     public var analyzer: SafetyAnalyzer
     public var generator: NameGenerator
     public var mappingStore: MappingStore
 
-    public init(analyzer: SafetyAnalyzer, generator: NameGenerator = NameGenerator(), mappingStore: MappingStore = MappingStore()) {
+    public init(
+        analyzer: SafetyAnalyzer,
+        generator: NameGenerator = NameGenerator(),
+        mappingStore: MappingStore = MappingStore()
+    ) {
         self.analyzer = analyzer
         self.generator = generator
         self.mappingStore = mappingStore
     }
 
+    // MARK: - Planning context
+
+    private struct PlanningContext {
+        let groups: [USROccurrenceGroup]
+        let groupsByUSR: [String: USROccurrenceGroup]
+        let indexedFacts: IndexedSemanticFacts
+        let enumCaseComponentFacts: EnumCaseComponentFacts
+        let compilerRawValueFacts: CompilerRawValueFacts
+        let enumCaseSyntaxFacts: EnumCaseSyntaxFacts
+        let enumCaseUSRs: Set<String>
+        let enumCaseOwnerComponentByCaseUSR: [String: EnumCaseOwnerSyntaxComponent]
+        let parameterSyntaxFacts: ParameterSyntaxFacts
+        let genericParameterSyntaxFacts: GenericParameterSyntaxFacts
+        let typealiasSyntaxFacts: TypealiasSyntaxFacts
+        let parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFacts
+        let parameterCallArgumentBindingFacts: ParameterCallArgumentBindingFacts
+        let parameterCallableReferenceSyntaxFacts: ParameterCallableReferenceSyntaxFacts
+        let parameterCallableReferenceBindingFacts: ParameterCallableReferenceBindingFacts
+        let parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFacts
+        let externalLabelParameterUSRs: Set<String>
+        let namedLocalBindingParameterUSRs: Set<String>
+        let externalLabelComponentByParameterUSR: [String: ParameterExternalLabelRenameComponent]
+        let codingKeyComponents: [CodingKeyPreservationComponent]
+        let propertyWrapperComponents: [PropertyWrapperRenameComponent]
+        let propertyWrapperSupportedUSRs: Set<String>
+        let coordinatedComponents: [CoordinatedRenameComponent]
+        let coordinatedComponentByUSR: [String: CoordinatedRenameComponent]
+        let explicitCodingKeyPlanning: ExplicitCodingKeyRenamePlanningResult
+        let explicitCodingKeyPairByUSR: [String: ExplicitCodingKeyPairRenameTemplate]
+        let serializationKeyPreservedUSRs: Set<String>
+
+        init(
+            snapshot: IndexSnapshot,
+            sourceCache: SourceFileCache,
+            analyzer: SafetyAnalyzer
+        ) {
+            groups = snapshot.groupsByUSR
+            groupsByUSR = Dictionary(uniqueKeysWithValues: groups.map { ($0.usr, $0) })
+            indexedFacts = IndexedSemanticFacts(
+                snapshot: snapshot,
+                obfuscationRoots: analyzer.obfuscationRoots
+            )
+            enumCaseComponentFacts = EnumCaseComponentFacts(
+                snapshot: snapshot,
+                indexedFacts: indexedFacts,
+                obfuscationRoots: analyzer.obfuscationRoots
+            )
+            compilerRawValueFacts = CompilerRawValueFacts(
+                snapshot: snapshot,
+                semanticFacts: enumCaseComponentFacts,
+                indexedFacts: indexedFacts,
+                sourceCache: sourceCache
+            )
+            enumCaseSyntaxFacts = EnumCaseSyntaxFacts(
+                snapshot: snapshot,
+                semanticFacts: enumCaseComponentFacts,
+                compilerRawValueFacts: compilerRawValueFacts,
+                sourceCache: sourceCache,
+                obfuscationRoots: analyzer.obfuscationRoots
+            )
+            enumCaseUSRs = Set(
+                enumCaseSyntaxFacts.components.flatMap { $0.members.map(\.caseUSR) }
+            )
+            enumCaseOwnerComponentByCaseUSR = Dictionary(
+                uniqueKeysWithValues: enumCaseSyntaxFacts.components.flatMap { component in
+                    component.members.map { ($0.caseUSR, component) }
+                }
+            )
+
+            parameterSyntaxFacts = ParameterSyntaxFacts(
+                snapshot: snapshot,
+                sourceCache: sourceCache,
+                obfuscationRoots: analyzer.obfuscationRoots
+            )
+            genericParameterSyntaxFacts = GenericParameterSyntaxFacts(
+                snapshot: snapshot,
+                sourceCache: sourceCache,
+                obfuscationRoots: analyzer.obfuscationRoots
+            )
+            typealiasSyntaxFacts = TypealiasSyntaxFacts(
+                snapshot: snapshot,
+                sourceCache: sourceCache,
+                obfuscationRoots: analyzer.obfuscationRoots
+            )
+            parameterCallSiteSyntaxFacts = ParameterCallSiteSyntaxFacts(
+                components: indexedFacts.parameterRenameComponents,
+                sourceCache: sourceCache
+            )
+            parameterCallArgumentBindingFacts = ParameterCallArgumentBindingFacts(
+                components: indexedFacts.parameterRenameComponents,
+                parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
+                callSiteSyntaxFacts: parameterCallSiteSyntaxFacts
+            )
+            parameterCallableReferenceSyntaxFacts = ParameterCallableReferenceSyntaxFacts(
+                components: indexedFacts.parameterRenameComponents,
+                sourceCache: sourceCache
+            )
+            parameterCallableReferenceBindingFacts = ParameterCallableReferenceBindingFacts(
+                components: indexedFacts.parameterRenameComponents,
+                parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
+                syntaxFacts: parameterCallableReferenceSyntaxFacts
+            )
+            let eligibleEnumCaseUSRs = Set(
+                enumCaseSyntaxFacts.components.flatMap {
+                    $0.preliminaryEligibleMembers.map(\.caseUSR)
+                }
+            )
+            parameterExternalLabelComponentFacts = ParameterExternalLabelComponentFacts(
+                indexedFacts: indexedFacts,
+                parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
+                callBindingFacts: parameterCallArgumentBindingFacts,
+                callableReferenceBindingFacts: parameterCallableReferenceBindingFacts,
+                eligibleEnumCaseUSRs: eligibleEnumCaseUSRs
+            )
+            externalLabelParameterUSRs = Set(
+                parameterExternalLabelComponentFacts.components.flatMap(\.namedParameterUSRs)
+            )
+            let parameterFactsForLocalBindings = parameterSyntaxFacts
+            namedLocalBindingParameterUSRs = Set(
+                parameterFactsForLocalBindings.rolesByUSR.values.compactMap {
+                    role -> String? in
+                    guard
+                        parameterFactsForLocalBindings
+                            .localBindingOnlyCoverageCandidateUSRs
+                            .contains(role.parameterUSR),
+                        case .named = role.externalLabel
+                    else {
+                        return nil
+                    }
+                    return role.parameterUSR
+                }
+            )
+            externalLabelComponentByParameterUSR = Dictionary(
+                uniqueKeysWithValues: parameterExternalLabelComponentFacts.components.flatMap {
+                    component in
+                    component.namedParameterUSRs.map { ($0, component) }
+                }
+            )
+
+            codingKeyComponents = RenamePlanner.codingKeyPreservationComponents(
+                indexedFacts: indexedFacts,
+                groupsByUSR: groupsByUSR,
+                sourceCache: sourceCache,
+                obfuscationRoots: analyzer.obfuscationRoots
+            )
+            propertyWrapperComponents = RenamePlanner.propertyWrapperRenameComponents(
+                indexedFacts: indexedFacts,
+                groupsByUSR: groupsByUSR,
+                sourceCache: sourceCache
+            )
+            propertyWrapperSupportedUSRs = Set(propertyWrapperComponents.map(\.propertyUSR))
+            coordinatedComponents = RenamePlanner.coordinatedRenameComponents(
+                indexedFacts: indexedFacts,
+                groupsByUSR: groupsByUSR
+            )
+            let componentsForLookup = coordinatedComponents
+            let occurrenceGroupsByUSR = groupsByUSR
+            coordinatedComponentByUSR = Dictionary(
+                uniqueKeysWithValues: componentsForLookup.flatMap { component in
+                    component.memberUSRs.compactMap { usr in
+                        occurrenceGroupsByUSR[usr] == nil ? nil : (usr, component)
+                    }
+                }
+            )
+            explicitCodingKeyPlanning = ExplicitCodingKeyRenamePlanning.makeResult(
+                syntaxFacts: enumCaseSyntaxFacts,
+                semanticFacts: enumCaseComponentFacts,
+                indexedFacts: indexedFacts,
+                groupsByUSR: groupsByUSR,
+                analyzer: analyzer,
+                sourceCache: sourceCache,
+                excludedPropertyUSRs: Set(coordinatedComponentByUSR.keys)
+            )
+            explicitCodingKeyPairByUSR = Dictionary(
+                explicitCodingKeyPlanning.pairTemplates.flatMap { pair in
+                    [(pair.propertyUSR, pair), (pair.caseUSR, pair)]
+                },
+                uniquingKeysWith: { first, _ in first }
+            )
+
+            let factsForSerialization = indexedFacts
+            let fullyManualSerializationOwnerUSRs = Set(
+                factsForSerialization.serializationSensitiveOwnerUSRs.filter { ownerUSR in
+                    (!factsForSerialization.decodingSensitiveOwnerUSRs.contains(ownerUSR)
+                        || factsForSerialization.customDecodingImplementationOwnerUSRs
+                            .contains(ownerUSR))
+                        && (!factsForSerialization.encodingSensitiveOwnerUSRs.contains(ownerUSR)
+                            || factsForSerialization.customEncodingImplementationOwnerUSRs
+                                .contains(ownerUSR))
+                }
+            )
+            let manualSerializationPropertyUSRs = Set(
+                fullyManualSerializationOwnerUSRs.flatMap {
+                    factsForSerialization.directStoredPropertyUSRs(of: $0)
+                }
+            )
+            serializationKeyPreservedUSRs = Set(
+                codingKeyComponents.flatMap(\.propertyUSRs)
+            ).union(explicitCodingKeyPlanning.propertyUSRs)
+                .union(manualSerializationPropertyUSRs)
+        }
+    }
+
+    // MARK: - Planning
+
     public mutating func makePlan(snapshot: IndexSnapshot, sourceCache: SourceFileCache) -> RenamePlan {
+        let context = PlanningContext(
+            snapshot: snapshot,
+            sourceCache: sourceCache,
+            analyzer: analyzer
+        )
         var denied: [SafetyDecision] = []
         var entries: [RenamePlanEntry] = []
-        var conflicts: [String] = []
-        let groups = snapshot.groupsByUSR
-        let groupsByUSR = Dictionary(uniqueKeysWithValues: groups.map { ($0.usr, $0) })
         var reservedNames = Set(snapshot.symbols.map(\.name)).filter(isPlainSwiftIdentifier)
         reservedNames.formUnion(mappingStore.allEntries().map(\.obfuscatedName))
-        let indexedFacts = IndexedSemanticFacts(
-            snapshot: snapshot,
-            obfuscationRoots: analyzer.obfuscationRoots
-        )
-        let enumCaseComponentFacts = EnumCaseComponentFacts(
-            snapshot: snapshot,
-            indexedFacts: indexedFacts,
-            obfuscationRoots: analyzer.obfuscationRoots
-        )
-        let compilerRawValueFacts = CompilerRawValueFacts(
-            snapshot: snapshot,
-            semanticFacts: enumCaseComponentFacts,
-            indexedFacts: indexedFacts,
-            sourceCache: sourceCache
-        )
-        let enumCaseSyntaxFacts = EnumCaseSyntaxFacts(
-            snapshot: snapshot,
-            semanticFacts: enumCaseComponentFacts,
-            compilerRawValueFacts: compilerRawValueFacts,
-            sourceCache: sourceCache,
-            obfuscationRoots: analyzer.obfuscationRoots
-        )
-        let enumCaseUSRs = Set(
-            enumCaseSyntaxFacts.components.flatMap { $0.members.map(\.caseUSR) }
-        )
-        let eligibleEnumCaseUSRs = Set(
-            enumCaseSyntaxFacts.components.flatMap {
-                $0.preliminaryEligibleMembers.map(\.caseUSR)
-            }
-        )
-        let enumCaseOwnerComponentByCaseUSR = Dictionary(
-            uniqueKeysWithValues: enumCaseSyntaxFacts.components.flatMap { component in
-                component.members.map { ($0.caseUSR, component) }
-            }
-        )
-        let parameterSyntaxFacts = ParameterSyntaxFacts(
-            snapshot: snapshot,
-            sourceCache: sourceCache,
-            obfuscationRoots: analyzer.obfuscationRoots
-        )
-        let genericParameterSyntaxFacts = GenericParameterSyntaxFacts(
-            snapshot: snapshot,
-            sourceCache: sourceCache,
-            obfuscationRoots: analyzer.obfuscationRoots
-        )
-        let typealiasSyntaxFacts = TypealiasSyntaxFacts(
-            snapshot: snapshot,
-            sourceCache: sourceCache,
-            obfuscationRoots: analyzer.obfuscationRoots
-        )
-        let parameterCallSiteSyntaxFacts = ParameterCallSiteSyntaxFacts(
-            components: indexedFacts.parameterRenameComponents,
-            sourceCache: sourceCache
-        )
-        let parameterCallArgumentBindingFacts = ParameterCallArgumentBindingFacts(
-            components: indexedFacts.parameterRenameComponents,
-            parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
-            callSiteSyntaxFacts: parameterCallSiteSyntaxFacts
-        )
-        let parameterCallableReferenceSyntaxFacts = ParameterCallableReferenceSyntaxFacts(
-            components: indexedFacts.parameterRenameComponents,
-            sourceCache: sourceCache
-        )
-        let parameterCallableReferenceBindingFacts = ParameterCallableReferenceBindingFacts(
-            components: indexedFacts.parameterRenameComponents,
-            parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
-            syntaxFacts: parameterCallableReferenceSyntaxFacts
-        )
-        let parameterExternalLabelComponentFacts = ParameterExternalLabelComponentFacts(
-            indexedFacts: indexedFacts,
-            parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
-            callBindingFacts: parameterCallArgumentBindingFacts,
-            callableReferenceBindingFacts: parameterCallableReferenceBindingFacts,
-            eligibleEnumCaseUSRs: eligibleEnumCaseUSRs
-        )
-        let externalLabelParameterUSRs = Set(
-            parameterExternalLabelComponentFacts.components.flatMap(\.namedParameterUSRs)
-        )
-        let namedLocalBindingParameterUSRs = Set(
-            parameterSyntaxFacts.rolesByUSR.values.compactMap { role -> String? in
-                guard parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs.contains(
-                    role.parameterUSR
-                ), case .named = role.externalLabel else {
-                    return nil
-                }
-                return role.parameterUSR
-            }
-        )
-        let externalLabelComponentByParameterUSR = Dictionary(
-            uniqueKeysWithValues: parameterExternalLabelComponentFacts.components.flatMap {
-                component in
-                component.namedParameterUSRs.map { ($0, component) }
-            }
-        )
-        let codingKeyComponents = Self.codingKeyPreservationComponents(
-            indexedFacts: indexedFacts,
-            groupsByUSR: groupsByUSR,
-            sourceCache: sourceCache,
-            obfuscationRoots: analyzer.obfuscationRoots
-        )
-        let propertyWrapperComponents = Self.propertyWrapperRenameComponents(
-            indexedFacts: indexedFacts,
-            groupsByUSR: groupsByUSR,
-            sourceCache: sourceCache
-        )
-        let propertyWrapperSupportedUSRs = Set(propertyWrapperComponents.map(\.propertyUSR))
-        let coordinatedComponents = Self.coordinatedRenameComponents(
-            indexedFacts: indexedFacts,
-            groupsByUSR: groupsByUSR
-        )
-        let coordinatedComponentByUSR = Dictionary(uniqueKeysWithValues: coordinatedComponents.flatMap { component in
-            component.memberUSRs.compactMap { usr in
-                groupsByUSR[usr] == nil ? nil : (usr, component)
-            }
-        })
-        let explicitCodingKeyPlanning = ExplicitCodingKeyRenamePlanning.makeResult(
-            syntaxFacts: enumCaseSyntaxFacts,
-            semanticFacts: enumCaseComponentFacts,
-            indexedFacts: indexedFacts,
-            groupsByUSR: groupsByUSR,
-            analyzer: analyzer,
-            sourceCache: sourceCache,
-            excludedPropertyUSRs: Set(coordinatedComponentByUSR.keys)
-        )
-        let explicitCodingKeyPairByUSR = Dictionary(
-            explicitCodingKeyPlanning.pairTemplates.flatMap { pair in
-                [(pair.propertyUSR, pair), (pair.caseUSR, pair)]
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
-        let fullyManualSerializationOwnerUSRs = Set(
-            indexedFacts.serializationSensitiveOwnerUSRs.filter { ownerUSR in
-                (!indexedFacts.decodingSensitiveOwnerUSRs.contains(ownerUSR)
-                    || indexedFacts.customDecodingImplementationOwnerUSRs.contains(ownerUSR))
-                    && (!indexedFacts.encodingSensitiveOwnerUSRs.contains(ownerUSR)
-                        || indexedFacts.customEncodingImplementationOwnerUSRs.contains(ownerUSR))
-            }
-        )
-        let manualSerializationPropertyUSRs = Set(
-            fullyManualSerializationOwnerUSRs.flatMap {
-                indexedFacts.directStoredPropertyUSRs(of: $0)
-            }
-        )
-        let serializationKeyPreservedUSRs = Set(
-            codingKeyComponents.flatMap(\.propertyUSRs)
-        ).union(explicitCodingKeyPlanning.propertyUSRs)
-            .union(manualSerializationPropertyUSRs)
-        var processedCoordinatedComponents: Set<String> = []
 
-        for group in groups {
-            if externalLabelParameterUSRs.contains(group.usr)
-                || namedLocalBindingParameterUSRs.contains(group.usr) {
+        planOrdinarySymbols(
+            context: context,
+            sourceCache: sourceCache,
+            entries: &entries,
+            denied: &denied,
+            reservedNames: &reservedNames
+        )
+
+        planEnumCases(
+            context: context,
+            sourceCache: sourceCache,
+            entries: &entries,
+            denied: &denied,
+            reservedNames: &reservedNames
+        )
+
+        planParameters(
+            context: context,
+            sourceCache: sourceCache,
+            entries: &entries,
+            denied: &denied,
+            reservedNames: &reservedNames
+        )
+
+        let conflicts = Self.resolveReplacementConflicts(
+            context: context,
+            entries: &entries,
+            denied: &denied
+        )
+
+        // A declaration can participate in more than one denied safety layer.
+        // For example, an enum case that witnesses a protocol requirement is
+        // denied both by the enum-owner component and by the coordinated
+        // protocol graph. Reports and parameter outcome summaries require one
+        // deterministic decision per USR, so preserve every reason while
+        // coalescing the duplicate records before constructing those summaries.
+        denied = Self.coalescedDenials(denied)
+
+        let supportReplacements =
+            Self.codingKeySupportReplacements(
+                components: context.codingKeyComponents,
+                entries: entries,
+                indexedFacts: context.indexedFacts,
+                sourceCache: sourceCache
+            )
+            + Self.propertyWrapperSupportReplacements(
+                components: context.propertyWrapperComponents,
+                entries: entries
+            )
+            + Self.implicitRawValueSupportReplacements(
+                facts: context.enumCaseSyntaxFacts,
+                entries: entries
+            )
+
+        return RenamePlan(
+            entries: entries.sorted { ($0.oldName, $0.usr) < ($1.oldName, $1.usr) },
+            denied: denied.sorted { ($0.symbolName, $0.usr) < ($1.symbolName, $1.usr) },
+            conflicts: conflicts,
+            supportReplacements: supportReplacements,
+            parameterFacts: context.indexedFacts.parameterFactsSummary,
+            parameterSyntaxFacts: context.parameterSyntaxFacts.summary,
+            parameterCallSiteSyntaxFacts: context.parameterCallSiteSyntaxFacts.summary,
+            parameterCallArgumentBindingFacts: context.parameterCallArgumentBindingFacts.summary,
+            parameterCallableReferenceSyntaxFacts: context.parameterCallableReferenceSyntaxFacts.summary,
+            parameterCallableReferenceBindingFacts:
+                context.parameterCallableReferenceBindingFacts.summary,
+            parameterExternalLabelComponentFacts: context.parameterExternalLabelComponentFacts.summary,
+            parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary(
+                components: context.parameterExternalLabelComponentFacts.components,
+                entries: entries,
+                decisions: denied
+            ),
+            parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary(
+                candidateUSRs: context.parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs,
+                entries: entries,
+                decisions: denied,
+                groupsByUSR: context.groupsByUSR
+            ),
+            enumCaseComponentFacts: context.enumCaseComponentFacts.summary,
+            compilerRawValueFacts: context.compilerRawValueFacts.summary,
+            enumCaseSyntaxFacts: context.enumCaseSyntaxFacts.summary,
+            genericParameterSyntaxFacts: context.genericParameterSyntaxFacts.summary,
+            typealiasSyntaxFacts: context.typealiasSyntaxFacts.summary
+        )
+    }
+
+    private mutating func planOrdinarySymbols(
+        context: PlanningContext,
+        sourceCache: SourceFileCache,
+        entries: inout [RenamePlanEntry],
+        denied: inout [SafetyDecision],
+        reservedNames: inout Set<String>
+    ) {
+        var processedComponentKeys: Set<String> = []
+
+        for group in context.groups {
+            guard !context.externalLabelParameterUSRs.contains(group.usr),
+                !context.namedLocalBindingParameterUSRs.contains(group.usr),
+                !context.enumCaseUSRs.contains(group.usr)
+            else {
                 continue
             }
-            if enumCaseUSRs.contains(group.usr) {
-                continue
-            }
-            if let component = coordinatedComponentByUSR[group.usr] {
-                guard processedCoordinatedComponents.insert(component.key).inserted else {
+
+            if let component = context.coordinatedComponentByUSR[group.usr] {
+                guard processedComponentKeys.insert(component.key).inserted else {
                     continue
                 }
-
-                let componentGroups = component.memberUSRs.compactMap { groupsByUSR[$0] }.sorted { lhs, rhs in
-                    (lhs.symbol.name, lhs.usr) < (rhs.symbol.name, rhs.usr)
-                }
-                let coordinationEnabled = component.structuralReasons.isEmpty
-                let decisions = componentGroups.map { componentGroup in
-                    analyzer.analyze(
-                        group: componentGroup,
-                        sourceCache: sourceCache,
-                        indexedFacts: indexedFacts,
-                        overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
-                        tupleTypealiasRelatedUSRs:
-                            typealiasSyntaxFacts.unsafeTupleRelatedUSRs,
-                        coordinatedRelatedUSRs: coordinationEnabled ? component.memberUSRs : [],
-                        coordinatedProtocolRequirementUSRs: coordinationEnabled
-                            ? component.protocolRequirementUSRs
-                            : [],
-                        genericParameterUSRs:
-                            genericParameterSyntaxFacts.genericParameterUSRs,
-                        supportedGenericParameterUSRs:
-                            genericParameterSyntaxFacts.supportedGenericParameterUSRs,
-                        serializationKeyPreservedUSRs: serializationKeyPreservedUSRs,
-                        propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs,
-                        localBindingOnlyParameterUSRs:
-                            parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs
-                    )
-                }
-
-                var failureSummaries = component.structuralReasons
-                for decision in decisions where !decision.allowed {
-                    failureSummaries.append("\(decision.usr): \(decision.reasons.joined(separator: "; "))")
-                }
-
-                let oldNames = Set(decisions.compactMap(\.oldName))
-                if decisions.allSatisfy(\.allowed), oldNames.count != 1 {
-                    failureSummaries.append("component occurrences do not resolve to one source identifier")
-                }
-
-                let caseConventions = Set(componentGroups.map {
-                    Self.nameWithConventionalInitialCase("Oa", for: $0.symbol.kind)
-                })
-                if caseConventions.count != 1 {
-                    failureSummaries.append("component symbol kinds require incompatible identifier casing")
-                }
-
-                let existingNames = Set(componentGroups.compactMap {
-                    mappingStore.entry(for: $0.usr)?.obfuscatedName
-                })
-                if existingNames.count > 1 {
-                    failureSummaries.append("component USRs already have inconsistent persisted mappings")
-                }
-
-                var replacementsByUSR: [String: Set<SourceReplacement>] = [:]
-                if failureSummaries.isEmpty, let oldName = oldNames.first {
-                    for componentGroup in componentGroups {
-                        var replacements: Set<SourceReplacement> = []
-                        var localReasons: Set<String> = []
-                        for occurrence in componentGroup.occurrences {
-                            if Self.isSemanticOnlyCoordinatedOccurrence(
-                                occurrence,
-                                componentUSRs: component.memberUSRs
-                            ) {
-                                continue
-                            }
-                            guard let source = sourceCache.file(for: occurrence.path) else {
-                                localReasons.insert("source file unavailable for \(occurrence.path)")
-                                continue
-                            }
-                            guard let token = source.identifierToken(
-                                line: occurrence.line,
-                                utf8Column: occurrence.utf8Column
-                            ) else {
-                                localReasons.insert(
-                                    "identifier token unavailable at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
-                                )
-                                continue
-                            }
-                            if SafetyAnalyzer.isSemanticSelfTypeReference(
-                                occurrence: occurrence,
-                                token: token,
-                                symbolKind: componentGroup.symbol.kind
-                            ) {
-                                continue
-                            }
-                            guard token.name == oldName else {
-                                localReasons.insert(
-                                    "token mismatch at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
-                                )
-                                continue
-                            }
-                            replacements.insert(SourceReplacement(
-                                path: source.path,
-                                byteOffset: token.byteRange.lowerBound,
-                                length: token.byteRange.count,
-                                line: occurrence.line,
-                                utf8Column: occurrence.utf8Column,
-                                oldName: oldName,
-                                newName: "",
-                                usr: componentGroup.usr
-                            ))
-                        }
-                        if !localReasons.isEmpty {
-                            failureSummaries.append(
-                                "\(componentGroup.usr): \(localReasons.sorted().joined(separator: "; "))"
-                            )
-                        } else if replacements.isEmpty {
-                            failureSummaries.append("\(componentGroup.usr): no source replacements")
-                        } else {
-                            replacementsByUSR[componentGroup.usr] = replacements
-                        }
-                    }
-                }
-
-                guard failureSummaries.isEmpty, let oldName = oldNames.first else {
-                    let componentReason = component.denialReason(failureSummaries)
-                    denied.append(contentsOf: zip(componentGroups, decisions).map { componentGroup, decision in
-                        var reasons = decision.allowed ? [] : decision.reasons
-                        reasons.append(componentReason)
-                        return SafetyDecision(
-                            usr: componentGroup.usr,
-                            symbolName: componentGroup.symbol.name,
-                            kind: componentGroup.symbol.kind,
-                            allowed: false,
-                            oldName: decision.oldName,
-                            reasons: Array(Set(reasons)).sorted()
-                        )
-                    })
-                    continue
-                }
-
-                let newName: String
-                if let existingName = existingNames.first {
-                    newName = existingName
-                } else {
-                    newName = nextName(for: componentGroups[0].symbol.kind, avoiding: reservedNames)
-                    reservedNames.insert(newName)
-                }
-
-                for componentGroup in componentGroups {
-                    if mappingStore.entry(for: componentGroup.usr) == nil {
-                        mappingStore.record(
-                            usr: componentGroup.usr,
-                            originalName: oldName,
-                            obfuscatedName: newName,
-                            kind: componentGroup.symbol.kind
-                        )
-                    }
-                    let replacements = (replacementsByUSR[componentGroup.usr] ?? []).map { replacement in
-                        SourceReplacement(
-                            path: replacement.path,
-                            byteOffset: replacement.byteOffset,
-                            length: replacement.length,
-                            line: replacement.line,
-                            utf8Column: replacement.utf8Column,
-                            oldName: replacement.oldName,
-                            newName: newName,
-                            usr: replacement.usr
-                        )
-                    }
-                    entries.append(RenamePlanEntry(
-                        usr: componentGroup.usr,
-                        kind: componentGroup.symbol.kind,
-                        oldName: oldName,
-                        newName: newName,
-                        replacements: replacements.sorted { lhs, rhs in
-                            (lhs.path, lhs.byteOffset, lhs.usr) < (rhs.path, rhs.byteOffset, rhs.usr)
-                        }
-                    ))
-                }
-                continue
+                planCoordinatedComponent(
+                    component,
+                    context: context,
+                    sourceCache: sourceCache,
+                    entries: &entries,
+                    denied: &denied,
+                    reservedNames: &reservedNames
+                )
+            } else {
+                planStandaloneSymbol(
+                    group,
+                    context: context,
+                    sourceCache: sourceCache,
+                    entries: &entries,
+                    denied: &denied,
+                    reservedNames: &reservedNames
+                )
             }
+        }
+    }
 
-            let decision = analyzer.analyze(
+    private mutating func planCoordinatedComponent(
+        _ component: CoordinatedRenameComponent,
+        context: PlanningContext,
+        sourceCache: SourceFileCache,
+        entries: inout [RenamePlanEntry],
+        denied: inout [SafetyDecision],
+        reservedNames: inout Set<String>
+    ) {
+        let componentGroups = component.memberUSRs.compactMap { context.groupsByUSR[$0] }.sorted {
+            lhs, rhs in
+            (lhs.symbol.name, lhs.usr) < (rhs.symbol.name, rhs.usr)
+        }
+        let coordinationEnabled = component.structuralReasons.isEmpty
+        let decisions = componentGroups.map { group in
+            analyzer.analyze(
                 group: group,
                 sourceCache: sourceCache,
-                indexedFacts: indexedFacts,
-                overrideRelatedUSRs: indexedFacts.overrideRelatedUSRs,
-                tupleTypealiasRelatedUSRs: typealiasSyntaxFacts.unsafeTupleRelatedUSRs,
-                genericParameterUSRs: genericParameterSyntaxFacts.genericParameterUSRs,
+                indexedFacts: context.indexedFacts,
+                overrideRelatedUSRs: context.indexedFacts.overrideRelatedUSRs,
+                tupleTypealiasRelatedUSRs: context.typealiasSyntaxFacts.unsafeTupleRelatedUSRs,
+                coordinatedRelatedUSRs: coordinationEnabled ? component.memberUSRs : [],
+                coordinatedProtocolRequirementUSRs: coordinationEnabled
+                    ? component.protocolRequirementUSRs
+                    : [],
+                genericParameterUSRs: context.genericParameterSyntaxFacts.genericParameterUSRs,
                 supportedGenericParameterUSRs:
-                    genericParameterSyntaxFacts.supportedGenericParameterUSRs,
-                serializationKeyPreservedUSRs: serializationKeyPreservedUSRs,
-                propertyWrapperSupportedUSRs: propertyWrapperSupportedUSRs,
+                    context.genericParameterSyntaxFacts.supportedGenericParameterUSRs,
+                serializationKeyPreservedUSRs: context.serializationKeyPreservedUSRs,
+                propertyWrapperSupportedUSRs: context.propertyWrapperSupportedUSRs,
                 localBindingOnlyParameterUSRs:
-                    parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs
+                    context.parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs
             )
-            guard decision.allowed, let oldName = decision.oldName else {
-                denied.append(decision)
-                continue
-            }
+        }
 
-            let newName: String
-            if let existing = mappingStore.entry(for: group.usr) {
-                newName = existing.obfuscatedName
-            } else {
-                newName = nextName(for: group.symbol.kind, avoiding: reservedNames)
-                reservedNames.insert(newName)
+        var failureSummaries = component.structuralReasons
+        for decision in decisions where !decision.allowed {
+            failureSummaries.append("\(decision.usr): \(decision.reasons.joined(separator: "; "))")
+        }
+
+        let oldNames = Set(decisions.compactMap(\.oldName))
+        if decisions.allSatisfy(\.allowed), oldNames.count != 1 {
+            failureSummaries.append("component occurrences do not resolve to one source identifier")
+        }
+
+        let caseConventions = Set(
+            componentGroups.map {
+                Self.nameWithConventionalInitialCase("Oa", for: $0.symbol.kind)
+            })
+        if caseConventions.count != 1 {
+            failureSummaries.append("component symbol kinds require incompatible identifier casing")
+        }
+
+        let existingNames = Set(
+            componentGroups.compactMap {
+                mappingStore.entry(for: $0.usr)?.obfuscatedName
+            })
+        if existingNames.count > 1 {
+            failureSummaries.append("component USRs already have inconsistent persisted mappings")
+        }
+
+        var replacementsByUSR: [String: Set<SourceReplacement>] = [:]
+        if failureSummaries.isEmpty, let oldName = oldNames.first {
+            for group in componentGroups {
+                var replacements: Set<SourceReplacement> = []
+                var localReasons: Set<String> = []
+                for occurrence in group.occurrences {
+                    if Self.isSemanticOnlyCoordinatedOccurrence(
+                        occurrence,
+                        componentUSRs: component.memberUSRs
+                    ) {
+                        continue
+                    }
+                    guard let source = sourceCache.file(for: occurrence.path) else {
+                        localReasons.insert("source file unavailable for \(occurrence.path)")
+                        continue
+                    }
+                    guard
+                        let token = source.identifierToken(
+                            line: occurrence.line,
+                            utf8Column: occurrence.utf8Column
+                        )
+                    else {
+                        localReasons.insert(
+                            "identifier token unavailable at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
+                        )
+                        continue
+                    }
+                    if SafetyAnalyzer.isSemanticSelfTypeReference(
+                        occurrence: occurrence,
+                        token: token,
+                        symbolKind: group.symbol.kind
+                    ) {
+                        continue
+                    }
+                    guard token.name == oldName else {
+                        localReasons.insert(
+                            "token mismatch at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
+                        )
+                        continue
+                    }
+                    replacements.insert(
+                        SourceReplacement(
+                            path: source.path,
+                            byteOffset: token.byteRange.lowerBound,
+                            length: token.byteRange.count,
+                            line: occurrence.line,
+                            utf8Column: occurrence.utf8Column,
+                            oldName: oldName,
+                            newName: "",
+                            usr: group.usr
+                        ))
+                }
+                if !localReasons.isEmpty {
+                    failureSummaries.append(
+                        "\(group.usr): \(localReasons.sorted().joined(separator: "; "))"
+                    )
+                } else if replacements.isEmpty {
+                    failureSummaries.append("\(group.usr): no source replacements")
+                } else {
+                    replacementsByUSR[group.usr] = replacements
+                }
+            }
+        }
+
+        guard failureSummaries.isEmpty, let oldName = oldNames.first else {
+            let componentReason = component.denialReason(failureSummaries)
+            denied.append(
+                contentsOf: zip(componentGroups, decisions).map { group, decision in
+                    var reasons = decision.allowed ? [] : decision.reasons
+                    reasons.append(componentReason)
+                    return SafetyDecision(
+                        usr: group.usr,
+                        symbolName: group.symbol.name,
+                        kind: group.symbol.kind,
+                        allowed: false,
+                        oldName: decision.oldName,
+                        reasons: Array(Set(reasons)).sorted()
+                    )
+                })
+            return
+        }
+
+        let newName: String
+        if let existingName = existingNames.first {
+            newName = existingName
+        } else {
+            newName = nextName(for: componentGroups[0].symbol.kind, avoiding: reservedNames)
+            reservedNames.insert(newName)
+        }
+
+        for group in componentGroups {
+            if mappingStore.entry(for: group.usr) == nil {
                 mappingStore.record(
                     usr: group.usr,
                     originalName: oldName,
@@ -558,30 +518,100 @@ public struct RenamePlanner {
                     kind: group.symbol.kind
                 )
             }
+            let replacements = (replacementsByUSR[group.usr] ?? []).map { replacement in
+                SourceReplacement(
+                    path: replacement.path,
+                    byteOffset: replacement.byteOffset,
+                    length: replacement.length,
+                    line: replacement.line,
+                    utf8Column: replacement.utf8Column,
+                    oldName: replacement.oldName,
+                    newName: newName,
+                    usr: replacement.usr
+                )
+            }
+            entries.append(
+                RenamePlanEntry(
+                    usr: group.usr,
+                    kind: group.symbol.kind,
+                    oldName: oldName,
+                    newName: newName,
+                    replacements: replacements.sorted { lhs, rhs in
+                        (lhs.path, lhs.byteOffset, lhs.usr) < (rhs.path, rhs.byteOffset, rhs.usr)
+                    }
+                ))
+        }
+    }
 
-            var replacements: Set<SourceReplacement> = []
-            var localReasons: [String] = []
-            for occurrence in group.occurrences {
-                guard let source = sourceCache.file(for: occurrence.path) else {
-                    localReasons.append("source file unavailable for \(occurrence.path)")
-                    continue
-                }
-                guard let token = source.identifierToken(line: occurrence.line, utf8Column: occurrence.utf8Column) else {
-                    localReasons.append("identifier token unavailable at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
-                    continue
-                }
-                if SafetyAnalyzer.isSemanticSelfTypeReference(
-                    occurrence: occurrence,
-                    token: token,
-                    symbolKind: group.symbol.kind
-                ) {
-                    continue
-                }
-                guard token.name == oldName else {
-                    localReasons.append("token mismatch at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
-                    continue
-                }
-                replacements.insert(SourceReplacement(
+    private mutating func planStandaloneSymbol(
+        _ group: USROccurrenceGroup,
+        context: PlanningContext,
+        sourceCache: SourceFileCache,
+        entries: inout [RenamePlanEntry],
+        denied: inout [SafetyDecision],
+        reservedNames: inout Set<String>
+    ) {
+        let decision = analyzer.analyze(
+            group: group,
+            sourceCache: sourceCache,
+            indexedFacts: context.indexedFacts,
+            overrideRelatedUSRs: context.indexedFacts.overrideRelatedUSRs,
+            tupleTypealiasRelatedUSRs: context.typealiasSyntaxFacts.unsafeTupleRelatedUSRs,
+            genericParameterUSRs: context.genericParameterSyntaxFacts.genericParameterUSRs,
+            supportedGenericParameterUSRs:
+                context.genericParameterSyntaxFacts.supportedGenericParameterUSRs,
+            serializationKeyPreservedUSRs: context.serializationKeyPreservedUSRs,
+            propertyWrapperSupportedUSRs: context.propertyWrapperSupportedUSRs,
+            localBindingOnlyParameterUSRs:
+                context.parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs
+        )
+        guard decision.allowed, let oldName = decision.oldName else {
+            denied.append(decision)
+            return
+        }
+
+        let newName: String
+        if let existing = mappingStore.entry(for: group.usr) {
+            newName = existing.obfuscatedName
+        } else {
+            newName = nextName(for: group.symbol.kind, avoiding: reservedNames)
+            reservedNames.insert(newName)
+            mappingStore.record(
+                usr: group.usr,
+                originalName: oldName,
+                obfuscatedName: newName,
+                kind: group.symbol.kind
+            )
+        }
+
+        var replacements: Set<SourceReplacement> = []
+        var localReasons: [String] = []
+        for occurrence in group.occurrences {
+            guard let source = sourceCache.file(for: occurrence.path) else {
+                localReasons.append("source file unavailable for \(occurrence.path)")
+                continue
+            }
+            guard let token = source.identifierToken(line: occurrence.line, utf8Column: occurrence.utf8Column)
+            else {
+                localReasons.append(
+                    "identifier token unavailable at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)"
+                )
+                continue
+            }
+            if SafetyAnalyzer.isSemanticSelfTypeReference(
+                occurrence: occurrence,
+                token: token,
+                symbolKind: group.symbol.kind
+            ) {
+                continue
+            }
+            guard token.name == oldName else {
+                localReasons.append(
+                    "token mismatch at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
+                continue
+            }
+            replacements.insert(
+                SourceReplacement(
                     path: source.path,
                     byteOffset: token.byteRange.lowerBound,
                     length: token.byteRange.count,
@@ -591,32 +621,37 @@ public struct RenamePlanner {
                     newName: newName,
                     usr: group.usr
                 ))
-            }
+        }
 
-            if group.symbol.kind == "parameter",
-               parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs.contains(group.usr),
-               let roles = parameterSyntaxFacts.rolesByUSR[group.usr] {
-                for token in roles.localBindingTokens {
-                    guard let source = sourceCache.file(for: token.path) else {
-                        localReasons.append("source file unavailable for \(token.path)")
-                        continue
-                    }
-                    guard token.name == oldName,
-                          source.text(in: token.byteRange) == oldName else {
-                        localReasons.append(
-                            "compiler syntax token mismatch at \(token.path):\(token.byteRange.lowerBound)"
-                        )
-                        continue
-                    }
-                    guard let location = source.sourceLocation(
+        if group.symbol.kind == "parameter",
+            context.parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs.contains(group.usr),
+            let roles = context.parameterSyntaxFacts.rolesByUSR[group.usr]
+        {
+            for token in roles.localBindingTokens {
+                guard let source = sourceCache.file(for: token.path) else {
+                    localReasons.append("source file unavailable for \(token.path)")
+                    continue
+                }
+                guard token.name == oldName,
+                    source.text(in: token.byteRange) == oldName
+                else {
+                    localReasons.append(
+                        "compiler syntax token mismatch at \(token.path):\(token.byteRange.lowerBound)"
+                    )
+                    continue
+                }
+                guard
+                    let location = source.sourceLocation(
                         atByteOffset: token.byteRange.lowerBound
-                    ) else {
-                        localReasons.append(
-                            "compiler syntax source location unavailable at \(token.path):\(token.byteRange.lowerBound)"
-                        )
-                        continue
-                    }
-                    replacements.insert(SourceReplacement(
+                    )
+                else {
+                    localReasons.append(
+                        "compiler syntax source location unavailable at \(token.path):\(token.byteRange.lowerBound)"
+                    )
+                    continue
+                }
+                replacements.insert(
+                    SourceReplacement(
                         path: source.path,
                         byteOffset: token.byteRange.lowerBound,
                         length: token.byteRange.count,
@@ -626,22 +661,26 @@ public struct RenamePlanner {
                         newName: newName,
                         usr: group.usr
                     ))
-                }
             }
+        }
 
-            if !localReasons.isEmpty || replacements.isEmpty {
-                denied.append(SafetyDecision(
+        guard localReasons.isEmpty, !replacements.isEmpty else {
+            denied.append(
+                SafetyDecision(
                     usr: group.usr,
                     symbolName: group.symbol.name,
                     kind: group.symbol.kind,
                     allowed: false,
                     oldName: oldName,
-                    reasons: localReasons.isEmpty ? ["no source replacements"] : Array(Set(localReasons)).sorted()
+                    reasons: localReasons.isEmpty
+                        ? ["no source replacements"]
+                        : Array(Set(localReasons)).sorted()
                 ))
-                continue
-            }
+            return
+        }
 
-            entries.append(RenamePlanEntry(
+        entries.append(
+            RenamePlanEntry(
                 usr: group.usr,
                 kind: group.symbol.kind,
                 oldName: oldName,
@@ -650,21 +689,313 @@ public struct RenamePlanner {
                     (lhs.path, lhs.byteOffset, lhs.usr) < (rhs.path, rhs.byteOffset, rhs.usr)
                 }
             ))
+    }
+
+    private static func resolveReplacementConflicts(
+        context: PlanningContext,
+        entries: inout [RenamePlanEntry],
+        denied: inout [SafetyDecision]
+    ) -> [String] {
+        func locationKey(_ replacement: SourceReplacement) -> String {
+            "\(replacement.path):\(replacement.byteOffset)"
         }
 
-        let enumCasePlanning = EnumCaseRenamePlanning.makeResult(
-            facts: enumCaseSyntaxFacts,
-            groupsByUSR: groupsByUSR,
-            indexedFacts: indexedFacts,
+        let conflictGroups = Dictionary(
+            grouping: entries.flatMap(\.replacements),
+            by: locationKey
+        )
+        let conflictKeys = Set(
+            conflictGroups.compactMap { key, replacements -> String? in
+                let uniqueTargets = Set(replacements.map { "\($0.oldName)->\($0.newName)" })
+                return uniqueTargets.count > 1 ? key : nil
+            })
+        guard !conflictKeys.isEmpty else {
+            return []
+        }
+
+        let entryHasConflict: (RenamePlanEntry) -> Bool = { entry in
+            entry.replacements.contains { conflictKeys.contains(locationKey($0)) }
+        }
+        let conflictedCoordinatedComponents = Set(
+            entries.compactMap { entry in
+                entryHasConflict(entry) ? context.coordinatedComponentByUSR[entry.usr]?.key : nil
+            })
+        let conflictedExternalLabelComponents = Set(
+            entries.compactMap { entry in
+                entryHasConflict(entry)
+                    ? context.externalLabelComponentByParameterUSR[entry.usr]?.key
+                    : nil
+            })
+        let conflictedEnumCaseOwners = Set(
+            entries.compactMap { entry in
+                entryHasConflict(entry)
+                    ? context.enumCaseOwnerComponentByCaseUSR[entry.usr]?.ownerUSR
+                    : nil
+            })
+        let directlyConflictedExplicitCodingKeyPairs = Set(
+            entries.compactMap { entry in
+                entryHasConflict(entry) ? context.explicitCodingKeyPairByUSR[entry.usr]?.key : nil
+            })
+        let conflictedExplicitCodingKeyPairs = directlyConflictedExplicitCodingKeyPairs.union(
+            context.explicitCodingKeyPlanning.pairTemplates.compactMap { pair in
+                conflictedEnumCaseOwners.contains(pair.codingKeysEnumUSR) ? pair.key : nil
+            }
+        )
+
+        entries.removeAll { entry in
+            if let componentKey = context.coordinatedComponentByUSR[entry.usr]?.key,
+                conflictedCoordinatedComponents.contains(componentKey)
+            {
+                return true
+            }
+            if let componentKey = context.externalLabelComponentByParameterUSR[entry.usr]?.key,
+                conflictedExternalLabelComponents.contains(componentKey)
+            {
+                return true
+            }
+            if let ownerUSR = context.enumCaseOwnerComponentByCaseUSR[entry.usr]?.ownerUSR,
+                conflictedEnumCaseOwners.contains(ownerUSR)
+            {
+                return true
+            }
+            if let pairKey = context.explicitCodingKeyPairByUSR[entry.usr]?.key,
+                conflictedExplicitCodingKeyPairs.contains(pairKey)
+            {
+                return true
+            }
+            return entryHasConflict(entry)
+        }
+
+        let conflictReason = "component contains a replacement conflict and was removed atomically"
+        for component in context.coordinatedComponents
+        where conflictedCoordinatedComponents.contains(component.key) {
+            let reason = component.denialReason([conflictReason])
+            for group in context.groups where component.memberUSRs.contains(group.usr) {
+                denied.append(
+                    SafetyDecision(
+                        usr: group.usr,
+                        symbolName: group.symbol.name,
+                        kind: group.symbol.kind,
+                        allowed: false,
+                        oldName: nil,
+                        reasons: [reason]
+                    ))
+            }
+        }
+        for component in context.parameterExternalLabelComponentFacts.components
+        where conflictedExternalLabelComponents.contains(component.key) {
+            denied.append(
+                contentsOf: ParameterExternalLabelRenamePlanning.denialDecisions(
+                    component: component,
+                    groupsByUSR: context.groupsByUSR,
+                    reasons: [conflictReason]
+                ))
+        }
+        for component in context.enumCaseSyntaxFacts.components
+        where conflictedEnumCaseOwners.contains(component.ownerUSR) {
+            denied.append(
+                contentsOf: EnumCaseRenamePlanning.denialDecisions(
+                    component: component,
+                    groupsByUSR: context.groupsByUSR,
+                    reasons: [conflictReason]
+                ))
+        }
+        for pair in context.explicitCodingKeyPlanning.pairTemplates
+        where conflictedExplicitCodingKeyPairs.contains(pair.key) {
+            denied.append(
+                contentsOf: ExplicitCodingKeyRenamePlanning.denialDecisions(
+                    pair: pair,
+                    groupsByUSR: context.groupsByUSR,
+                    reasons: [conflictReason]
+                ))
+        }
+        return conflictKeys.sorted()
+    }
+
+    private mutating func planParameters(
+        context: PlanningContext,
+        sourceCache: SourceFileCache,
+        entries: inout [RenamePlanEntry],
+        denied: inout [SafetyDecision],
+        reservedNames: inout Set<String>
+    ) {
+        let externalLabelPlanning = ParameterExternalLabelRenamePlanning.makeResult(
+            facts: context.parameterExternalLabelComponentFacts,
+            groupsByUSR: context.groupsByUSR,
+            indexedFacts: context.indexedFacts,
+            parameterRolesByUSR: context.parameterSyntaxFacts.rolesByUSR,
+            callBindingFacts: context.parameterCallArgumentBindingFacts,
+            callableReferenceBindingFacts: context.parameterCallableReferenceBindingFacts,
+            analyzer: analyzer,
+            sourceCache: sourceCache
+        )
+        let fullyPlannedExternalLabelParameterUSRs = Set(
+            externalLabelPlanning.componentTemplates.flatMap(\.namedParameterUSRs)
+        )
+        let preservedLabelLocalBindingCandidateUSRs = context.namedLocalBindingParameterUSRs
+            .subtracting(fullyPlannedExternalLabelParameterUSRs)
+        let localBindingPlanning = ParameterLocalBindingRenamePlanning.makeResult(
+            candidateUSRs: preservedLabelLocalBindingCandidateUSRs,
+            groupsByUSR: context.groupsByUSR,
+            indexedFacts: context.indexedFacts,
+            parameterRolesByUSR: context.parameterSyntaxFacts.rolesByUSR,
+            analyzer: analyzer,
+            sourceCache: sourceCache
+        )
+
+        for componentTemplate in externalLabelPlanning.componentTemplates {
+            guard
+                let component = context.parameterExternalLabelComponentFacts.components.first(
+                    where: { $0.key == componentTemplate.key }
+                )
+            else {
+                continue
+            }
+            var mappingFailures: Set<String> = []
+            var existingNamesByOrdinal: [Int: String] = [:]
+            for ordinalTemplate in componentTemplate.ordinals {
+                let existingEntries = ordinalTemplate.parameters.compactMap {
+                    mappingStore.entry(for: $0.usr)
+                }
+                let existingNames = Set(existingEntries.map(\.obfuscatedName))
+                if existingNames.count > 1 {
+                    mappingFailures.insert(
+                        "ordinal \(ordinalTemplate.ordinal) has inconsistent persisted mappings"
+                    )
+                } else if let existingName = existingNames.first {
+                    existingNamesByOrdinal[ordinalTemplate.ordinal] = existingName
+                }
+                for parameter in ordinalTemplate.parameters {
+                    guard let existing = mappingStore.entry(for: parameter.usr) else {
+                        continue
+                    }
+                    if existing.originalName != parameter.oldName
+                        || existing.kind != "parameter"
+                    {
+                        mappingFailures.insert(
+                            "persisted mapping metadata disagrees for \(parameter.usr)"
+                        )
+                    }
+                }
+            }
+            guard mappingFailures.isEmpty else {
+                denied.append(
+                    contentsOf: ParameterExternalLabelRenamePlanning.denialDecisions(
+                        component: component,
+                        groupsByUSR: context.groupsByUSR,
+                        reasons: mappingFailures.sorted()
+                    ))
+                continue
+            }
+
+            for ordinalTemplate in componentTemplate.ordinals {
+                let newName: String
+                if let existingName = existingNamesByOrdinal[ordinalTemplate.ordinal] {
+                    newName = existingName
+                } else {
+                    newName = nextName(for: "parameter", avoiding: reservedNames)
+                    reservedNames.insert(newName)
+                }
+                for parameter in ordinalTemplate.parameters {
+                    if mappingStore.entry(for: parameter.usr) == nil {
+                        mappingStore.record(
+                            usr: parameter.usr,
+                            originalName: parameter.oldName,
+                            obfuscatedName: newName,
+                            kind: "parameter"
+                        )
+                    }
+                    entries.append(
+                        RenamePlanEntry(
+                            usr: parameter.usr,
+                            kind: "parameter",
+                            oldName: parameter.oldName,
+                            newName: newName,
+                            replacements: parameter.replacements.map {
+                                $0.replacement(newName: newName)
+                            }.sorted { lhs, rhs in
+                                (lhs.path, lhs.byteOffset, lhs.usr)
+                                    < (rhs.path, rhs.byteOffset, rhs.usr)
+                            }
+                        ))
+                }
+            }
+        }
+
+        var renamedLocalBindingUSRs: Set<String> = []
+        for template in localBindingPlanning.templates {
+            guard let group = context.groupsByUSR[template.usr] else {
+                continue
+            }
+            let newName: String
+            if let existing = mappingStore.entry(for: template.usr) {
+                guard existing.originalName == template.oldName,
+                    existing.kind == "parameter"
+                else {
+                    denied.append(
+                        ParameterLocalBindingRenamePlanning.denialDecision(
+                            group: group,
+                            oldName: template.oldName,
+                            reasons: ["persisted mapping metadata disagrees for \(template.usr)"]
+                        ))
+                    continue
+                }
+                newName = existing.obfuscatedName
+            } else {
+                newName = nextName(for: "parameter", avoiding: reservedNames)
+                reservedNames.insert(newName)
+                mappingStore.record(
+                    usr: template.usr,
+                    originalName: template.oldName,
+                    obfuscatedName: newName,
+                    kind: "parameter"
+                )
+            }
+            entries.append(
+                RenamePlanEntry(
+                    usr: template.usr,
+                    kind: "parameter",
+                    oldName: template.oldName,
+                    newName: newName,
+                    replacements: template.replacements.map {
+                        $0.replacement(newName: newName)
+                    }.sorted { lhs, rhs in
+                        (lhs.path, lhs.byteOffset, lhs.usr)
+                            < (rhs.path, rhs.byteOffset, rhs.usr)
+                    }
+                ))
+            renamedLocalBindingUSRs.insert(template.usr)
+        }
+        denied.append(
+            contentsOf: externalLabelPlanning.denied.filter {
+                !renamedLocalBindingUSRs.contains($0.usr)
+            })
+        denied.append(contentsOf: localBindingPlanning.denied)
+    }
+
+    private mutating func planEnumCases(
+        context: PlanningContext,
+        sourceCache: SourceFileCache,
+        entries: inout [RenamePlanEntry],
+        denied: inout [SafetyDecision],
+        reservedNames: inout Set<String>
+    ) {
+        let planning = EnumCaseRenamePlanning.makeResult(
+            facts: context.enumCaseSyntaxFacts,
+            groupsByUSR: context.groupsByUSR,
+            indexedFacts: context.indexedFacts,
             analyzer: analyzer,
             sourceCache: sourceCache,
-            handledCaseUSRs: explicitCodingKeyPlanning.caseUSRs
+            handledCaseUSRs: context.explicitCodingKeyPlanning.caseUSRs
         )
-        denied.append(contentsOf: enumCasePlanning.denied)
-        for componentTemplate in enumCasePlanning.componentTemplates {
-            guard let component = enumCaseSyntaxFacts.components.first(where: {
-                $0.ownerUSR == componentTemplate.ownerUSR
-            }) else {
+        denied.append(contentsOf: planning.denied)
+
+        for componentTemplate in planning.componentTemplates {
+            guard
+                let component = context.enumCaseSyntaxFacts.components.first(where: {
+                    $0.ownerUSR == componentTemplate.ownerUSR
+                })
+            else {
                 continue
             }
 
@@ -687,11 +1018,12 @@ public struct RenamePlanner {
                 mappingFailures.insert("enum owner members have duplicate persisted mappings")
             }
             guard mappingFailures.isEmpty else {
-                denied.append(contentsOf: EnumCaseRenamePlanning.denialDecisions(
-                    component: component,
-                    groupsByUSR: groupsByUSR,
-                    reasons: mappingFailures.sorted()
-                ))
+                denied.append(
+                    contentsOf: EnumCaseRenamePlanning.denialDecisions(
+                        component: component,
+                        groupsByUSR: context.groupsByUSR,
+                        reasons: mappingFailures.sorted()
+                    ))
                 continue
             }
 
@@ -711,43 +1043,49 @@ public struct RenamePlanner {
                         kind: "enumConstant"
                     )
                 }
-                entries.append(RenamePlanEntry(
-                    usr: member.usr,
-                    kind: "enumConstant",
-                    oldName: member.oldName,
-                    newName: newName,
-                    replacements: member.replacements.map {
-                        $0.replacement(newName: newName)
-                    }.sorted { lhs, rhs in
-                        (lhs.path, lhs.byteOffset, lhs.usr)
-                            < (rhs.path, rhs.byteOffset, rhs.usr)
-                    }
-                ))
+                entries.append(
+                    RenamePlanEntry(
+                        usr: member.usr,
+                        kind: "enumConstant",
+                        oldName: member.oldName,
+                        newName: newName,
+                        replacements: member.replacements.map {
+                            $0.replacement(newName: newName)
+                        }.sorted { lhs, rhs in
+                            (lhs.path, lhs.byteOffset, lhs.usr)
+                                < (rhs.path, rhs.byteOffset, rhs.usr)
+                        }
+                    ))
             }
         }
 
-        for pair in explicitCodingKeyPlanning.pairTemplates {
-            guard let propertyEntry = entries.first(where: {
-                $0.usr == pair.propertyUSR
-            }) else {
-                denied.append(contentsOf: ExplicitCodingKeyRenamePlanning.denialDecisions(
-                    pair: pair,
-                    groupsByUSR: groupsByUSR,
-                    reasons: ["paired stored property was not eligible for renaming"]
-                ))
+        for pair in context.explicitCodingKeyPlanning.pairTemplates {
+            guard
+                let propertyEntry = entries.first(where: {
+                    $0.usr == pair.propertyUSR
+                })
+            else {
+                denied.append(
+                    contentsOf: ExplicitCodingKeyRenamePlanning.denialDecisions(
+                        pair: pair,
+                        groupsByUSR: context.groupsByUSR,
+                        reasons: ["paired stored property was not eligible for renaming"]
+                    ))
                 continue
             }
 
             var mappingFailures: Set<String> = []
             if propertyEntry.kind != "instanceProperty"
-                || propertyEntry.oldName != pair.caseTemplate.oldName {
+                || propertyEntry.oldName != pair.caseTemplate.oldName
+            {
                 mappingFailures.insert(
                     "stored property and CodingKeys case do not resolve to one source spelling"
                 )
             }
             if let existing = mappingStore.entry(for: pair.caseUSR) {
                 if existing.originalName != pair.caseTemplate.oldName
-                    || existing.kind != "enumConstant" {
+                    || existing.kind != "enumConstant"
+                {
                     mappingFailures.insert(
                         "persisted mapping metadata disagrees for \(pair.caseUSR)"
                     )
@@ -759,11 +1097,12 @@ public struct RenamePlanner {
             }
             guard mappingFailures.isEmpty else {
                 entries.removeAll { $0.usr == pair.propertyUSR }
-                denied.append(contentsOf: ExplicitCodingKeyRenamePlanning.denialDecisions(
-                    pair: pair,
-                    groupsByUSR: groupsByUSR,
-                    reasons: mappingFailures.sorted()
-                ))
+                denied.append(
+                    contentsOf: ExplicitCodingKeyRenamePlanning.denialDecisions(
+                        pair: pair,
+                        groupsByUSR: context.groupsByUSR,
+                        reasons: mappingFailures.sorted()
+                    ))
                 continue
             }
 
@@ -775,332 +1114,23 @@ public struct RenamePlanner {
                     kind: "enumConstant"
                 )
             }
-            entries.append(RenamePlanEntry(
-                usr: pair.caseUSR,
-                kind: "enumConstant",
-                oldName: pair.caseTemplate.oldName,
-                newName: propertyEntry.newName,
-                replacements: pair.caseTemplate.replacements.map {
-                    $0.replacement(newName: propertyEntry.newName)
-                }.sorted { lhs, rhs in
-                    (lhs.path, lhs.byteOffset, lhs.usr)
-                        < (rhs.path, rhs.byteOffset, rhs.usr)
-                }
-            ))
-        }
-
-        let externalLabelPlanning = ParameterExternalLabelRenamePlanning.makeResult(
-            facts: parameterExternalLabelComponentFacts,
-            groupsByUSR: groupsByUSR,
-            indexedFacts: indexedFacts,
-            parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
-            callBindingFacts: parameterCallArgumentBindingFacts,
-            callableReferenceBindingFacts: parameterCallableReferenceBindingFacts,
-            analyzer: analyzer,
-            sourceCache: sourceCache
-        )
-        let fullyPlannedExternalLabelParameterUSRs = Set(
-            externalLabelPlanning.componentTemplates.flatMap(\.namedParameterUSRs)
-        )
-        let preservedLabelLocalBindingCandidateUSRs = namedLocalBindingParameterUSRs
-            .subtracting(fullyPlannedExternalLabelParameterUSRs)
-        let preservedLabelLocalBindingPlanning = ParameterLocalBindingRenamePlanning.makeResult(
-            candidateUSRs: preservedLabelLocalBindingCandidateUSRs,
-            groupsByUSR: groupsByUSR,
-            indexedFacts: indexedFacts,
-            parameterRolesByUSR: parameterSyntaxFacts.rolesByUSR,
-            analyzer: analyzer,
-            sourceCache: sourceCache
-        )
-        for componentTemplate in externalLabelPlanning.componentTemplates {
-            guard let component = parameterExternalLabelComponentFacts.components.first(where: {
-                $0.key == componentTemplate.key
-            }) else {
-                continue
-            }
-            var mappingFailures: Set<String> = []
-            var existingNamesByOrdinal: [Int: String] = [:]
-            for ordinalTemplate in componentTemplate.ordinals {
-                let existingEntries = ordinalTemplate.parameters.compactMap {
-                    mappingStore.entry(for: $0.usr)
-                }
-                let existingNames = Set(existingEntries.map(\.obfuscatedName))
-                if existingNames.count > 1 {
-                    mappingFailures.insert(
-                        "ordinal \(ordinalTemplate.ordinal) has inconsistent persisted mappings"
-                    )
-                } else if let existingName = existingNames.first {
-                    existingNamesByOrdinal[ordinalTemplate.ordinal] = existingName
-                }
-                for parameter in ordinalTemplate.parameters {
-                    guard let existing = mappingStore.entry(for: parameter.usr) else {
-                        continue
+            entries.append(
+                RenamePlanEntry(
+                    usr: pair.caseUSR,
+                    kind: "enumConstant",
+                    oldName: pair.caseTemplate.oldName,
+                    newName: propertyEntry.newName,
+                    replacements: pair.caseTemplate.replacements.map {
+                        $0.replacement(newName: propertyEntry.newName)
+                    }.sorted { lhs, rhs in
+                        (lhs.path, lhs.byteOffset, lhs.usr)
+                            < (rhs.path, rhs.byteOffset, rhs.usr)
                     }
-                    if existing.originalName != parameter.oldName
-                        || existing.kind != "parameter" {
-                        mappingFailures.insert(
-                            "persisted mapping metadata disagrees for \(parameter.usr)"
-                        )
-                    }
-                }
-            }
-            guard mappingFailures.isEmpty else {
-                denied.append(contentsOf: ParameterExternalLabelRenamePlanning.denialDecisions(
-                    component: component,
-                    groupsByUSR: groupsByUSR,
-                    reasons: mappingFailures.sorted()
                 ))
-                continue
-            }
-
-            for ordinalTemplate in componentTemplate.ordinals {
-                let newName: String
-                if let existingName = existingNamesByOrdinal[ordinalTemplate.ordinal] {
-                    newName = existingName
-                } else {
-                    newName = nextName(for: "parameter", avoiding: reservedNames)
-                    reservedNames.insert(newName)
-                }
-                for parameter in ordinalTemplate.parameters {
-                    if mappingStore.entry(for: parameter.usr) == nil {
-                        mappingStore.record(
-                            usr: parameter.usr,
-                            originalName: parameter.oldName,
-                            obfuscatedName: newName,
-                            kind: "parameter"
-                        )
-                    }
-                    entries.append(RenamePlanEntry(
-                        usr: parameter.usr,
-                        kind: "parameter",
-                        oldName: parameter.oldName,
-                        newName: newName,
-                        replacements: parameter.replacements.map {
-                            $0.replacement(newName: newName)
-                        }.sorted { lhs, rhs in
-                            (lhs.path, lhs.byteOffset, lhs.usr)
-                                < (rhs.path, rhs.byteOffset, rhs.usr)
-                        }
-                    ))
-                }
-            }
         }
-
-        var renamedPreservedLabelLocalBindingUSRs: Set<String> = []
-        for template in preservedLabelLocalBindingPlanning.templates {
-            guard let group = groupsByUSR[template.usr] else {
-                continue
-            }
-            let newName: String
-            if let existing = mappingStore.entry(for: template.usr) {
-                guard existing.originalName == template.oldName,
-                      existing.kind == "parameter" else {
-                    denied.append(ParameterLocalBindingRenamePlanning.denialDecision(
-                        group: group,
-                        oldName: template.oldName,
-                        reasons: ["persisted mapping metadata disagrees for \(template.usr)"]
-                    ))
-                    continue
-                }
-                newName = existing.obfuscatedName
-            } else {
-                newName = nextName(for: "parameter", avoiding: reservedNames)
-                reservedNames.insert(newName)
-                mappingStore.record(
-                    usr: template.usr,
-                    originalName: template.oldName,
-                    obfuscatedName: newName,
-                    kind: "parameter"
-                )
-            }
-            entries.append(RenamePlanEntry(
-                usr: template.usr,
-                kind: "parameter",
-                oldName: template.oldName,
-                newName: newName,
-                replacements: template.replacements.map {
-                    $0.replacement(newName: newName)
-                }.sorted { lhs, rhs in
-                    (lhs.path, lhs.byteOffset, lhs.usr)
-                        < (rhs.path, rhs.byteOffset, rhs.usr)
-                }
-            ))
-            renamedPreservedLabelLocalBindingUSRs.insert(template.usr)
-        }
-        denied.append(contentsOf: externalLabelPlanning.denied.filter {
-            !renamedPreservedLabelLocalBindingUSRs.contains($0.usr)
-        })
-        denied.append(contentsOf: preservedLabelLocalBindingPlanning.denied)
-
-        let conflictGroups = Dictionary(grouping: entries.flatMap(\.replacements)) { replacement in
-            "\(replacement.path):\(replacement.byteOffset)"
-        }
-        let conflictKeys = Set(conflictGroups.compactMap { key, replacements -> String? in
-            let uniqueTargets = Set(replacements.map { "\($0.oldName)->\($0.newName)" })
-            return uniqueTargets.count > 1 ? key : nil
-        })
-        if !conflictKeys.isEmpty {
-            conflicts = conflictKeys.sorted()
-            let conflictedCoordinatedComponents = Set(entries.compactMap { entry -> String? in
-                guard entry.replacements.contains(where: {
-                    conflictKeys.contains("\($0.path):\($0.byteOffset)")
-                }) else {
-                    return nil
-                }
-                return coordinatedComponentByUSR[entry.usr]?.key
-            })
-            let conflictedExternalLabelComponents = Set(entries.compactMap {
-                entry -> String? in
-                guard entry.replacements.contains(where: {
-                    conflictKeys.contains("\($0.path):\($0.byteOffset)")
-                }) else {
-                    return nil
-                }
-                return externalLabelComponentByParameterUSR[entry.usr]?.key
-            })
-            let conflictedEnumCaseOwners = Set(entries.compactMap { entry -> String? in
-                guard entry.replacements.contains(where: {
-                    conflictKeys.contains("\($0.path):\($0.byteOffset)")
-                }) else {
-                    return nil
-                }
-                return enumCaseOwnerComponentByCaseUSR[entry.usr]?.ownerUSR
-            })
-            let directlyConflictedExplicitCodingKeyPairs = Set(entries.compactMap {
-                entry -> String? in
-                guard entry.replacements.contains(where: {
-                    conflictKeys.contains("\($0.path):\($0.byteOffset)")
-                }) else {
-                    return nil
-                }
-                return explicitCodingKeyPairByUSR[entry.usr]?.key
-            })
-            let conflictedExplicitCodingKeyPairs = directlyConflictedExplicitCodingKeyPairs
-                .union(explicitCodingKeyPlanning.pairTemplates.compactMap { pair in
-                    conflictedEnumCaseOwners.contains(pair.codingKeysEnumUSR)
-                        ? pair.key
-                        : nil
-                })
-            entries = entries.compactMap { entry in
-                if let componentKey = coordinatedComponentByUSR[entry.usr]?.key,
-                   conflictedCoordinatedComponents.contains(componentKey) {
-                    return nil
-                }
-                if let componentKey = externalLabelComponentByParameterUSR[entry.usr]?.key,
-                   conflictedExternalLabelComponents.contains(componentKey) {
-                    return nil
-                }
-                if let ownerUSR = enumCaseOwnerComponentByCaseUSR[entry.usr]?.ownerUSR,
-                   conflictedEnumCaseOwners.contains(ownerUSR) {
-                    return nil
-                }
-                if let pairKey = explicitCodingKeyPairByUSR[entry.usr]?.key,
-                   conflictedExplicitCodingKeyPairs.contains(pairKey) {
-                    return nil
-                }
-                return entry.replacements.contains {
-                    conflictKeys.contains("\($0.path):\($0.byteOffset)")
-                } ? nil : entry
-            }
-            for component in coordinatedComponents where conflictedCoordinatedComponents.contains(component.key) {
-                let reason = component.denialReason([
-                    "component contains a replacement conflict and was removed atomically"
-                ])
-                for componentGroup in groups where component.memberUSRs.contains(componentGroup.usr) {
-                    denied.append(SafetyDecision(
-                        usr: componentGroup.usr,
-                        symbolName: componentGroup.symbol.name,
-                        kind: componentGroup.symbol.kind,
-                        allowed: false,
-                        oldName: nil,
-                        reasons: [reason]
-                    ))
-                }
-            }
-            for component in parameterExternalLabelComponentFacts.components
-            where conflictedExternalLabelComponents.contains(component.key) {
-                denied.append(contentsOf: ParameterExternalLabelRenamePlanning.denialDecisions(
-                    component: component,
-                    groupsByUSR: groupsByUSR,
-                    reasons: [
-                        "component contains a replacement conflict and was removed atomically"
-                    ]
-                ))
-            }
-            for component in enumCaseSyntaxFacts.components
-            where conflictedEnumCaseOwners.contains(component.ownerUSR) {
-                denied.append(contentsOf: EnumCaseRenamePlanning.denialDecisions(
-                    component: component,
-                    groupsByUSR: groupsByUSR,
-                    reasons: [
-                        "component contains a replacement conflict and was removed atomically"
-                    ]
-                ))
-            }
-            for pair in explicitCodingKeyPlanning.pairTemplates
-            where conflictedExplicitCodingKeyPairs.contains(pair.key) {
-                denied.append(contentsOf: ExplicitCodingKeyRenamePlanning.denialDecisions(
-                    pair: pair,
-                    groupsByUSR: groupsByUSR,
-                    reasons: [
-                        "component contains a replacement conflict and was removed atomically"
-                    ]
-                ))
-            }
-        }
-
-        // A declaration can participate in more than one denied safety layer.
-        // For example, an enum case that witnesses a protocol requirement is
-        // denied both by the enum-owner component and by the coordinated
-        // protocol graph. Reports and parameter outcome summaries require one
-        // deterministic decision per USR, so preserve every reason while
-        // coalescing the duplicate records before constructing those summaries.
-        denied = Self.coalescedDenials(denied)
-
-        let supportReplacements = Self.codingKeySupportReplacements(
-            components: codingKeyComponents,
-            entries: entries,
-            indexedFacts: indexedFacts,
-            sourceCache: sourceCache
-        ) + Self.propertyWrapperSupportReplacements(
-            components: propertyWrapperComponents,
-            entries: entries
-        ) + Self.implicitRawValueSupportReplacements(
-            facts: enumCaseSyntaxFacts,
-            entries: entries
-        )
-
-        return RenamePlan(
-            entries: entries.sorted { ($0.oldName, $0.usr) < ($1.oldName, $1.usr) },
-            denied: denied.sorted { ($0.symbolName, $0.usr) < ($1.symbolName, $1.usr) },
-            conflicts: conflicts,
-            supportReplacements: supportReplacements,
-            parameterFacts: indexedFacts.parameterFactsSummary,
-            parameterSyntaxFacts: parameterSyntaxFacts.summary,
-            parameterCallSiteSyntaxFacts: parameterCallSiteSyntaxFacts.summary,
-            parameterCallArgumentBindingFacts: parameterCallArgumentBindingFacts.summary,
-            parameterCallableReferenceSyntaxFacts: parameterCallableReferenceSyntaxFacts.summary,
-            parameterCallableReferenceBindingFacts:
-                parameterCallableReferenceBindingFacts.summary,
-            parameterExternalLabelComponentFacts: parameterExternalLabelComponentFacts.summary,
-            parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary(
-                components: parameterExternalLabelComponentFacts.components,
-                entries: entries,
-                decisions: denied
-            ),
-            parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary(
-                candidateUSRs: parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs,
-                entries: entries,
-                decisions: denied,
-                groupsByUSR: groupsByUSR
-            ),
-            enumCaseComponentFacts: enumCaseComponentFacts.summary,
-            compilerRawValueFacts: compilerRawValueFacts.summary,
-            enumCaseSyntaxFacts: enumCaseSyntaxFacts.summary,
-            genericParameterSyntaxFacts: genericParameterSyntaxFacts.summary,
-            typealiasSyntaxFacts: typealiasSyntaxFacts.summary
-        )
     }
+
+    // MARK: - Support replacements
 
     private struct PropertyWrapperReplacementTemplate: Hashable {
         let path: String
@@ -1135,23 +1165,26 @@ public struct RenamePlanner {
 
             for derivedUSR in derivedUSRs.sorted() {
                 guard let derivedGroup = groupsByUSR[derivedUSR],
-                      derivedGroup.symbol.name.hasSuffix(propertyName) else {
+                    derivedGroup.symbol.name.hasSuffix(propertyName)
+                else {
                     failed = true
                     break
                 }
                 let prefix = String(derivedGroup.symbol.name.dropLast(propertyName.count))
                 guard !prefix.isEmpty,
-                      prefix.allSatisfy({ $0 == "$" || $0 == "_" }) else {
+                    prefix.allSatisfy({ $0 == "$" || $0 == "_" })
+                else {
                     failed = true
                     break
                 }
 
                 for occurrence in derivedGroup.occurrences where !occurrence.roles.contains("implicit") {
                     guard let source = sourceCache.file(for: occurrence.path),
-                          let byteOffset = source.byteOffset(
+                        let byteOffset = source.byteOffset(
                             line: occurrence.line,
                             utf8Column: occurrence.utf8Column
-                          ) else {
+                        )
+                    else {
                         failed = true
                         break
                     }
@@ -1161,16 +1194,17 @@ public struct RenamePlanner {
                         failed = true
                         break
                     }
-                    templates.insert(PropertyWrapperReplacementTemplate(
-                        path: source.path,
-                        byteOffset: byteOffset,
-                        length: oldName.utf8.count,
-                        line: occurrence.line,
-                        utf8Column: occurrence.utf8Column,
-                        oldName: oldName,
-                        derivedPrefix: prefix,
-                        derivedUSR: derivedUSR
-                    ))
+                    templates.insert(
+                        PropertyWrapperReplacementTemplate(
+                            path: source.path,
+                            byteOffset: byteOffset,
+                            length: oldName.utf8.count,
+                            line: occurrence.line,
+                            utf8Column: occurrence.utf8Column,
+                            oldName: oldName,
+                            derivedPrefix: prefix,
+                            derivedUSR: derivedUSR
+                        ))
                 }
                 if failed {
                     break
@@ -1178,10 +1212,11 @@ public struct RenamePlanner {
             }
 
             if !failed {
-                components.append(PropertyWrapperRenameComponent(
-                    propertyUSR: propertyUSR,
-                    replacements: templates
-                ))
+                components.append(
+                    PropertyWrapperRenameComponent(
+                        propertyUSR: propertyUSR,
+                        replacements: templates
+                    ))
             }
         }
         return components.sorted { $0.propertyUSR < $1.propertyUSR }
@@ -1195,9 +1230,10 @@ public struct RenamePlanner {
         return facts.components.flatMap { component in
             component.members.compactMap { member -> SourceReplacement? in
                 guard entriesByUSR[member.caseUSR] != nil,
-                      !member.hasExplicitRawValue,
-                      let literal = member.implicitRawValueLiteral,
-                      let token = member.declarationToken else {
+                    !member.hasExplicitRawValue,
+                    let literal = member.implicitRawValueLiteral,
+                    let token = member.declarationToken
+                else {
                     return nil
                 }
                 return SourceReplacement(
@@ -1227,16 +1263,17 @@ public struct RenamePlanner {
                 continue
             }
             for template in component.replacements {
-                replacements.insert(SourceReplacement(
-                    path: template.path,
-                    byteOffset: template.byteOffset,
-                    length: template.length,
-                    line: template.line,
-                    utf8Column: template.utf8Column,
-                    oldName: template.oldName,
-                    newName: template.derivedPrefix + entry.newName,
-                    usr: template.derivedUSR
-                ))
+                replacements.insert(
+                    SourceReplacement(
+                        path: template.path,
+                        byteOffset: template.byteOffset,
+                        length: template.length,
+                        line: template.line,
+                        utf8Column: template.utf8Column,
+                        oldName: template.oldName,
+                        newName: template.derivedPrefix + entry.newName,
+                        usr: template.derivedUSR
+                    ))
             }
         }
         return replacements.sorted { lhs, rhs in
@@ -1261,45 +1298,51 @@ public struct RenamePlanner {
         var components: [CodingKeyPreservationComponent] = []
         for ownerUSR in indexedFacts.serializationSensitiveOwnerUSRs.sorted() {
             guard indexedFacts.symbolsByUSR[ownerUSR]?.kind == "struct",
-                  !indexedFacts.explicitCodingKeysOwnerUSRs.contains(ownerUSR),
-                  !indexedFacts.customSerializationImplementationOwnerUSRs.contains(ownerUSR),
-                  let qualifiedOwnerUSRs = indexedFacts.qualifiedNominalOwnerUSRs(for: ownerUSR),
-                  qualifiedOwnerUSRs.allSatisfy({ usr in
+                !indexedFacts.explicitCodingKeysOwnerUSRs.contains(ownerUSR),
+                !indexedFacts.customSerializationImplementationOwnerUSRs.contains(ownerUSR),
+                let qualifiedOwnerUSRs = indexedFacts.qualifiedNominalOwnerUSRs(for: ownerUSR),
+                qualifiedOwnerUSRs.allSatisfy({ usr in
                     indexedFacts.symbolsByUSR[usr].flatMap { escapedSwiftIdentifier($0.name) } != nil
-                  }),
-                  let ownerGroup = groupsByUSR[ownerUSR] else {
+                }),
+                let ownerGroup = groupsByUSR[ownerUSR]
+            else {
                 continue
             }
 
             let propertyUSRs = indexedFacts.directStoredPropertyUSRs(of: ownerUSR).sorted()
             guard !propertyUSRs.isEmpty,
-                  propertyUSRs.allSatisfy({ usr in
+                propertyUSRs.allSatisfy({ usr in
                     groupsByUSR[usr] != nil
                         && indexedFacts.symbolsByUSR[usr].flatMap { escapedSwiftIdentifier($0.name) } != nil
-                  }) else {
+                })
+            else {
                 continue
             }
 
-            let ownerDeclarations = Dictionary(grouping: ownerGroup.occurrences.filter { occurrence in
-                (occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"))
-                    && !occurrence.roles.contains("implicit")
-                    && isPath(occurrence.path, under: obfuscationRoots)
-                    && sourceCache.file(for: occurrence.path) != nil
-            }) { occurrence in
+            let ownerDeclarations = Dictionary(
+                grouping: ownerGroup.occurrences.filter { occurrence in
+                    (occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"))
+                        && !occurrence.roles.contains("implicit")
+                        && isPath(occurrence.path, under: obfuscationRoots)
+                        && sourceCache.file(for: occurrence.path) != nil
+                }
+            ) { occurrence in
                 "\(SourcePathNormalizer.canonicalPath(occurrence.path)):\(occurrence.line):\(occurrence.utf8Column)"
             }.values.compactMap(\.first)
             guard ownerDeclarations.count == 1,
-                  let ownerDeclaration = ownerDeclarations.first else {
+                let ownerDeclaration = ownerDeclarations.first
+            else {
                 continue
             }
 
-            components.append(CodingKeyPreservationComponent(
-                ownerUSR: ownerUSR,
-                propertyUSRs: propertyUSRs,
-                qualifiedOwnerUSRs: qualifiedOwnerUSRs,
-                path: SourcePathNormalizer.canonicalPath(ownerDeclaration.path),
-                declarationLine: ownerDeclaration.line
-            ))
+            components.append(
+                CodingKeyPreservationComponent(
+                    ownerUSR: ownerUSR,
+                    propertyUSRs: propertyUSRs,
+                    qualifiedOwnerUSRs: qualifiedOwnerUSRs,
+                    path: SourcePathNormalizer.canonicalPath(ownerDeclaration.path),
+                    declarationLine: ownerDeclaration.line
+                ))
         }
         return components.sorted { lhs, rhs in
             (lhs.path, lhs.declarationLine, lhs.ownerUSR) < (rhs.path, rhs.declarationLine, rhs.ownerUSR)
@@ -1332,7 +1375,8 @@ public struct RenamePlanner {
 
             let cases = component.propertyUSRs.compactMap { usr -> (String, String)? in
                 guard let originalName = indexedFacts.symbolsByUSR[usr]?.name,
-                      let caseName = escapedSwiftIdentifier(entriesByUSR[usr]?.newName ?? originalName) else {
+                    let caseName = escapedSwiftIdentifier(entriesByUSR[usr]?.newName ?? originalName)
+                else {
                     return nil
                 }
                 return (originalName, "        case \(caseName) = \"\(originalName)\"")
@@ -1348,20 +1392,22 @@ public struct RenamePlanner {
                 "    private enum CodingKeys: String, CodingKey {",
                 cases.map(\.1).joined(separator: "\n"),
                 "    }",
-                "}"
+                "}",
             ].joined(separator: "\n")
-            chunksByPath[component.path, default: []].append((
-                ownerUSR: component.ownerUSR,
-                line: component.declarationLine,
-                text: text
-            ))
+            chunksByPath[component.path, default: []].append(
+                (
+                    ownerUSR: component.ownerUSR,
+                    line: component.declarationLine,
+                    text: text
+                ))
         }
 
         return chunksByPath.compactMap { path, chunks -> SourceReplacement? in
             guard let source = sourceCache.file(for: path),
-                  let first = chunks.sorted(by: {
+                let first = chunks.sorted(by: {
                     ($0.line, $0.ownerUSR) < ($1.line, $1.ownerUSR)
-                  }).first else {
+                }).first
+            else {
                 return nil
             }
             let sortedChunks = chunks.sorted {
@@ -1386,9 +1432,10 @@ public struct RenamePlanner {
 
     private static func escapedSwiftIdentifier(_ name: String) -> String? {
         guard !name.isEmpty,
-              !name.contains("`"),
-              !name.contains("\n"),
-              !name.contains("\r") else {
+            !name.contains("`"),
+            !name.contains("\n"),
+            !name.contains("\r")
+        else {
             return nil
         }
         return isPlainSwiftIdentifier(name) ? name : "`\(name)`"
@@ -1407,6 +1454,8 @@ public struct RenamePlanner {
         case overrideChain
     }
 
+    // MARK: - Coordinated components
+
     private struct CoordinatedRenameComponent {
         let key: String
         let memberUSRs: Set<String>
@@ -1422,9 +1471,11 @@ public struct RenamePlanner {
             let suffix = remainder > 0 ? " | plus \(remainder) more blocker(s)" : ""
             switch kind {
             case .protocolWitness:
-                return "protocol members require relation-aware witness renaming: coordinated component denied atomically (\(visible)\(suffix))"
+                return
+                    "protocol members require relation-aware witness renaming: coordinated component denied atomically (\(visible)\(suffix))"
             case .overrideChain:
-                return "override relations require coordinated renaming: coordinated override/base component denied atomically (\(visible)\(suffix))"
+                return
+                    "override relations require coordinated renaming: coordinated override/base component denied atomically (\(visible)\(suffix))"
             }
         }
     }
@@ -1433,9 +1484,10 @@ public struct RenamePlanner {
         indexedFacts: IndexedSemanticFacts,
         groupsByUSR: [String: USROccurrenceGroup]
     ) -> [CoordinatedRenameComponent] {
-        let localRequirementUSRs = Set(indexedFacts.protocolRequirementUSRs.filter { usr in
-            groupsByUSR[usr].map { !isSyntheticAccessorName($0.symbol.name) } == true
-        })
+        let localRequirementUSRs = Set(
+            indexedFacts.protocolRequirementUSRs.filter { usr in
+                groupsByUSR[usr].map { !isSyntheticAccessorName($0.symbol.name) } == true
+            })
         let componentSeeds = localRequirementUSRs.union(indexedFacts.overrideRelatedUSRs)
 
         var visited: Set<String> = []
@@ -1451,9 +1503,10 @@ public struct RenamePlanner {
                 guard members.insert(usr).inserted else {
                     continue
                 }
-                pending.append(contentsOf: (indexedFacts.overrideRelationNeighbors[usr] ?? []).filter {
-                    !members.contains($0)
-                })
+                pending.append(
+                    contentsOf: (indexedFacts.overrideRelationNeighbors[usr] ?? []).filter {
+                        !members.contains($0)
+                    })
             }
             visited.formUnion(members)
 
@@ -1472,13 +1525,14 @@ public struct RenamePlanner {
             }
 
             let protocolRequirementUSRs = members.intersection(localRequirementUSRs)
-            components.append(CoordinatedRenameComponent(
-                key: members.sorted().first ?? seedUSR,
-                memberUSRs: members,
-                protocolRequirementUSRs: protocolRequirementUSRs,
-                structuralReasons: Array(Set(structuralReasons)).sorted(),
-                kind: protocolRequirementUSRs.isEmpty ? .overrideChain : .protocolWitness
-            ))
+            components.append(
+                CoordinatedRenameComponent(
+                    key: members.sorted().first ?? seedUSR,
+                    memberUSRs: members,
+                    protocolRequirementUSRs: protocolRequirementUSRs,
+                    structuralReasons: Array(Set(structuralReasons)).sorted(),
+                    kind: protocolRequirementUSRs.isEmpty ? .overrideChain : .protocolWitness
+                ))
         }
 
         return components.sorted { $0.key < $1.key }
@@ -1493,10 +1547,12 @@ public struct RenamePlanner {
         _ decisions: [SafetyDecision]
     ) -> [SafetyDecision] {
         Dictionary(grouping: decisions, by: \.usr).values.compactMap { duplicates in
-            guard let first = duplicates.sorted(by: {
-                ($0.symbolName, $0.kind, $0.oldName ?? "")
-                    < ($1.symbolName, $1.kind, $1.oldName ?? "")
-            }).first else {
+            guard
+                let first = duplicates.sorted(by: {
+                    ($0.symbolName, $0.kind, $0.oldName ?? "")
+                        < ($1.symbolName, $1.kind, $1.oldName ?? "")
+                }).first
+            else {
                 return nil
             }
             return SafetyDecision(
@@ -1518,7 +1574,7 @@ public struct RenamePlanner {
             return false
         }
         let lexicalRoles: Set<String> = [
-            "declaration", "definition", "reference", "read", "write", "call", "dynamic", "addressOf"
+            "declaration", "definition", "reference", "read", "write", "call", "dynamic", "addressOf",
         ]
         guard lexicalRoles.isDisjoint(with: occurrence.roles) else {
             return false
@@ -1528,6 +1584,8 @@ public struct RenamePlanner {
                 && componentUSRs.contains(relation.usr)
         }
     }
+
+    // MARK: - Name generation
 
     private mutating func nextName(for symbolKind: String, avoiding reservedNames: Set<String>) -> String {
         while true {
@@ -1550,10 +1608,11 @@ public struct RenamePlanner {
             "classProperty",
             "variable",
             "parameter",
-            "enumConstant"
+            "enumConstant",
         ]
         guard lowerCamelCaseKinds.contains(symbolKind),
-              let letterIndex = name.firstIndex(where: \.isLetter) else {
+            let letterIndex = name.firstIndex(where: \.isLetter)
+        else {
             return name
         }
 
