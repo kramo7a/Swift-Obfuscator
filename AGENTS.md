@@ -149,8 +149,6 @@ regressions.
 
 Replacement application must remain byte-offset based against the exact files that were indexed. If sources change between indexing and patching, validation should fail rather than guessing.
 
-
-
 Enum-case planning is owner-component based. Derive case ownership from
 IndexStoreDB `childOf` relations and distinguish a raw type from protocol
 conformances through semantic `baseOf` symbol kinds; never hardcode concrete raw
