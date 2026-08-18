@@ -114,38 +114,38 @@ public struct IndexedSemanticFacts: Sendable {
         })
 
         for occurrence in snapshot.occurrences {
-            let isDeclaration = occurrence.roles.contains("declaration")
-                || occurrence.roles.contains("definition")
+            let isDeclaration = occurrence.hasRole(.declaration)
+                || occurrence.hasRole(.definition)
             if isDeclaration, Self.isPath(occurrence.path, underRootPaths: rootPaths) {
                 selectedDeclarationUSRs.insert(occurrence.usr)
-                if !occurrence.roles.contains("implicit") {
+                if !occurrence.hasRole(.implicit) {
                     explicitDeclarationUSRs.insert(occurrence.usr)
                 }
-                for relation in occurrence.relations where relation.roles.contains("childOf") {
+                for relation in occurrence.relations where relation.hasRole(.childOf) {
                     ownerUSRsByChild[occurrence.usr, default: []].insert(relation.usr)
                     childUSRsByOwner[relation.usr, default: []].insert(occurrence.usr)
                 }
             }
 
             if isDeclaration,
-               occurrence.symbol.kind == "parameter",
-               !occurrence.roles.contains("implicit") {
+               occurrence.symbol.isKind(.parameter),
+               !occurrence.hasRole(.implicit) {
                 let site = DeclarationLineSite(
                     path: SourcePathNormalizer.canonicalPath(occurrence.path),
                     line: occurrence.line
                 )
-                for relation in occurrence.relations where relation.roles.contains("childOf") {
+                for relation in occurrence.relations where relation.hasRole(.childOf) {
                     parameterDeclarationSitesByCallableUSR[relation.usr, default: []]
                         .insert(site)
                 }
             }
-            if occurrence.symbol.kind == "protocol" {
+            if occurrence.symbol.isKind(.protocol) {
                 let site = DeclarationLineSite(
                     path: SourcePathNormalizer.canonicalPath(occurrence.path),
                     line: occurrence.line
                 )
                 for relation in occurrence.relations
-                where relation.roles.contains("containedBy") {
+                where relation.hasRole(.containedBy) {
                     protocolUSRsByCallableAndSite[relation.usr, default: [:]][
                         site,
                         default: []
@@ -153,17 +153,17 @@ public struct IndexedSemanticFacts: Sendable {
                 }
             }
 
-            if occurrence.symbol.kind == "instanceProperty",
-               occurrence.roles.contains("definition"),
+            if occurrence.symbol.isKind(.instanceProperty),
+               occurrence.hasRole(.definition),
                Self.isPath(occurrence.path, underRootPaths: rootPaths) {
-                let owners = occurrence.relations.filter { $0.roles.contains("childOf") }
+                let owners = occurrence.relations.filter { $0.hasRole(.childOf) }
                 if owners.count == 1, let ownerUSR = owners.first?.usr {
                     let site = PropertyDeclarationSite(
                         path: SourcePathNormalizer.canonicalPath(occurrence.path),
                         line: occurrence.line,
                         ownerUSR: ownerUSR
                     )
-                    if occurrence.roles.contains("implicit") {
+                    if occurrence.hasRole(.implicit) {
                         implicitPropertyUSRsBySite[site, default: []].insert(occurrence.usr)
                     } else {
                         explicitPropertyUSRsBySite[site, default: []].insert(occurrence.usr)
@@ -172,14 +172,14 @@ public struct IndexedSemanticFacts: Sendable {
             }
 
             if Self.hasRuntimeProperty(occurrence.symbol)
-                || occurrence.relations.contains(where: { $0.roles.contains("ibTypeOf") }) {
+                || occurrence.relations.contains(where: { $0.hasRole(.ibTypeOf) }) {
                 runtimeSeeds.insert(occurrence.usr)
             }
 
-            if occurrence.roles.contains("definition"),
-               occurrence.roles.contains("implicit") {
-                for relation in occurrence.relations where relation.roles.contains("accessorOf") {
-                    guard symbolsByUSR[relation.usr]?.kind == "instanceProperty" else {
+            if occurrence.hasRole(.definition),
+               occurrence.hasRole(.implicit) {
+                for relation in occurrence.relations where relation.hasRole(.accessorOf) {
+                    guard symbolsByUSR[relation.usr]?.isKind(.instanceProperty) == true else {
                         continue
                     }
                     // A compiler-synthesized accessor definition is the semantic
@@ -190,20 +190,20 @@ public struct IndexedSemanticFacts: Sendable {
             }
 
             if occurrence.usr == Self.decodableProtocolUSR {
-                for relation in occurrence.relations where relation.roles.contains("baseOf") {
+                for relation in occurrence.relations where relation.hasRole(.baseOf) {
                     decodingConformanceTargets.insert(relation.usr)
                 }
             } else if occurrence.usr == Self.encodableProtocolUSR {
-                for relation in occurrence.relations where relation.roles.contains("baseOf") {
+                for relation in occurrence.relations where relation.hasRole(.baseOf) {
                     encodingConformanceTargets.insert(relation.usr)
                 }
             }
 
             if isDeclaration,
-               !occurrence.roles.contains("implicit"),
+               !occurrence.hasRole(.implicit),
                Self.isSerializationImplementationSymbol(occurrence.symbol),
                Self.isPath(occurrence.path, underRootPaths: rootPaths) {
-                for relation in occurrence.relations where relation.roles.contains("childOf") {
+                for relation in occurrence.relations where relation.hasRole(.childOf) {
                     serializationImplementationTargetsByCallableUSR[
                         occurrence.usr,
                         default: []
@@ -211,7 +211,7 @@ public struct IndexedSemanticFacts: Sendable {
                 }
                 serializationImplementationNameByCallableUSR[occurrence.usr] =
                     occurrence.symbol.name
-                for relation in occurrence.relations where relation.roles.contains("overrideOf") {
+                for relation in occurrence.relations where relation.hasRole(.overrideOf) {
                     if relation.name == Self.decodingRequirementName {
                         knownDecodingWitnessUSRs.insert(occurrence.usr)
                     } else if relation.name == Self.encodingRequirementName {
@@ -220,21 +220,21 @@ public struct IndexedSemanticFacts: Sendable {
                 }
             }
 
-            for relation in occurrence.relations where relation.roles.contains("extendedBy") {
+            for relation in occurrence.relations where relation.hasRole(.extendedBy) {
                 extensionTargetUSRs[relation.usr, default: []].insert(occurrence.usr)
             }
-            if occurrence.symbol.kind == "class",
+            if occurrence.symbol.isKind(.class),
                Self.isPath(occurrence.path, underRootPaths: rootPaths) {
                 for relation in occurrence.relations
-                where relation.roles.contains("baseOf")
-                    && symbolsByUSR[relation.usr]?.kind == "class" {
+                where relation.hasRole(.baseOf)
+                    && symbolsByUSR[relation.usr]?.isKind(.class) == true {
                     nominalSubtypeUSRsByBase[occurrence.usr, default: []]
                         .insert(relation.usr)
                 }
             }
             for relation in occurrence.relations {
-                let occurrenceIsSynthetic = Self.isSyntheticAccessorName(occurrence.symbol.name)
-                let targetIsSynthetic = Self.isSyntheticAccessorName(
+                let occurrenceIsSynthetic = IndexSymbolName.isSyntheticAccessor(occurrence.symbol.name)
+                let targetIsSynthetic = IndexSymbolName.isSyntheticAccessor(
                     symbolsByUSR[relation.usr]?.name ?? relation.name
                 )
                 guard !occurrenceIsSynthetic, !targetIsSynthetic else {
@@ -243,7 +243,7 @@ public struct IndexedSemanticFacts: Sendable {
 
                 let isDispatchRelation = Self.isOverrideDispatchKind(occurrence.symbol.kind)
                     && Self.isOverrideRelation(relation)
-                if relation.roles.contains("overrideOf") || isDispatchRelation {
+                if relation.hasRole(.overrideOf) || isDispatchRelation {
                     overrideRelationNeighbors[occurrence.usr, default: []].insert(relation.usr)
                     overrideRelationNeighbors[relation.usr, default: []].insert(occurrence.usr)
                 }
@@ -257,7 +257,7 @@ public struct IndexedSemanticFacts: Sendable {
             }
         }
 
-        let localNominalKinds: Set<String> = ["class", "struct", "enum", "protocol"]
+        let localNominalKinds = IndexSymbolKind.rawValues(.class, .struct, .enum, .protocol)
         let localNominalUSRs = Set(selectedDeclarationUSRs.compactMap { usr -> String? in
             guard let symbol = symbolsByUSR[usr],
                   localNominalKinds.contains(symbol.kind) else {
@@ -266,7 +266,7 @@ public struct IndexedSemanticFacts: Sendable {
             return usr
         })
         let localProtocolUSRs = Set(localNominalUSRs.filter {
-            symbolsByUSR[$0]?.kind == "protocol"
+            symbolsByUSR[$0]?.isKind(.protocol) == true
         })
 
         let protocolRequirementUSRs = Set(selectedDeclarationUSRs.filter { usr in
@@ -274,7 +274,7 @@ public struct IndexedSemanticFacts: Sendable {
         })
 
         let selectedExtensionUSRs = selectedDeclarationUSRs.filter {
-            symbolsByUSR[$0]?.kind == "extension"
+            symbolsByUSR[$0]?.isKind(.extension) == true
         }
         let externalExtensionUSRs = Set(selectedExtensionUSRs.filter { extensionUSR in
             let targets = extensionTargetUSRs[extensionUSR] ?? []
@@ -351,7 +351,7 @@ public struct IndexedSemanticFacts: Sendable {
         let serializationSensitiveOwnerUSRs = decodingSensitiveOwnerUSRs
             .union(encodingSensitiveOwnerUSRs)
         let explicitCodingKeysEnumUSRs = Set(selectedDeclarationUSRs.filter { usr in
-            symbolsByUSR[usr]?.kind == "enum" && symbolsByUSR[usr]?.name == "CodingKeys"
+            symbolsByUSR[usr]?.isKind(.enum) == true && symbolsByUSR[usr]?.name == "CodingKeys"
         })
         let explicitCodingKeysOwnerUSRByEnumUSR = Dictionary(uniqueKeysWithValues:
             explicitCodingKeysEnumUSRs.compactMap { enumUSR -> (String, String)? in
@@ -437,7 +437,7 @@ public struct IndexedSemanticFacts: Sendable {
         self.parameterRenameComponents = parameterRenameComponents
         self.parameterFactsSummary = ParameterFactsSummary(
             explicitParameters: explicitDeclarationUSRs.count { usr in
-                symbolsByUSR[usr]?.kind == "parameter"
+                symbolsByUSR[usr]?.isKind(.parameter) == true
             },
             components: parameterRenameComponents
         )
@@ -472,7 +472,7 @@ public struct IndexedSemanticFacts: Sendable {
     }
 
     func qualifiedNominalOwnerUSRs(for ownerUSR: String) -> [String]? {
-        let nominalKinds: Set<String> = ["class", "struct", "enum", "protocol"]
+        let nominalKinds = IndexSymbolKind.rawValues(.class, .struct, .enum, .protocol)
         guard nominalKinds.contains(symbolsByUSR[ownerUSR]?.kind ?? "") else {
             return nil
         }
@@ -545,7 +545,7 @@ public struct IndexedSemanticFacts: Sendable {
         symbolsByUSR: [String: SymbolRecord],
         extensionTargetUSRs: [String: Set<String>]
     ) -> String? {
-        guard symbolsByUSR[usr]?.kind == "extension" else {
+        guard symbolsByUSR[usr]?.isKind(.extension) == true else {
             return symbolsByUSR[usr] == nil ? nil : usr
         }
         let targets = extensionTargetUSRs[usr] ?? []
@@ -556,12 +556,12 @@ public struct IndexedSemanticFacts: Sendable {
         _ usr: String,
         symbolsByUSR: [String: SymbolRecord]
     ) -> Bool {
-        usr.hasPrefix("c:") || symbolsByUSR[usr].map(isRuntimeSymbol) == true
+        IndexUSR.isObjectiveCCompatible(usr) || symbolsByUSR[usr].map(isRuntimeSymbol) == true
     }
 
     private static func isRuntimeSymbol(_ symbol: SymbolRecord) -> Bool {
         let language = symbol.language.lowercased()
-        return symbol.usr.hasPrefix("c:")
+        return IndexUSR.isObjectiveCCompatible(symbol.usr)
             || language == "objc"
             || language == "objective-c"
             || language == "c"
@@ -579,25 +579,20 @@ public struct IndexedSemanticFacts: Sendable {
     }
 
     static func isOverrideDispatchKind(_ kind: String) -> Bool {
-        let dispatchKinds: Set<String> = [
-            "constructor",
-            "instanceMethod",
-            "classMethod",
-            "staticMethod",
-            "instanceProperty",
-            "classProperty",
-            "staticProperty"
-        ]
+        let dispatchKinds = IndexSymbolKind.rawValues(
+            .constructor,
+            .instanceMethod,
+            .classMethod,
+            .staticMethod,
+            .instanceProperty,
+            .classProperty,
+            .staticProperty
+        )
         return dispatchKinds.contains(kind)
     }
 
     private static func isOverrideRelation(_ relation: RelationRecord) -> Bool {
-        relation.roles.contains("overrideOf") || relation.roles.contains("baseOf")
-    }
-
-    private static func isSyntheticAccessorName(_ name: String) -> Bool {
-        let lowercasedName = name.lowercased()
-        return lowercasedName.hasPrefix("getter:") || lowercasedName.hasPrefix("setter:")
+        relation.hasRole(.overrideOf) || relation.hasRole(.baseOf)
     }
 
     private static func isPropertyWrapperDerivedName(_ derivedName: String, from parentName: String) -> Bool {
@@ -622,8 +617,8 @@ public struct IndexedSemanticFacts: Sendable {
     private static let encodingRequirementName = "encode(to:)"
 
     private static func isSerializationImplementationSymbol(_ symbol: SymbolRecord) -> Bool {
-        (symbol.kind == "constructor" && symbol.name == decodingRequirementName)
-            || (symbol.kind == "instanceMethod" && symbol.name == encodingRequirementName)
+        (symbol.isKind(.constructor) && symbol.name == decodingRequirementName)
+            || (symbol.isKind(.instanceMethod) && symbol.name == encodingRequirementName)
     }
 
     private struct DeclarationLineSite: Hashable {

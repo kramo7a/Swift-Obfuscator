@@ -64,7 +64,7 @@ enum ExplicitCodingKeyRenamePlanning {
             let propertyUSRsByName = Dictionary(grouping:
                 indexedFacts.directStoredPropertyUSRs(of: nominalOwnerUSR).filter { propertyUSR in
                     !excludedPropertyUSRs.contains(propertyUSR)
-                        && groupsByUSR[propertyUSR]?.symbol.kind == "instanceProperty"
+                        && groupsByUSR[propertyUSR]?.symbol.isKind(.instanceProperty) == true
                 }
             ) { propertyUSR in
                 groupsByUSR[propertyUSR]?.symbol.name ?? ""
@@ -146,8 +146,8 @@ enum ExplicitCodingKeyRenamePlanning {
                 usr: usr,
                 symbolName: group?.symbol.name ?? pair.caseTemplate.oldName,
                 kind: group?.symbol.kind ?? (usr == pair.caseUSR
-                    ? "enumConstant"
-                    : "instanceProperty"),
+                    ? IndexSymbolKind.enumConstant.rawValue
+                    : IndexSymbolKind.instanceProperty.rawValue),
                 allowed: false,
                 oldName: pair.caseTemplate.oldName,
                 reasons: [

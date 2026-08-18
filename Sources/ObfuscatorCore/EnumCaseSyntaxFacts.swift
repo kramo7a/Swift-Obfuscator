@@ -242,9 +242,9 @@ public struct EnumCaseSyntaxFacts: Sendable {
                 continue
             }
             for occurrence in group.occurrences {
-                guard !occurrence.roles.contains("implicit"),
-                      !occurrence.roles.contains("declaration"),
-                      !occurrence.roles.contains("definition"),
+                guard !occurrence.hasRole(.implicit),
+                      !occurrence.hasRole(.declaration),
+                      !occurrence.hasRole(.definition),
                       Self.isPath(occurrence.path, underRootPaths: rootPaths),
                       let source = sourceCache.file(for: occurrence.path),
                       let byteOffset = source.byteOffset(
@@ -561,9 +561,9 @@ public struct EnumCaseSyntaxFacts: Sendable {
         for usr in usrs {
             guard let group = groupsByUSR[usr] else { continue }
             for occurrence in group.occurrences
-            where !occurrence.roles.contains("implicit")
-                && (occurrence.roles.contains("declaration")
-                    || occurrence.roles.contains("definition"))
+            where !occurrence.hasRole(.implicit)
+                && (occurrence.hasRole(.declaration)
+                    || occurrence.hasRole(.definition))
                 && isPath(occurrence.path, underRootPaths: rootPaths) {
                 guard let source = sourceCache.file(for: occurrence.path),
                       let byteOffset = source.byteOffset(

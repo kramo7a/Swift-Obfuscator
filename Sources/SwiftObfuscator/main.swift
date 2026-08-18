@@ -5,7 +5,7 @@ import ObfuscatorCore
 struct SwiftObfuscatorCLI {
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
-        var summary = RunSummary(command: "dry-run")
+        var summary = RunSummary(command: .dryRun)
         var printSummaryJSON = arguments.contains("--summary-json") || arguments.contains("--json")
         var output: CLIOutput?
         defer {
@@ -17,8 +17,8 @@ struct SwiftObfuscatorCLI {
             var options = try parse(arguments)
             try validateCoverageOptions(options)
             printSummaryJSON = options.printSummaryJSON
-            summary.command = options.command.rawValue
-            summary.phase = "prepare"
+            summary.command = options.command
+            summary.phase = .prepare
             options.projectRoot = options.projectRoot.standardizedFileURL
             let paths = try resolveRunPaths(for: options, fileManager: fileManager)
             try recordRunConfiguration(options: options, paths: paths, summary: &summary)
@@ -55,8 +55,8 @@ struct SwiftObfuscatorCLI {
                 summary: &summary
             ) {
             case .dumpOnly:
-                summary.status = "success"
-                summary.phase = "completed"
+                summary.status = .success
+                summary.phase = .completed
                 finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
                 return
             case .ready(let result):
@@ -112,11 +112,11 @@ struct SwiftObfuscatorCLI {
                     summary: &summary
                 )
             }
-            summary.status = "success"
-            summary.phase = "completed"
+            summary.status = .success
+            summary.phase = .completed
             finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
         } catch let error as CLIError {
-            summary.status = "failure"
+            summary.status = .failure
             summary.error = RunErrorSummary(message: error.localizedDescription)
             writeError("error: \(error.localizedDescription)", output: output)
             writeError(helpText, output: output)
@@ -124,7 +124,7 @@ struct SwiftObfuscatorCLI {
             output?.close()
             exit(1)
         } catch {
-            summary.status = "failure"
+            summary.status = .failure
             summary.error = summarize(error)
             writeError("error: \(error.localizedDescription)", output: output)
             finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
@@ -257,7 +257,7 @@ struct SwiftObfuscatorCLI {
     ) throws -> IndexedBuild {
         let indexedBuild: IndexedBuild
         if options.reuseIndex {
-            summary.phase = "validate-index-sources"
+            summary.phase = .validateIndexSources
             output.write(
                 "Reusing existing index database after validating all Swift sources...",
                 visibility: .quiet
@@ -268,7 +268,7 @@ struct SwiftObfuscatorCLI {
                     .appendingPathComponent("Index.noindex/DataStore", isDirectory: true)
             )
         } else {
-            summary.phase = "build-original"
+            summary.phase = .buildOriginal
             output.write(
                 "Building original project with xcodebuild index store...",
                 visibility: .quiet
@@ -346,7 +346,7 @@ struct SwiftObfuscatorCLI {
         )
 
         if let cachedPlan {
-            summary.phase = "load-rename-plan"
+            summary.phase = .loadRenamePlan
             summary.counters.indexedSymbols = cachedPlan.indexedSymbolCount
             summary.counters.indexedOccurrences = cachedPlan.indexedOccurrenceCount
             summary.artifacts.renamePlanCache = paths.renamePlanCachePath.path
@@ -371,7 +371,7 @@ struct SwiftObfuscatorCLI {
             guard let sourceManifest else {
                 throw CLIError.invalidArguments("Failed to validate indexed Swift sources.")
             }
-            summary.phase = "load-index-snapshot"
+            summary.phase = .loadIndexSnapshot
             snapshot = try IndexSnapshotCache.load(
                 from: paths.indexSnapshotCachePath,
                 sourceManifest: sourceManifest
@@ -382,7 +382,7 @@ struct SwiftObfuscatorCLI {
                 visibility: .quiet
             )
         } else {
-            summary.phase = "read-index"
+            summary.phase = .readIndex
             snapshot = try IndexReader(runner: runner).read(
                 storePath: indexedBuild.indexStorePath,
                 databasePath: paths.indexDatabasePath,
@@ -420,7 +420,7 @@ struct SwiftObfuscatorCLI {
                     "Failed to capture indexed Swift source manifest."
                 )
             }
-            summary.phase = "save-index-snapshot"
+            summary.phase = .saveIndexSnapshot
             try IndexSnapshotCache.save(
                 snapshot: snapshot,
                 sourceManifest: sourceManifest,
@@ -439,7 +439,7 @@ struct SwiftObfuscatorCLI {
         )
 
         if options.command == .dump || options.dumpIndex {
-            summary.phase = "dump-index"
+            summary.phase = .dumpIndex
             let dump = ReportRenderer.renderDump(snapshot: snapshot)
             let dumpPath = try output.writeArtifact(named: "index-dump.txt", contents: dump)
             summary.artifacts.indexDump = dumpPath.path
@@ -451,7 +451,7 @@ struct SwiftObfuscatorCLI {
             }
         }
 
-        summary.phase = "plan-renames"
+        summary.phase = .planRenames
         guard let sourceCache, let sourceManifest else {
             throw CLIError.invalidArguments("Failed to load indexed Swift sources.")
         }
@@ -535,7 +535,7 @@ struct SwiftObfuscatorCLI {
         output: CLIOutput,
         summary: inout RunSummary
     ) throws {
-        summary.phase = "apply"
+        summary.phase = .apply
         let replacements = plan.replacements
 
         if let obfuscatedCodeOutputDirectory {
@@ -584,7 +584,7 @@ struct SwiftObfuscatorCLI {
             return
         }
 
-        summary.phase = "verify-build"
+        summary.phase = .verifyBuild
         output.write("Verifying patched build...")
         _ = try builder.build(
             ProjectBuildOptions(

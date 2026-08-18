@@ -343,7 +343,7 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
                 blockers.insert(.relationLeavesSelectedSourceRoots)
                 details.insert("related callable has no declaration in selected roots: \(usr)")
             }
-            if usr.hasPrefix("c:") || indexedFacts.runtimeSensitiveUSRs.contains(usr) {
+            if IndexUSR.isObjectiveCCompatible(usr) || indexedFacts.runtimeSensitiveUSRs.contains(usr) {
                 blockers.insert(.objectiveCRuntimeDispatch)
                 details.insert("runtime-sensitive related callable: \(usr)")
             }
@@ -430,7 +430,7 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
         }
 
         let constructorComponents = sourceComponents.filter {
-            $0.callableKind == "constructor"
+            $0.callableKind == IndexSymbolKind.constructor.rawValue
         }
         if !constructorComponents.isEmpty {
             let coveredOwnerUSRs = Set(sourceComponents.compactMap {
@@ -490,7 +490,7 @@ public struct ParameterExternalLabelComponentFacts: Sendable {
                                     + "subscript(dynamicMember:) at ordinal \(ordinal)"
                             )
                         }
-                        if first.callableKind == "constructor",
+                        if first.callableKind == IndexSymbolKind.constructor.rawValue,
                            name == "wrappedValue" {
                             blockers.insert(.languageRequiredExternalLabel)
                             details.insert(

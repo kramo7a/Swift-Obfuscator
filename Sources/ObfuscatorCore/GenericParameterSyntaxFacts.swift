@@ -43,10 +43,10 @@ public struct GenericParameterSyntaxFacts: Sendable {
             $0.resolvingSymlinksInPath().standardizedFileURL.path
         }
         let declarations = snapshot.occurrences.filter { occurrence in
-            occurrence.symbol.kind == "typealias"
-                && !occurrence.roles.contains("implicit")
-                && (occurrence.roles.contains("declaration")
-                    || occurrence.roles.contains("definition"))
+            occurrence.symbol.isKind(.typealias)
+                && !occurrence.hasRole(.implicit)
+                && (occurrence.hasRole(.declaration)
+                    || occurrence.hasRole(.definition))
                 && Self.isPath(occurrence.path, underRootPaths: rootPaths)
         }
         let declarationsByUSR = Dictionary(grouping: declarations, by: \.usr)

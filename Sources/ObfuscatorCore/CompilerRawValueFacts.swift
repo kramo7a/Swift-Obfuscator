@@ -69,9 +69,9 @@ public struct CompilerRawValueFacts: Sendable {
             }
             let anchors = Set(group.occurrences.compactMap { occurrence
                 -> CompilerRawValueAnchor? in
-                guard !occurrence.roles.contains("implicit"),
-                      occurrence.roles.contains("declaration")
-                        || occurrence.roles.contains("definition"),
+                guard !occurrence.hasRole(.implicit),
+                      occurrence.hasRole(.declaration)
+                        || occurrence.hasRole(.definition),
                       let source = sourceCache.file(for: occurrence.path),
                       let byteOffset = source.byteOffset(
                         line: occurrence.line,

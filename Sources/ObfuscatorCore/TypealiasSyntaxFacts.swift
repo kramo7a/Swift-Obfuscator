@@ -58,10 +58,10 @@ public struct TypealiasSyntaxFacts: Sendable {
             $0.resolvingSymlinksInPath().standardizedFileURL.path
         }
         let declarations = snapshot.occurrences.filter { occurrence in
-            occurrence.symbol.kind == "typealias"
-                && !occurrence.roles.contains("implicit")
-                && (occurrence.roles.contains("declaration")
-                    || occurrence.roles.contains("definition"))
+            occurrence.symbol.isKind(.typealias)
+                && !occurrence.hasRole(.implicit)
+                && (occurrence.hasRole(.declaration)
+                    || occurrence.hasRole(.definition))
                 && Self.isPath(occurrence.path, underRootPaths: rootPaths)
         }
         let declarationsByUSR = Dictionary(grouping: declarations, by: \.usr)
@@ -133,8 +133,8 @@ public struct TypealiasSyntaxFacts: Sendable {
             var indexedOwnerUSRs: Set<String> = []
             for occurrence in declarationsByUSR[usr] ?? [] {
                 for relation in occurrence.relations
-                where relation.roles.contains("childOf")
-                    || relation.roles.contains("containedBy") {
+                where relation.hasRole(.childOf)
+                    || relation.hasRole(.containedBy) {
                     indexedOwnerUSRs.insert(relation.usr)
                 }
             }

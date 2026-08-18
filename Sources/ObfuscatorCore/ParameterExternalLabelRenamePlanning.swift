@@ -88,7 +88,7 @@ enum ParameterExternalLabelRenamePlanning {
                         failures.insert("parameter occurrence group unavailable: \(parameterUSR)")
                         continue
                     }
-                    guard group.symbol.kind == "parameter" else {
+                    guard group.symbol.isKind(.parameter) else {
                         failures.insert("component member is not a parameter: \(parameterUSR)")
                         continue
                     }

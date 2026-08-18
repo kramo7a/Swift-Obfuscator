@@ -129,10 +129,10 @@ public struct EnumCaseComponentFacts: Sendable {
             uniquingKeysWith: { first, _ in first }
         )
         let declarationOccurrences = snapshot.occurrences.filter { occurrence in
-            occurrence.symbol.kind == "enumConstant"
-                && !occurrence.roles.contains("implicit")
-                && (occurrence.roles.contains("declaration")
-                    || occurrence.roles.contains("definition"))
+            occurrence.symbol.isKind(.enumConstant)
+                && !occurrence.hasRole(.implicit)
+                && (occurrence.hasRole(.declaration)
+                    || occurrence.hasRole(.definition))
                 && Self.isPath(occurrence.path, underRootPaths: rootPaths)
         }
         let declarationsByUSR = Dictionary(grouping: declarationOccurrences, by: \.usr)
@@ -140,12 +140,12 @@ public struct EnumCaseComponentFacts: Sendable {
 
         var rawTypeUSRsByOwner: [String: Set<String>] = [:]
         var protocolUSRsByOwner: [String: Set<String>] = [:]
-        for occurrence in snapshot.occurrences where occurrence.roles.contains("baseOf") {
-            for relation in occurrence.relations where relation.roles.contains("baseOf") {
-                guard symbolsByUSR[relation.usr]?.kind == "enum" else {
+        for occurrence in snapshot.occurrences where occurrence.hasRole(.baseOf) {
+            for relation in occurrence.relations where relation.hasRole(.baseOf) {
+                guard symbolsByUSR[relation.usr]?.isKind(.enum) == true else {
                     continue
                 }
-                if occurrence.symbol.kind == "protocol" {
+                if occurrence.symbol.isKind(.protocol) {
                     protocolUSRsByOwner[relation.usr, default: []].insert(occurrence.usr)
                 } else {
                     // On an enum declaration, a semantic non-protocol `baseOf`
@@ -171,7 +171,7 @@ public struct EnumCaseComponentFacts: Sendable {
             let declarations = declarationsByUSR[caseUSR] ?? []
             let ownerUSRs = Set(declarations.flatMap { occurrence in
                 occurrence.relations.compactMap { relation in
-                    relation.roles.contains("childOf") ? relation.usr : nil
+                    relation.hasRole(.childOf) ? relation.usr : nil
                 }
             })
             guard ownerUSRs.count == 1, let ownerUSR = ownerUSRs.first else {
@@ -183,7 +183,7 @@ public struct EnumCaseComponentFacts: Sendable {
                 ))
                 continue
             }
-            guard symbolsByUSR[ownerUSR]?.kind == "enum" else {
+            guard symbolsByUSR[ownerUSR]?.isKind(.enum) == true else {
                 unresolved.append(UnresolvedEnumCaseComponentFact(
                     caseUSR: caseUSR,
                     reason: "indexed owner is not an enum"
@@ -204,7 +204,7 @@ public struct EnumCaseComponentFacts: Sendable {
                 protocolRequirementUSRs: Array(Set(
                     (allOccurrencesByUSR[caseUSR] ?? []).flatMap { occurrence in
                         occurrence.relations.compactMap { relation in
-                            relation.roles.contains("overrideOf") ? relation.usr : nil
+                            relation.hasRole(.overrideOf) ? relation.usr : nil
                         }
                     }
                 )).sorted()

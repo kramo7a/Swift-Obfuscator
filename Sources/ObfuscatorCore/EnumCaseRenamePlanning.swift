@@ -145,7 +145,7 @@ enum EnumCaseRenamePlanning {
             failures.insert("enum case occurrence group unavailable: \(member.caseUSR)")
             return (nil, failures)
         }
-        guard group.symbol.kind == "enumConstant" else {
+        guard group.symbol.isKind(.enumConstant) else {
             failures.insert("component member is not an enum case: \(member.caseUSR)")
             return (nil, failures)
         }
@@ -190,7 +190,7 @@ enum EnumCaseRenamePlanning {
         }
 
         let syntaxAnchors = Set(replacements.map { "\($0.path):\($0.byteOffset)" })
-        for occurrence in group.occurrences where !occurrence.roles.contains("implicit") {
+        for occurrence in group.occurrences where !occurrence.hasRole(.implicit) {
             guard let source = sourceCache.file(for: occurrence.path),
                   let token = source.identifierToken(
                     line: occurrence.line,
@@ -239,7 +239,7 @@ enum EnumCaseRenamePlanning {
             return SafetyDecision(
                 usr: member.caseUSR,
                 symbolName: group?.symbol.name ?? member.declarationToken?.name ?? member.caseUSR,
-                kind: group?.symbol.kind ?? "enumConstant",
+                kind: group?.symbol.kind ?? IndexSymbolKind.enumConstant.rawValue,
                 allowed: false,
                 oldName: member.declarationToken?.name,
                 reasons: [componentReason]

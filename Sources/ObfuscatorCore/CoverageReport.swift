@@ -205,10 +205,9 @@ public enum CoverageReportError: LocalizedError {
 }
 
 public enum CoverageAnalyzer {
-    public static let sourceSurfaceKinds: Set<String> = SafetyAnalyzer.defaultAllowedKinds.union([
-        "parameter",
-        "enumConstant"
-    ])
+    public static let sourceSurfaceKinds = SafetyAnalyzer.defaultAllowedKinds.union(
+        IndexSymbolKind.rawValues(.parameter, .enumConstant)
+    )
 
     public static func makeBaselineCohort(
         identifier: String,
@@ -278,8 +277,8 @@ public enum CoverageAnalyzer {
     ) -> Bool {
         group.occurrences.contains { occurrence in
             !occurrence.isSystem
-                && !occurrence.roles.contains("implicit")
-                && (occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"))
+                && !occurrence.hasRole(.implicit)
+                && (occurrence.hasRole(.declaration) || occurrence.hasRole(.definition))
                 && selectedSourceFiles.contains(SourcePathNormalizer.canonicalPath(occurrence.path))
         }
     }
@@ -394,13 +393,12 @@ public enum CoverageAnalyzer {
 
     public static func accessorParentUSRs(for group: USROccurrenceGroup) -> Set<String> {
         Set(group.occurrences.flatMap(\.relations).compactMap { relation in
-            relation.roles.contains("accessorOf") ? relation.usr : nil
+            relation.hasRole(.accessorOf) ? relation.usr : nil
         })
     }
 
     public static func isSyntheticAccessor(_ group: USROccurrenceGroup) -> Bool {
-        let name = group.symbol.name.lowercased()
-        return name.hasPrefix("getter:") || name.hasPrefix("setter:")
+        IndexSymbolName.isSyntheticAccessor(group.symbol.name)
     }
 
     public static func denialCategories(
@@ -412,16 +410,18 @@ public enum CoverageAnalyzer {
         }
 
         var categories: Set<CoverageDenialCategory> = []
-        if decision.kind == "parameter" {
+        if decision.kind == IndexSymbolKind.parameter.rawValue {
             categories.insert(.parameter)
         }
-        if decision.kind == "enumConstant" {
+        if decision.kind == IndexSymbolKind.enumConstant.rawValue {
             categories.insert(.enumCase)
         }
 
         for reason in decision.reasons {
             if reason.contains("unsupported symbol kind") {
-                categories.insert(decision.kind == "enumConstant" ? .enumCase : .unsupportedSymbolKind)
+                categories.insert(
+                    decision.kind == IndexSymbolKind.enumConstant.rawValue ? .enumCase : .unsupportedSymbolKind
+                )
             }
             if reason.contains("Objective-C-compatible USR")
                 || reason.contains("runtime-reflected or externally linked declaration")
@@ -492,7 +492,7 @@ public enum CoverageAnalyzer {
             return false
         }
         return group.occurrences.flatMap(\.relations).contains { relation in
-            relation.roles.contains("overrideOf") || relation.roles.contains("baseOf")
+            relation.hasRole(.overrideOf) || relation.hasRole(.baseOf)
         }
     }
 
@@ -515,9 +515,9 @@ public enum CoverageAnalyzer {
             let parents = accessorParentUSRs(for: group)
             total += 1
             let lowercasedName = group.symbol.name.lowercased()
-            if lowercasedName.hasPrefix("getter:") {
+            if lowercasedName.hasPrefix(IndexSymbolName.getterPrefix) {
                 getters += 1
-            } else if lowercasedName.hasPrefix("setter:") {
+            } else if lowercasedName.hasPrefix(IndexSymbolName.setterPrefix) {
                 setters += 1
             } else {
                 other += 1

@@ -120,26 +120,26 @@ extension RelationRecord {
 private extension SymbolRole {
     var names: [String] {
         var result: [String] = []
-        if contains(.declaration) { result.append("declaration") }
-        if contains(.definition) { result.append("definition") }
-        if contains(.reference) { result.append("reference") }
-        if contains(.read) { result.append("read") }
-        if contains(.write) { result.append("write") }
-        if contains(.call) { result.append("call") }
-        if contains(.dynamic) { result.append("dynamic") }
-        if contains(.addressOf) { result.append("addressOf") }
-        if contains(.implicit) { result.append("implicit") }
-        if contains(.childOf) { result.append("childOf") }
-        if contains(.baseOf) { result.append("baseOf") }
-        if contains(.overrideOf) { result.append("overrideOf") }
-        if contains(.receivedBy) { result.append("receivedBy") }
-        if contains(.calledBy) { result.append("calledBy") }
-        if contains(.extendedBy) { result.append("extendedBy") }
-        if contains(.accessorOf) { result.append("accessorOf") }
-        if contains(.containedBy) { result.append("containedBy") }
-        if contains(.ibTypeOf) { result.append("ibTypeOf") }
-        if contains(.specializationOf) { result.append("specializationOf") }
-        if contains(.canonical) { result.append("canonical") }
+        if contains(.declaration) { result.append(IndexRole.declaration.rawValue) }
+        if contains(.definition) { result.append(IndexRole.definition.rawValue) }
+        if contains(.reference) { result.append(IndexRole.reference.rawValue) }
+        if contains(.read) { result.append(IndexRole.read.rawValue) }
+        if contains(.write) { result.append(IndexRole.write.rawValue) }
+        if contains(.call) { result.append(IndexRole.call.rawValue) }
+        if contains(.dynamic) { result.append(IndexRole.dynamic.rawValue) }
+        if contains(.addressOf) { result.append(IndexRole.addressOf.rawValue) }
+        if contains(.implicit) { result.append(IndexRole.implicit.rawValue) }
+        if contains(.childOf) { result.append(IndexRole.childOf.rawValue) }
+        if contains(.baseOf) { result.append(IndexRole.baseOf.rawValue) }
+        if contains(.overrideOf) { result.append(IndexRole.overrideOf.rawValue) }
+        if contains(.receivedBy) { result.append(IndexRole.receivedBy.rawValue) }
+        if contains(.calledBy) { result.append(IndexRole.calledBy.rawValue) }
+        if contains(.extendedBy) { result.append(IndexRole.extendedBy.rawValue) }
+        if contains(.accessorOf) { result.append(IndexRole.accessorOf.rawValue) }
+        if contains(.containedBy) { result.append(IndexRole.containedBy.rawValue) }
+        if contains(.ibTypeOf) { result.append(IndexRole.ibTypeOf.rawValue) }
+        if contains(.specializationOf) { result.append(IndexRole.specializationOf.rawValue) }
+        if contains(.canonical) { result.append(IndexRole.canonical.rawValue) }
         return result
     }
 }

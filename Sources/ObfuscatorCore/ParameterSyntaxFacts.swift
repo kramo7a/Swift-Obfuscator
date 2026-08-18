@@ -319,10 +319,10 @@ public struct ParameterSyntaxFacts: Sendable {
             $0.resolvingSymlinksInPath().standardizedFileURL.path
         }
         let parameterDeclarations = snapshot.occurrences.filter { occurrence in
-            occurrence.symbol.kind == "parameter"
-                && !occurrence.roles.contains("implicit")
-                && (occurrence.roles.contains("declaration")
-                    || occurrence.roles.contains("definition"))
+            occurrence.symbol.isKind(.parameter)
+                && !occurrence.hasRole(.implicit)
+                && (occurrence.hasRole(.declaration)
+                    || occurrence.hasRole(.definition))
                 && Self.isPath(occurrence.path, underRootPaths: rootPaths)
         }
         let declarationsByUSR = Dictionary(grouping: parameterDeclarations, by: \.usr)
@@ -353,7 +353,7 @@ public struct ParameterSyntaxFacts: Sendable {
         }
 
         var symbolKindsByNominalTypeAnchor: [IndexedByteAnchor: Set<String>] = [:]
-        for occurrence in snapshot.occurrences where occurrence.roles.contains("reference") {
+        for occurrence in snapshot.occurrences where occurrence.hasRole(.reference) {
             guard let source = sourceCache.file(for: occurrence.path),
                   let byteOffset = source.byteOffset(
                     line: occurrence.line,
@@ -418,15 +418,15 @@ public struct ParameterSyntaxFacts: Sendable {
 
             let ownerUSRs = Set(declarations.flatMap { occurrence in
                 occurrence.relations.compactMap { relation in
-                    relation.roles.contains("childOf") ? relation.usr : nil
+                    relation.hasRole(.childOf) ? relation.usr : nil
                 }
             })
             let indexedOwnerUSR = ownerUSRs.count == 1 ? ownerUSRs.first : nil
             let indexedOwnerAnchors = Set(indexedOwnerUSR.flatMap { ownerUSR in
                 occurrencesByUSR[ownerUSR]?.compactMap { occurrence -> IndexedByteAnchor? in
-                    guard !occurrence.roles.contains("implicit"),
-                          occurrence.roles.contains("declaration")
-                            || occurrence.roles.contains("definition"),
+                    guard !occurrence.hasRole(.implicit),
+                          occurrence.hasRole(.declaration)
+                            || occurrence.hasRole(.definition),
                           Self.isPath(occurrence.path, underRootPaths: rootPaths),
                           let source = sourceCache.file(for: occurrence.path),
                           let byteOffset = source.byteOffset(
@@ -516,7 +516,7 @@ public struct ParameterSyntaxFacts: Sendable {
             byteOffset: token.byteRange.lowerBound
         )
         let kinds = symbolKindsByNominalTypeAnchor[anchor] ?? []
-        let nominalKinds: Set<String> = ["actor", "class", "enum", "struct"]
+        let nominalKinds = IndexSymbolKind.rawValues(.actor, .class, .enum, .struct)
         guard !kinds.isEmpty, kinds.isSubset(of: nominalKinds) else {
             return .unknown
         }

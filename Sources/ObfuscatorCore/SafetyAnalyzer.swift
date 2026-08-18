@@ -10,21 +10,21 @@ public struct SafetyDecision: Codable, Sendable {
 }
 
 public struct SafetyAnalyzer: Sendable {
-    public static let defaultAllowedKinds: Set<String> = [
-        "class",
-        "struct",
-        "enum",
-        "protocol",
-        "typealias",
-        "function",
-        "instanceMethod",
-        "staticMethod",
-        "classMethod",
-        "instanceProperty",
-        "staticProperty",
-        "classProperty",
-        "variable"
-    ]
+    public static let defaultAllowedKinds = IndexSymbolKind.rawValues(
+        .class,
+        .struct,
+        .enum,
+        .protocol,
+        .typealias,
+        .function,
+        .instanceMethod,
+        .staticMethod,
+        .classMethod,
+        .instanceProperty,
+        .staticProperty,
+        .classProperty,
+        .variable
+    )
 
     public let sourceRoot: URL
     public let obfuscationRoots: [URL]
@@ -70,10 +70,10 @@ public struct SafetyAnalyzer: Sendable {
         if group.usr.isEmpty {
             reasons.append("empty USR")
         }
-        if group.usr.hasPrefix("c:") {
+        if IndexUSR.isObjectiveCCompatible(group.usr) {
             reasons.append("Objective-C-compatible USR requires a stable runtime name")
         }
-        if isSyntheticAccessorName(group.symbol.name) {
+        if IndexSymbolName.isSyntheticAccessor(group.symbol.name) {
             reasons.append("synthetic accessor is derived from its parent declaration")
         }
         if Self.isAccessorOccurrenceGroup(group) {
@@ -82,13 +82,13 @@ public struct SafetyAnalyzer: Sendable {
         if indexedFacts.explicitCodingKeysEnumUSRs.contains(group.usr) {
             reasons.append("explicit CodingKeys type name is required for Codable semantics")
         }
-        let isSupportedLocalBindingParameter = group.symbol.kind == "parameter"
+        let isSupportedLocalBindingParameter = group.symbol.isKind(.parameter)
             && localBindingOnlyParameterUSRs.contains(group.usr)
-        let isSupportedExternalLabelParameter = group.symbol.kind == "parameter"
+        let isSupportedExternalLabelParameter = group.symbol.isKind(.parameter)
             && coordinatedExternalLabelParameterUSRs.contains(group.usr)
         let isSupportedParameter = isSupportedLocalBindingParameter
             || isSupportedExternalLabelParameter
-        let isSupportedEnumCase = group.symbol.kind == "enumConstant"
+        let isSupportedEnumCase = group.symbol.isKind(.enumConstant)
             && coordinatedEnumCaseUSRs.contains(group.usr)
         if !allowedKinds.contains(group.symbol.kind)
             && !isSupportedParameter
@@ -113,7 +113,7 @@ public struct SafetyAnalyzer: Sendable {
            !isSupportedLocalBindingParameter {
             reasons.append("extensions on external Swift or Objective-C owners are not self-contained")
         }
-        if !group.usr.hasPrefix("c:"),
+        if !IndexUSR.isObjectiveCCompatible(group.usr),
            indexedFacts.runtimeSensitiveUSRs.contains(group.usr),
            !isSupportedLocalBindingParameter {
             reasons.append("runtime-reflected or externally linked declaration according to IndexStore semantics")
@@ -146,7 +146,7 @@ public struct SafetyAnalyzer: Sendable {
             if !isUnderSourceRoot(occurrence.path) {
                 reasons.append("occurrence outside source root at \(occurrence.path):\(occurrence.line)")
             }
-            if occurrence.roles.contains("declaration") || occurrence.roles.contains("definition") {
+            if occurrence.hasRole(.declaration) || occurrence.hasRole(.definition) {
                 hasDeclarationOrDefinition = true
                 if isUnderObfuscationRoots(occurrence.path) {
                     hasSelectedDeclarationOrDefinition = true
@@ -174,7 +174,7 @@ public struct SafetyAnalyzer: Sendable {
             ) {
                 continue
             }
-            if occurrence.roles.contains("implicit") {
+            if occurrence.hasRole(.implicit) {
                 reasons.append("implicit occurrence at \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column)")
             }
             let isExternalLabelOnlyUnderscore = isSupportedExternalLabelParameter
@@ -205,11 +205,11 @@ public struct SafetyAnalyzer: Sendable {
             }
             tokenNames.insert(token.name)
 
-            if occurrence.roles.contains("declaration") || occurrence.roles.contains("definition") {
+            if occurrence.hasRole(.declaration) || occurrence.hasRole(.definition) {
                 if Self.isLanguageRequiredDeclarationName(token.name) {
                     reasons.append("language-required declaration name \(token.name)")
                 }
-                if group.symbol.kind == "class", interfaceBuilderClassNames.contains(token.name) {
+                if group.symbol.isKind(.class), interfaceBuilderClassNames.contains(token.name) {
                     reasons.append("Interface Builder resource requires stable class name \(token.name)")
                 }
                 if indexedFacts.storedPropertyUSRs.contains(group.usr),
@@ -265,26 +265,23 @@ public struct SafetyAnalyzer: Sendable {
     }
 
     private func hasUnsafeRelation(_ relation: RelationRecord, symbolKind: String) -> Bool {
-        relation.roles.contains("overrideOf")
+        relation.hasRole(.overrideOf)
             || (IndexedSemanticFacts.isOverrideDispatchKind(symbolKind)
-                && relation.roles.contains("baseOf"))
-            || relation.roles.contains("specializationOf")
-            || relation.roles.contains("ibTypeOf")
+                && relation.hasRole(.baseOf))
+            || relation.hasRole(.specializationOf)
+            || relation.hasRole(.ibTypeOf)
     }
 
     private func isSemanticOnlyCoordinatedOccurrence(
         _ occurrence: OccurrenceRecord,
         coordinatedRelatedUSRs: Set<String>
     ) -> Bool {
-        guard occurrence.roles.contains("implicit"),
+        guard occurrence.hasRole(.implicit),
               !coordinatedRelatedUSRs.isEmpty else {
             return false
         }
 
-        let lexicalRoles: Set<String> = [
-            "declaration", "definition", "reference", "read", "write", "call", "dynamic", "addressOf"
-        ]
-        guard lexicalRoles.isDisjoint(with: occurrence.roles) else {
+        guard IndexRole.lexicalRawValues.isDisjoint(with: occurrence.roles) else {
             return false
         }
 
@@ -292,7 +289,7 @@ public struct SafetyAnalyzer: Sendable {
         // token. They describe dispatch edges but are not spellings of the
         // requirement/witness identifier and therefore must never be patched.
         return occurrence.relations.contains { relation in
-            (relation.roles.contains("overrideOf") || relation.roles.contains("baseOf"))
+            (relation.hasRole(.overrideOf) || relation.hasRole(.baseOf))
                 && coordinatedRelatedUSRs.contains(relation.usr)
         }
     }
@@ -317,8 +314,8 @@ public struct SafetyAnalyzer: Sendable {
 
     static func isAccessorOccurrenceGroup(_ group: USROccurrenceGroup) -> Bool {
         group.occurrences.contains { occurrence in
-            occurrence.roles.contains("accessorOf")
-                || occurrence.relations.contains { $0.roles.contains("accessorOf") }
+            occurrence.hasRole(.accessorOf)
+                || occurrence.relations.contains { $0.hasRole(.accessorOf) }
         }
     }
 
@@ -327,16 +324,11 @@ public struct SafetyAnalyzer: Sendable {
         token: IdentifierToken,
         symbolKind: String
     ) -> Bool {
-        let nominalKinds: Set<String> = ["class", "struct", "enum", "protocol"]
+        let nominalKinds = IndexSymbolKind.rawValues(.class, .struct, .enum, .protocol)
         return nominalKinds.contains(symbolKind)
             && token.name == "Self"
-            && !occurrence.roles.contains("declaration")
-            && !occurrence.roles.contains("definition")
-    }
-
-    private func isSyntheticAccessorName(_ name: String) -> Bool {
-        let lowercasedName = name.lowercased()
-        return lowercasedName.hasPrefix("getter:") || lowercasedName.hasPrefix("setter:")
+            && !occurrence.hasRole(.declaration)
+            && !occurrence.hasRole(.definition)
     }
 
     private func declarationHasUnindexedRuntimeOrLinkageAttribute(

@@ -12,10 +12,32 @@ enum CLIError: LocalizedError {
     }
 }
 
-enum Command: String {
+enum Command: String, Codable {
     case dump
     case dryRun = "dry-run"
     case apply
+}
+
+enum RunStatus: String, Codable {
+    case running
+    case success
+    case failure
+}
+
+enum RunPhase: String, Codable {
+    case parseArguments = "parse-arguments"
+    case prepare
+    case validateIndexSources = "validate-index-sources"
+    case buildOriginal = "build-original"
+    case loadRenamePlan = "load-rename-plan"
+    case loadIndexSnapshot = "load-index-snapshot"
+    case readIndex = "read-index"
+    case saveIndexSnapshot = "save-index-snapshot"
+    case dumpIndex = "dump-index"
+    case planRenames = "plan-renames"
+    case apply
+    case verifyBuild = "verify-build"
+    case completed
 }
 
 enum OutputVerbosity: Int {
@@ -50,9 +72,9 @@ struct CLIOptions {
 }
 
 struct RunSummary: Codable {
-    var status = "running"
-    var command: String
-    var phase = "parse-arguments"
+    var status: RunStatus = .running
+    var command: Command
+    var phase: RunPhase = .parseArguments
     var projectRoot: String?
     var outputDirectory: String?
     var obfuscatedCodeOutput: String?

@@ -623,7 +623,7 @@ public struct RenamePlanner {
                 ))
         }
 
-        if group.symbol.kind == "parameter",
+        if group.symbol.isKind(.parameter),
             context.parameterSyntaxFacts.localBindingOnlyCoverageCandidateUSRs.contains(group.usr),
             let roles = context.parameterSyntaxFacts.rolesByUSR[group.usr]
         {
@@ -819,6 +819,7 @@ public struct RenamePlanner {
         denied: inout [SafetyDecision],
         reservedNames: inout Set<String>
     ) {
+        let parameterKind = IndexSymbolKind.parameter.rawValue
         let externalLabelPlanning = ParameterExternalLabelRenamePlanning.makeResult(
             facts: context.parameterExternalLabelComponentFacts,
             groupsByUSR: context.groupsByUSR,
@@ -870,7 +871,7 @@ public struct RenamePlanner {
                         continue
                     }
                     if existing.originalName != parameter.oldName
-                        || existing.kind != "parameter"
+                        || existing.kind != parameterKind
                     {
                         mappingFailures.insert(
                             "persisted mapping metadata disagrees for \(parameter.usr)"
@@ -893,7 +894,7 @@ public struct RenamePlanner {
                 if let existingName = existingNamesByOrdinal[ordinalTemplate.ordinal] {
                     newName = existingName
                 } else {
-                    newName = nextName(for: "parameter", avoiding: reservedNames)
+                    newName = nextName(for: parameterKind, avoiding: reservedNames)
                     reservedNames.insert(newName)
                 }
                 for parameter in ordinalTemplate.parameters {
@@ -902,13 +903,13 @@ public struct RenamePlanner {
                             usr: parameter.usr,
                             originalName: parameter.oldName,
                             obfuscatedName: newName,
-                            kind: "parameter"
+                            kind: parameterKind
                         )
                     }
                     entries.append(
                         RenamePlanEntry(
                             usr: parameter.usr,
-                            kind: "parameter",
+                            kind: parameterKind,
                             oldName: parameter.oldName,
                             newName: newName,
                             replacements: parameter.replacements.map {
@@ -930,7 +931,7 @@ public struct RenamePlanner {
             let newName: String
             if let existing = mappingStore.entry(for: template.usr) {
                 guard existing.originalName == template.oldName,
-                    existing.kind == "parameter"
+                    existing.kind == parameterKind
                 else {
                     denied.append(
                         ParameterLocalBindingRenamePlanning.denialDecision(
@@ -942,19 +943,19 @@ public struct RenamePlanner {
                 }
                 newName = existing.obfuscatedName
             } else {
-                newName = nextName(for: "parameter", avoiding: reservedNames)
+                newName = nextName(for: parameterKind, avoiding: reservedNames)
                 reservedNames.insert(newName)
                 mappingStore.record(
                     usr: template.usr,
                     originalName: template.oldName,
                     obfuscatedName: newName,
-                    kind: "parameter"
+                    kind: parameterKind
                 )
             }
             entries.append(
                 RenamePlanEntry(
                     usr: template.usr,
-                    kind: "parameter",
+                    kind: parameterKind,
                     oldName: template.oldName,
                     newName: newName,
                     replacements: template.replacements.map {
@@ -980,6 +981,7 @@ public struct RenamePlanner {
         denied: inout [SafetyDecision],
         reservedNames: inout Set<String>
     ) {
+        let enumCaseKind = IndexSymbolKind.enumConstant.rawValue
         let planning = EnumCaseRenamePlanning.makeResult(
             facts: context.enumCaseSyntaxFacts,
             groupsByUSR: context.groupsByUSR,
@@ -1005,7 +1007,7 @@ public struct RenamePlanner {
                 guard let existing = mappingStore.entry(for: member.usr) else {
                     continue
                 }
-                if existing.originalName != member.oldName || existing.kind != "enumConstant" {
+                if existing.originalName != member.oldName || existing.kind != enumCaseKind {
                     mappingFailures.insert(
                         "persisted mapping metadata disagrees for \(member.usr)"
                     )
@@ -1032,7 +1034,7 @@ public struct RenamePlanner {
                 if let existingName = existingNamesByUSR[member.usr] {
                     newName = existingName
                 } else {
-                    newName = nextName(for: "enumConstant", avoiding: reservedNames)
+                    newName = nextName(for: enumCaseKind, avoiding: reservedNames)
                     reservedNames.insert(newName)
                 }
                 if mappingStore.entry(for: member.usr) == nil {
@@ -1040,13 +1042,13 @@ public struct RenamePlanner {
                         usr: member.usr,
                         originalName: member.oldName,
                         obfuscatedName: newName,
-                        kind: "enumConstant"
+                        kind: enumCaseKind
                     )
                 }
                 entries.append(
                     RenamePlanEntry(
                         usr: member.usr,
-                        kind: "enumConstant",
+                        kind: enumCaseKind,
                         oldName: member.oldName,
                         newName: newName,
                         replacements: member.replacements.map {
@@ -1075,7 +1077,7 @@ public struct RenamePlanner {
             }
 
             var mappingFailures: Set<String> = []
-            if propertyEntry.kind != "instanceProperty"
+            if propertyEntry.kind != IndexSymbolKind.instanceProperty.rawValue
                 || propertyEntry.oldName != pair.caseTemplate.oldName
             {
                 mappingFailures.insert(
@@ -1084,7 +1086,7 @@ public struct RenamePlanner {
             }
             if let existing = mappingStore.entry(for: pair.caseUSR) {
                 if existing.originalName != pair.caseTemplate.oldName
-                    || existing.kind != "enumConstant"
+                    || existing.kind != enumCaseKind
                 {
                     mappingFailures.insert(
                         "persisted mapping metadata disagrees for \(pair.caseUSR)"
@@ -1111,13 +1113,13 @@ public struct RenamePlanner {
                     usr: pair.caseUSR,
                     originalName: pair.caseTemplate.oldName,
                     obfuscatedName: propertyEntry.newName,
-                    kind: "enumConstant"
+                    kind: enumCaseKind
                 )
             }
             entries.append(
                 RenamePlanEntry(
                     usr: pair.caseUSR,
-                    kind: "enumConstant",
+                    kind: enumCaseKind,
                     oldName: pair.caseTemplate.oldName,
                     newName: propertyEntry.newName,
                     replacements: pair.caseTemplate.replacements.map {
@@ -1178,7 +1180,7 @@ public struct RenamePlanner {
                     break
                 }
 
-                for occurrence in derivedGroup.occurrences where !occurrence.roles.contains("implicit") {
+                for occurrence in derivedGroup.occurrences where !occurrence.hasRole(.implicit) {
                     guard let source = sourceCache.file(for: occurrence.path),
                         let byteOffset = source.byteOffset(
                             line: occurrence.line,
@@ -1297,7 +1299,7 @@ public struct RenamePlanner {
     ) -> [CodingKeyPreservationComponent] {
         var components: [CodingKeyPreservationComponent] = []
         for ownerUSR in indexedFacts.serializationSensitiveOwnerUSRs.sorted() {
-            guard indexedFacts.symbolsByUSR[ownerUSR]?.kind == "struct",
+            guard indexedFacts.symbolsByUSR[ownerUSR]?.isKind(.struct) == true,
                 !indexedFacts.explicitCodingKeysOwnerUSRs.contains(ownerUSR),
                 !indexedFacts.customSerializationImplementationOwnerUSRs.contains(ownerUSR),
                 let qualifiedOwnerUSRs = indexedFacts.qualifiedNominalOwnerUSRs(for: ownerUSR),
@@ -1321,8 +1323,8 @@ public struct RenamePlanner {
 
             let ownerDeclarations = Dictionary(
                 grouping: ownerGroup.occurrences.filter { occurrence in
-                    (occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"))
-                        && !occurrence.roles.contains("implicit")
+                    (occurrence.hasRole(.declaration) || occurrence.hasRole(.definition))
+                        && !occurrence.hasRole(.implicit)
                         && isPath(occurrence.path, under: obfuscationRoots)
                         && sourceCache.file(for: occurrence.path) != nil
                 }
@@ -1486,7 +1488,7 @@ public struct RenamePlanner {
     ) -> [CoordinatedRenameComponent] {
         let localRequirementUSRs = Set(
             indexedFacts.protocolRequirementUSRs.filter { usr in
-                groupsByUSR[usr].map { !isSyntheticAccessorName($0.symbol.name) } == true
+                groupsByUSR[usr].map { !IndexSymbolName.isSyntheticAccessor($0.symbol.name) } == true
             })
         let componentSeeds = localRequirementUSRs.union(indexedFacts.overrideRelatedUSRs)
 
@@ -1516,7 +1518,9 @@ public struct RenamePlanner {
                     structuralReasons.append("related USR has no indexed occurrence group: \(usr)")
                     continue
                 }
-                if usr.hasPrefix("c:") || memberGroup.symbol.language.lowercased().contains("objective") {
+                if IndexUSR.isObjectiveCCompatible(usr)
+                    || memberGroup.symbol.language.lowercased().contains("objective")
+                {
                     structuralReasons.append("Objective-C requirement or witness is part of the component: \(usr)")
                 }
                 if !indexedFacts.selectedDeclarationUSRs.contains(memberGroup.usr) {
@@ -1536,11 +1540,6 @@ public struct RenamePlanner {
         }
 
         return components.sorted { $0.key < $1.key }
-    }
-
-    private static func isSyntheticAccessorName(_ name: String) -> Bool {
-        let lowercasedName = name.lowercased()
-        return lowercasedName.hasPrefix("getter:") || lowercasedName.hasPrefix("setter:")
     }
 
     private static func coalescedDenials(
@@ -1570,17 +1569,14 @@ public struct RenamePlanner {
         _ occurrence: OccurrenceRecord,
         componentUSRs: Set<String>
     ) -> Bool {
-        guard occurrence.roles.contains("implicit") else {
+        guard occurrence.hasRole(.implicit) else {
             return false
         }
-        let lexicalRoles: Set<String> = [
-            "declaration", "definition", "reference", "read", "write", "call", "dynamic", "addressOf",
-        ]
-        guard lexicalRoles.isDisjoint(with: occurrence.roles) else {
+        guard IndexRole.lexicalRawValues.isDisjoint(with: occurrence.roles) else {
             return false
         }
         return occurrence.relations.contains { relation in
-            (relation.roles.contains("overrideOf") || relation.roles.contains("baseOf"))
+            (relation.hasRole(.overrideOf) || relation.hasRole(.baseOf))
                 && componentUSRs.contains(relation.usr)
         }
     }
@@ -1598,18 +1594,18 @@ public struct RenamePlanner {
     }
 
     private static func nameWithConventionalInitialCase(_ name: String, for symbolKind: String) -> String {
-        let lowerCamelCaseKinds: Set<String> = [
-            "function",
-            "instanceMethod",
-            "staticMethod",
-            "classMethod",
-            "instanceProperty",
-            "staticProperty",
-            "classProperty",
-            "variable",
-            "parameter",
-            "enumConstant",
-        ]
+        let lowerCamelCaseKinds = IndexSymbolKind.rawValues(
+            .function,
+            .instanceMethod,
+            .staticMethod,
+            .classMethod,
+            .instanceProperty,
+            .staticProperty,
+            .classProperty,
+            .variable,
+            .parameter,
+            .enumConstant
+        )
         guard lowerCamelCaseKinds.contains(symbolKind),
             let letterIndex = name.firstIndex(where: \.isLetter)
         else {

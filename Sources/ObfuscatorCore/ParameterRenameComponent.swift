@@ -174,14 +174,14 @@ enum ParameterRenameComponentBuilder {
         var parametersByCallableUSR: [String: Set<String>] = [:]
 
         for occurrence in snapshot.occurrences {
-            guard occurrence.symbol.kind == "parameter",
-                  !occurrence.roles.contains("implicit"),
-                  occurrence.roles.contains("declaration") || occurrence.roles.contains("definition"),
+            guard occurrence.symbol.isKind(.parameter),
+                  !occurrence.hasRole(.implicit),
+                  occurrence.hasRole(.declaration) || occurrence.hasRole(.definition),
                   isPath(occurrence.path, underRootPaths: rootPaths) else {
                 continue
             }
             let callableOwners = Set(occurrence.relations.compactMap { relation -> String? in
-                guard relation.roles.contains("childOf"),
+                guard relation.hasRole(.childOf),
                       symbolsByUSR[relation.usr].flatMap(ownerCategory) != nil else {
                     return nil
                 }
@@ -208,17 +208,17 @@ enum ParameterRenameComponentBuilder {
                 }
                 let occurrences = occurrencesByUSR[parameterUSR] ?? []
                 let declarations = occurrences.filter {
-                    !$0.roles.contains("implicit")
-                        && ($0.roles.contains("declaration") || $0.roles.contains("definition"))
+                    !$0.hasRole(.implicit)
+                        && ($0.hasRole(.declaration) || $0.hasRole(.definition))
                         && isPath($0.path, underRootPaths: rootPaths)
                 }
                 guard !declarations.isEmpty else {
                     return nil
                 }
                 let references = occurrences.filter {
-                    !$0.roles.contains("implicit")
-                        && !$0.roles.contains("declaration")
-                        && !$0.roles.contains("definition")
+                    !$0.hasRole(.implicit)
+                        && !$0.hasRole(.declaration)
+                        && !$0.hasRole(.definition)
                         && isPath($0.path, underRootPaths: rootPaths)
                 }
                 return (parameter, declarations, references)
@@ -260,10 +260,10 @@ enum ParameterRenameComponentBuilder {
 
             let callableOccurrences = occurrencesByUSR[callableUSR] ?? []
             let selectedCallableOccurrences = callableOccurrences.filter {
-                !$0.roles.contains("implicit") && isPath($0.path, underRootPaths: rootPaths)
+                !$0.hasRole(.implicit) && isPath($0.path, underRootPaths: rootPaths)
             }
             let declarations = selectedCallableOccurrences.filter {
-                $0.roles.contains("declaration") || $0.roles.contains("definition")
+                $0.hasRole(.declaration) || $0.hasRole(.definition)
             }
             let declarationLocations = uniqueLocations(declarations)
             if declarationLocations.count != 1 {
@@ -271,12 +271,12 @@ enum ParameterRenameComponentBuilder {
                     "callable does not have exactly one declaration location inside selected source roots"
                 )
             }
-            let calls = selectedCallableOccurrences.filter { $0.roles.contains("call") }
+            let calls = selectedCallableOccurrences.filter { $0.hasRole(.call) }
             let functionReferences = selectedCallableOccurrences.filter {
-                $0.roles.contains("reference")
-                    && !$0.roles.contains("call")
-                    && !$0.roles.contains("declaration")
-                    && !$0.roles.contains("definition")
+                $0.hasRole(.reference)
+                    && !$0.hasRole(.call)
+                    && !$0.hasRole(.declaration)
+                    && !$0.hasRole(.definition)
             }
 
             return ParameterRenameComponent(
@@ -328,16 +328,20 @@ enum ParameterRenameComponentBuilder {
     }
 
     private static func ownerCategory(for symbol: SymbolRecord) -> ParameterOwnerCategory? {
-        let callableKinds: Set<String> = [
-            "function", "instanceMethod", "staticMethod", "classMethod", "constructor"
-        ]
+        let callableKinds = IndexSymbolKind.rawValues(
+            .function,
+            .instanceMethod,
+            .staticMethod,
+            .classMethod,
+            .constructor
+        )
         if callableKinds.contains(symbol.kind) {
             return .callable
         }
-        if symbol.kind == "enumConstant" {
+        if symbol.isKind(.enumConstant) {
             return .enumCase
         }
-        let propertyKinds: Set<String> = ["instanceProperty", "staticProperty", "classProperty"]
+        let propertyKinds = IndexSymbolKind.rawValues(.instanceProperty, .staticProperty, .classProperty)
         if propertyKinds.contains(symbol.kind), symbol.name.hasPrefix("subscript(") {
             return .subscriptDeclaration
         }
