@@ -33,7 +33,10 @@ let package = Package(
         ),
         .testTarget(
             name: "ObfuscatorCoreTests",
-            dependencies: ["ObfuscatorCore"]
+            dependencies: ["ObfuscatorCore"],
+            resources: [
+                .copy("Fixtures")
+            ]
         )
     ],
     cxxLanguageStandard: .cxx17
