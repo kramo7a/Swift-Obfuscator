@@ -5,14 +5,14 @@ import Testing
 
 // MARK: - Extensions, generics, and type relations
 
-@Test func safetyAnalyzerDeniesExtensionsOnExternalOwners() throws {
+@Test func renameEligibilityAnalyzerDeniesExtensionsOnExternalOwners() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     try copyFixture(to: file)
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-firstValue",
         name: "firstValue",
         kind: "instanceMethod",
@@ -20,7 +20,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 2,
@@ -34,13 +34,13 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache,
-        indexedFacts: IndexedSemanticFacts(externallyOwnedUSRs: [symbol.usr])
+        semanticIndex: SemanticIndex(externallyOwnedUSRs: [symbol.usr])
     )
 
-    #expect(decision.allowed == false)
+    #expect(decision.isEligible == false)
     #expect(decision.reasons.contains("extensions on external Swift or Objective-C owners are not self-contained"))
 }
 
@@ -50,7 +50,7 @@ import Testing
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let string = SymbolRecord(
+    let string = IndexSnapshot.Symbol(
         usr: "s:SS",
         name: "String",
         kind: "struct",
@@ -58,7 +58,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let externalExtension = SymbolRecord(
+    let externalExtension = IndexSnapshot.Symbol(
         usr: "s:e:FixtureStringExtension",
         name: "String",
         kind: "extension",
@@ -66,7 +66,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let framed = SymbolRecord(
+    let framed = IndexSnapshot.Symbol(
         usr: "s:SS7FixtureE6framedSSyF",
         name: "framed()",
         kind: "instanceMethod",
@@ -74,13 +74,13 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let extendedBy = RelationRecord(
+    let extendedBy = IndexSnapshot.Relation(
         usr: externalExtension.usr,
         name: externalExtension.name,
         rolesRaw: 0,
         roles: ["extendedBy"]
     )
-    let childOf = RelationRecord(
+    let childOf = IndexSnapshot.Relation(
         usr: externalExtension.usr,
         name: externalExtension.name,
         rolesRaw: 0,
@@ -122,10 +122,10 @@ import Testing
             ),
         ]
     )
-    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
-    #expect(facts.externallyOwnedUSRs.contains(externalExtension.usr))
-    #expect(facts.externallyOwnedUSRs.contains(framed.usr))
-    #expect(facts.selectedDeclarationUSRs.contains(framed.usr))
+    let analysis = SemanticIndex(snapshot: snapshot, obfuscationRoots: [directory])
+    #expect(analysis.externallyOwnedUSRs.contains(externalExtension.usr))
+    #expect(analysis.externallyOwnedUSRs.contains(framed.usr))
+    #expect(analysis.selectedDeclarationUSRs.contains(framed.usr))
 
     let beforeExecutable = directory.appendingPathComponent("Before")
     _ = try CommandRunner().run(
@@ -134,16 +134,16 @@ import Testing
     )
     _ = try CommandRunner().run(executable: beforeExecutable.path, arguments: [])
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let entry = try #require(plan.entries.first { $0.usr == framed.usr })
+    let entry = try #require(plan.renames.first { $0.usr == framed.usr })
     #expect(entry.oldName == "framed")
-    #expect(entry.replacements.count == 2)
-    #expect(!plan.entries.contains { $0.usr == externalExtension.usr })
-    #expect(!plan.entries.contains { $0.usr == string.usr })
-    #expect(plan.conflicts.isEmpty)
+    #expect(entry.edits.count == 2)
+    #expect(!plan.renames.contains { $0.usr == externalExtension.usr })
+    #expect(!plan.renames.contains { $0.usr == string.usr })
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("func \(entry.newName)()"))
     #expect(patched.contains(".\(entry.newName)()"))
@@ -157,14 +157,14 @@ import Testing
     _ = try CommandRunner().run(executable: afterExecutable.path, arguments: [])
 }
 
-@Test func safetyAnalyzerDeniesStdlibModuleExtensionOwners() throws {
+@Test func renameEligibilityAnalyzerDeniesStdlibModuleExtensionOwners() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     try copyFixture(to: file)
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-jsonData",
         name: "jsonData",
         kind: "instanceMethod",
@@ -172,7 +172,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 2,
@@ -186,24 +186,24 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache,
-        indexedFacts: IndexedSemanticFacts(externallyOwnedUSRs: [symbol.usr])
+        semanticIndex: SemanticIndex(externallyOwnedUSRs: [symbol.usr])
     )
 
-    #expect(decision.allowed == false)
+    #expect(decision.isEligible == false)
     #expect(decision.reasons.contains("extensions on external Swift or Objective-C owners are not self-contained"))
 }
 
-@Test func safetyAnalyzerAllowsExtensionsOnLocalNominalOwners() throws {
+@Test func renameEligibilityAnalyzerAllowsExtensionsOnLocalNominalOwners() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     try copyFixture(to: file)
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-helper",
         name: "helper",
         kind: "instanceMethod",
@@ -211,7 +211,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 3,
@@ -225,23 +225,23 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache
     )
 
-    #expect(decision.allowed == true)
-    #expect(decision.oldName == "helper")
+    #expect(decision.isEligible == true)
+    #expect(decision.originalName == "helper")
 }
 
-@Test func safetyAnalyzerDeniesExtensionsOnTypealiasOwners() throws {
+@Test func renameEligibilityAnalyzerDeniesExtensionsOnTypeAliasOwners() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     try copyFixture(to: file)
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-helper",
         name: "helper",
         kind: "instanceMethod",
@@ -249,7 +249,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 3,
@@ -263,24 +263,24 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache,
-        indexedFacts: IndexedSemanticFacts(externallyOwnedUSRs: [symbol.usr])
+        semanticIndex: SemanticIndex(externallyOwnedUSRs: [symbol.usr])
     )
 
-    #expect(decision.allowed == false)
+    #expect(decision.isEligible == false)
     #expect(decision.reasons.contains("extensions on external Swift or Objective-C owners are not self-contained"))
 }
 
-@Test func safetyAnalyzerDeniesGenericTypeParameters() throws {
+@Test func renameEligibilityAnalyzerDeniesGenericTypeParameters() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     let line = "struct Box<Value> { let value: Value }"
     try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-value",
         name: "Value",
         kind: "typealias",
@@ -288,7 +288,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 1,
@@ -302,13 +302,13 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache,
         genericParameterUSRs: [symbol.usr]
     )
 
-    #expect(decision.allowed == false)
+    #expect(decision.isEligible == false)
     #expect(decision.reasons.contains("generic type parameter occurrences are incomplete"))
 }
 
@@ -319,7 +319,7 @@ import Testing
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let genericParameter = SymbolRecord(
+    let genericParameter = IndexSnapshot.Symbol(
         usr: "usr-generic-value",
         name: "Value",
         kind: "typealias",
@@ -327,7 +327,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let ordinaryTypealias = SymbolRecord(
+    let ordinaryTypeAlias = IndexSnapshot.Symbol(
         usr: "usr-alias",
         name: "Alias",
         kind: "typealias",
@@ -336,11 +336,11 @@ import Testing
         properties: "[]"
     )
     func occurrence(
-        _ symbol: SymbolRecord,
+        _ symbol: IndexSnapshot.Symbol,
         line: Int,
         roles: [String]
-    ) -> OccurrenceRecord {
-        OccurrenceRecord(
+    ) -> IndexSnapshot.Occurrence {
+        IndexSnapshot.Occurrence(
             symbol: symbol,
             path: file.path,
             line: line,
@@ -356,38 +356,38 @@ import Testing
     }
     let snapshot = IndexSnapshot(
         sourceFiles: [file.path],
-        symbols: [genericParameter, ordinaryTypealias],
+        symbols: [genericParameter, ordinaryTypeAlias],
         occurrences: [
             occurrence(genericParameter, line: 1, roles: ["definition"]),
             occurrence(genericParameter, line: 2, roles: ["reference"]),
             occurrence(genericParameter, line: 3, roles: ["reference"]),
             occurrence(genericParameter, line: 4, roles: ["reference"]),
-            occurrence(ordinaryTypealias, line: 7, roles: ["definition"]),
+            occurrence(ordinaryTypeAlias, line: 7, roles: ["definition"]),
         ]
     )
 
-    let facts = GenericParameterSyntaxFacts(
+    let analysis = GenericParameterAnalysis.Index(
         snapshot: snapshot,
         sourceCache: cache,
         obfuscationRoots: [directory]
     )
-    #expect(facts.genericParameterUSRs == [genericParameter.usr])
-    #expect(facts.supportedGenericParameterUSRs == [genericParameter.usr])
-    #expect(facts.unresolvedReasonsByUSR.isEmpty)
-    #expect(facts.summary.syntaxGenericParameters == 1)
-    #expect(facts.summary.indexedGenericParameters == 1)
-    #expect(facts.summary.supportedGenericParameters == 1)
-    #expect(facts.summary.indexedOccurrences == 4)
+    #expect(analysis.genericParameterUSRs == [genericParameter.usr])
+    #expect(analysis.supportedGenericParameterUSRs == [genericParameter.usr])
+    #expect(analysis.issueReasonsByUSR.isEmpty)
+    #expect(analysis.report.syntaxGenericParameters == 1)
+    #expect(analysis.report.indexedGenericParameters == 1)
+    #expect(analysis.report.supportedGenericParameters == 1)
+    #expect(analysis.report.indexedOccurrences == 4)
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let entry = try #require(plan.entries.first { $0.usr == genericParameter.usr })
-    #expect(entry.replacements.count == 4)
-    #expect(plan.genericParameterSyntaxFacts.supportedGenericParameters == 1)
-    #expect(plan.entries.contains { $0.usr == ordinaryTypealias.usr })
-    #expect(plan.denied.allSatisfy { $0.usr != genericParameter.usr })
+    let entry = try #require(plan.renames.first { $0.usr == genericParameter.usr })
+    #expect(entry.edits.count == 4)
+    #expect(plan.genericParameterReport.supportedGenericParameters == 1)
+    #expect(plan.renames.contains { $0.usr == ordinaryTypeAlias.usr })
+    #expect(plan.rejections.allSatisfy { $0.usr != genericParameter.usr })
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("struct Box<\(entry.newName): Hashable>"))
     #expect(patched.contains("let stored: \(entry.newName)"))
@@ -395,14 +395,14 @@ import Testing
     #expect(patched.contains("let _: \(entry.newName) = input"))
 }
 
-@Test func safetyAnalyzerDeniesAccessorContextualKeywords() throws {
+@Test func renameEligibilityAnalyzerDeniesAccessorContextualKeywords() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     let line = "protocol Analyzer { var isRunning: Bool { get set } }"
     try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let getter = SymbolRecord(
+    let getter = IndexSnapshot.Symbol(
         usr: "usr-getter",
         name: "getter:isRunning",
         kind: "instanceMethod",
@@ -410,7 +410,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let getterOccurrence = OccurrenceRecord(
+    let getterOccurrence = IndexSnapshot.Occurrence(
         symbol: getter,
         path: file.path,
         line: 1,
@@ -423,18 +423,18 @@ import Testing
         symbolProvider: "swift",
         relations: []
     )
-    let getterDecision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: getter.usr, symbol: getter, occurrences: [getterOccurrence]),
+    let getterDecision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: getter.usr, symbol: getter, occurrences: [getterOccurrence]),
         sourceCache: cache
     )
 
-    #expect(getterDecision.allowed == false)
+    #expect(getterDecision.isEligible == false)
     #expect(
         getterDecision.reasons.contains {
             $0.contains("synthetic accessor is derived from its parent declaration")
         })
 
-    let setter = SymbolRecord(
+    let setter = IndexSnapshot.Symbol(
         usr: "usr-setter",
         name: "setter:isRunning",
         kind: "instanceMethod",
@@ -442,7 +442,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let setterOccurrence = OccurrenceRecord(
+    let setterOccurrence = IndexSnapshot.Occurrence(
         symbol: setter,
         path: file.path,
         line: 1,
@@ -455,12 +455,12 @@ import Testing
         symbolProvider: "swift",
         relations: []
     )
-    let setterDecision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: setter.usr, symbol: setter, occurrences: [setterOccurrence]),
+    let setterDecision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: setter.usr, symbol: setter, occurrences: [setterOccurrence]),
         sourceCache: cache
     )
 
-    #expect(setterDecision.allowed == false)
+    #expect(setterDecision.isEligible == false)
     #expect(
         setterDecision.reasons.contains {
             $0.contains("synthetic accessor is derived from its parent declaration")

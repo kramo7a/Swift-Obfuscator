@@ -5,14 +5,14 @@ import Testing
 
 // MARK: - Serialization and generated names
 
-@Test func safetyAnalyzerAllowsStoredPropertiesBecauseMemberwiseLabelsAreIndexedByPropertyUSR() throws {
+@Test func renameEligibilityAnalyzerAllowsStoredPropertiesBecauseMemberwiseLabelsAreIndexedByPropertyUSR() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     let line = "struct Sample { let count: Int }"
     try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-count",
         name: "count",
         kind: "instanceProperty",
@@ -20,7 +20,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 1,
@@ -34,12 +34,12 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache
     )
 
-    #expect(decision.allowed)
+    #expect(decision.isEligible)
     #expect(!decision.reasons.contains { $0.contains("memberwise initializer") })
 }
 
@@ -59,13 +59,13 @@ import Testing
     let cache = try SourceFileCache(paths: [sourceURL.path])
 
     func occurrence(
-        _ symbol: SymbolRecord,
+        _ symbol: IndexSnapshot.Symbol,
         line: Int,
         token: String,
         roles: [String],
-        relations: [RelationRecord] = []
-    ) -> OccurrenceRecord {
-        OccurrenceRecord(
+        relations: [IndexSnapshot.Relation] = []
+    ) -> IndexSnapshot.Occurrence {
+        IndexSnapshot.Occurrence(
             symbol: symbol,
             path: sourceURL.path,
             line: line,
@@ -103,7 +103,7 @@ import Testing
     let decodable = testSymbol("s:Se", "Decodable", .protocol)
     let encodable = testSymbol("s:SE", "Encodable", .protocol)
 
-    var occurrences: [OccurrenceRecord] = [
+    var occurrences: [IndexSnapshot.Occurrence] = [
         occurrence(envelope, line: 3, token: "Envelope", roles: ["definition", "canonical"]),
         occurrence(
             payload,
@@ -245,36 +245,36 @@ import Testing
         symbols: symbols,
         occurrences: occurrences
     )
-    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+    let semanticIndex = SemanticIndex(snapshot: snapshot, obfuscationRoots: [directory])
     #expect(
-        facts.storedPropertyUSRs == [
+        semanticIndex.storedPropertyUSRs == [
             serverName.usr, retryCount.usr, storedValue.usr, wrappedNumber.usr,
         ])
-    #expect(!facts.storedPropertyUSRs.contains(diagnosticText.usr))
-    #expect(facts.serializationSensitiveOwnerUSRs == [payload.usr])
+    #expect(!semanticIndex.storedPropertyUSRs.contains(diagnosticText.usr))
+    #expect(semanticIndex.serializationSensitiveOwnerUSRs == [payload.usr])
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    #expect(plan.conflicts.isEmpty)
-    #expect(plan.supportReplacements.count == 2)
-    #expect(plan.entries.contains { $0.usr == serverName.usr })
-    #expect(plan.entries.contains { $0.usr == retryCount.usr })
-    #expect(plan.entries.contains { $0.usr == diagnosticText.usr })
-    #expect(plan.entries.contains { $0.usr == storedValue.usr })
-    #expect(plan.entries.contains { $0.usr == wrappedNumber.usr })
-    #expect(!plan.entries.contains { $0.usr == localValue.usr })
+    #expect(plan.editConflicts.isEmpty)
+    #expect(plan.preservationEdits.count == 2)
+    #expect(plan.renames.contains { $0.usr == serverName.usr })
+    #expect(plan.renames.contains { $0.usr == retryCount.usr })
+    #expect(plan.renames.contains { $0.usr == diagnosticText.usr })
+    #expect(plan.renames.contains { $0.usr == storedValue.usr })
+    #expect(plan.renames.contains { $0.usr == wrappedNumber.usr })
+    #expect(!plan.renames.contains { $0.usr == localValue.usr })
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: sourceURL, encoding: .utf8)
-    let serverNameEntry = try #require(plan.entries.first { $0.usr == serverName.usr })
-    let retryCountEntry = try #require(plan.entries.first { $0.usr == retryCount.usr })
+    let serverNameEntry = try #require(plan.renames.first { $0.usr == serverName.usr })
+    let retryCountEntry = try #require(plan.renames.first { $0.usr == retryCount.usr })
     #expect(patched.contains("case \(serverNameEntry.newName) = \"serverName\""))
     #expect(patched.contains("case \(retryCountEntry.newName) = \"retryCount\""))
     #expect(!patched.contains("case diagnosticText"))
     #expect(patched.contains("externalLabel: 4"))
     #expect(patched.contains("externalLabel localValue"))
-    let wrappedNumberEntry = try #require(plan.entries.first { $0.usr == wrappedNumber.usr })
+    let wrappedNumberEntry = try #require(plan.renames.first { $0.usr == wrappedNumber.usr })
     #expect(patched.contains("$\(wrappedNumberEntry.newName)"))
     #expect(!patched.contains("$wrappedNumber"))
 
@@ -295,13 +295,13 @@ import Testing
     let cache = try SourceFileCache(paths: [file.path])
 
     func occurrence(
-        _ symbol: SymbolRecord,
+        _ symbol: IndexSnapshot.Symbol,
         line: Int,
         token: String,
         roles: [String],
-        relations: [RelationRecord] = []
-    ) -> OccurrenceRecord {
-        OccurrenceRecord(
+        relations: [IndexSnapshot.Relation] = []
+    ) -> IndexSnapshot.Occurrence {
+        IndexSnapshot.Occurrence(
             symbol: symbol,
             path: file.path,
             line: line,
@@ -340,7 +340,7 @@ import Testing
                 token: "value",
                 roles: ["definition", "implicit", "childOf", "accessorOf", "canonical"],
                 relations: [
-                    RelationRecord(
+                    IndexSnapshot.Relation(
                         usr: property.usr,
                         name: property.name,
                         rolesRaw: 0,
@@ -371,16 +371,16 @@ import Testing
             ),
         ]
     )
-    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
-    #expect(facts.explicitCodingKeysOwnerUSRs == [owner.usr])
+    let semanticIndex = SemanticIndex(snapshot: snapshot, obfuscationRoots: [directory])
+    #expect(semanticIndex.explicitCodingKeysOwnerUSRs == [owner.usr])
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    #expect(plan.supportReplacements.isEmpty)
-    #expect(!plan.entries.contains { $0.usr == property.usr })
+    #expect(plan.preservationEdits.isEmpty)
+    #expect(!plan.renames.contains { $0.usr == property.usr })
     #expect(
-        plan.denied.contains { decision in
+        plan.rejections.contains { decision in
             decision.usr == property.usr
                 && decision.reasons.contains("serialized stored property requires explicit key preservation")
         })
@@ -409,18 +409,18 @@ import Testing
     )
     _ = try runner.run(executable: beforeExecutable.path, arguments: [])
 
-    let snapshot = try IndexReader().read(
+    let snapshot = try IndexSnapshotReader().read(
         storePath: store,
         databasePath: database,
         sourceRoot: directory
     )
     let codingKeysUSR = try #require(
-        snapshot.groupsByUSR.first { group in
+        snapshot.occurrenceGroups.first { group in
             group.symbol.kind == "enum" && group.symbol.name == "CodingKeys"
         }
     ).usr
     let payloadUSR = try #require(
-        snapshot.groupsByUSR.first { group in
+        snapshot.occurrenceGroups.first { group in
             group.symbol.kind == "struct" && group.symbol.name == "Payload"
         }
     ).usr
@@ -428,7 +428,7 @@ import Testing
     let caseUSRsByName = Dictionary(
         uniqueKeysWithValues: try sourceNames.map { name in
             let usr = try #require(
-                snapshot.groupsByUSR.first { group in
+                snapshot.occurrenceGroups.first { group in
                     group.symbol.kind == "enumConstant"
                         && group.symbol.name == name
                         && group.occurrences.contains { occurrence in
@@ -443,7 +443,7 @@ import Testing
     let propertyUSRsByName = Dictionary(
         uniqueKeysWithValues: try sourceNames.map { name in
             let usr = try #require(
-                snapshot.groupsByUSR.first { group in
+                snapshot.occurrenceGroups.first { group in
                     group.symbol.kind == "instanceProperty"
                         && group.symbol.name == name
                         && group.occurrences.contains { occurrence in
@@ -460,19 +460,19 @@ import Testing
 
     let cache = try SourceFileCache(paths: [file.path])
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
-        generator: NameGenerator(prefix: "Key")
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
+        generator: ObfuscatedNameGenerator(prefix: "Key")
     )
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    #expect(!plan.entries.contains { $0.usr == codingKeysUSR })
+    #expect(!plan.renames.contains { $0.usr == codingKeysUSR })
     for name in sourceNames {
         let caseEntry = try #require(
-            plan.entries.first {
+            plan.renames.first {
                 $0.usr == caseUSRsByName[name]
             })
         let propertyEntry = try #require(
-            plan.entries.first {
+            plan.renames.first {
                 $0.usr == propertyUSRsByName[name]
             })
         #expect(caseEntry.oldName == name)
@@ -480,34 +480,34 @@ import Testing
         #expect(caseEntry.newName == propertyEntry.newName)
     }
     #expect(
-        plan.denied.first { $0.usr == codingKeysUSR }?.reasons.contains {
+        plan.rejections.first { $0.usr == codingKeysUSR }?.reasons.contains {
             $0.contains("explicit CodingKeys type name is required")
         } == true)
     let codingCaseComponent = try #require(
-        plan.enumCaseSyntaxFacts.components.first {
+        plan.enumCaseSyntaxReport.owners.first {
             $0.ownerUSR == codingKeysUSR
         })
     #expect(codingCaseComponent.blockers.contains(.codingKeyContract))
     let otherCaseUSR = try #require(caseUSRsByName["other"])
     #expect(
-        plan.supportReplacements.contains {
+        plan.preservationEdits.contains {
             $0.usr == "implicit-raw-value:\(otherCaseUSR)" && $0.newName == " = \"other\""
         })
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("enum CodingKeys: String, CodingKey"))
     let valueCaseEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.usr == caseUSRsByName["value"]
         })
     let otherCaseEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.usr == caseUSRsByName["other"]
         })
     let equalCaseEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.usr == caseUSRsByName["equal"]
         })
     #expect(patched.contains("case \(valueCaseEntry.newName) = \"wire_value\""))
@@ -538,13 +538,13 @@ import Testing
     let cache = try SourceFileCache(paths: [sourceURL.path])
 
     func occurrence(
-        _ symbol: SymbolRecord,
+        _ symbol: IndexSnapshot.Symbol,
         line: Int,
         token: String,
         roles: [String],
-        relations: [RelationRecord] = []
-    ) -> OccurrenceRecord {
-        OccurrenceRecord(
+        relations: [IndexSnapshot.Relation] = []
+    ) -> IndexSnapshot.Occurrence {
+        IndexSnapshot.Occurrence(
             symbol: symbol,
             path: sourceURL.path,
             line: line,
@@ -624,21 +624,21 @@ import Testing
             ),
         ]
     )
-    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
-    #expect(facts.customSerializationImplementationOwnerUSRs == [owner.usr])
+    let semanticIndex = SemanticIndex(snapshot: snapshot, obfuscationRoots: [directory])
+    #expect(semanticIndex.customSerializationImplementationOwnerUSRs == [owner.usr])
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    #expect(plan.supportReplacements.isEmpty)
-    #expect(!plan.entries.contains { $0.usr == property.usr })
+    #expect(plan.preservationEdits.isEmpty)
+    #expect(!plan.renames.contains { $0.usr == property.usr })
     #expect(
-        plan.denied.contains { decision in
+        plan.rejections.contains { decision in
             decision.usr == property.usr
                 && decision.reasons.contains("serialized stored property requires explicit key preservation")
         })
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let executable = directory.appendingPathComponent("ManualCodableSafety")
     let runner = CommandRunner(logDirectory: directory.appendingPathComponent("logs", isDirectory: true))
     _ = try runner.run(
@@ -648,7 +648,7 @@ import Testing
     _ = try runner.run(executable: executable.path, arguments: [])
 }
 
-@Test func indexedSemanticFactsRecoverMissingCodableWitnessRelationsFromCompilerSignatureFacts() throws {
+@Test func semanticIndexRecoversMissingCodableWitnessRelationsFromCompilerSignatures() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("DirectionAwareCodable.swift")
     try copyFixture(to: file)
@@ -671,7 +671,7 @@ import Testing
     let encodable = testSymbol("s:SE", "Encodable", .protocol)
     let decoder = testSymbol("s:s7DecoderP", "Decoder", .protocol)
 
-    let callableFacts: [(SymbolRecord, SymbolRecord, SymbolRecord, Int, Bool)] = [
+    let callables: [(IndexSnapshot.Symbol, IndexSnapshot.Symbol, IndexSnapshot.Symbol, Int, Bool)] = [
         (linkedDecoder, linkedParameter, linked, 2, true),
         (unlinkedDecoder, unlinkedParameter, unlinked, 5, false),
         (partialDecoder, partialParameter, partial, 8, false),
@@ -713,7 +713,7 @@ import Testing
             relations: [testRelation(partial, [.baseOf])]
         ),
     ]
-    for (callable, parameter, owner, line, hasWitnessRelation) in callableFacts {
+    for (callable, parameter, owner, line, hasWitnessRelation) in callables {
         var callableRelations = [testRelation(owner, [.childOf])]
         var callableRoles: [IndexRole] = [.definition, .childOf]
         if hasWitnessRelation {
@@ -759,17 +759,17 @@ import Testing
         ],
         occurrences: occurrences
     )
-    let facts = IndexedSemanticFacts(snapshot: snapshot, obfuscationRoots: [directory])
+    let semanticIndex = SemanticIndex(snapshot: snapshot, obfuscationRoots: [directory])
 
-    #expect(facts.decodingSensitiveOwnerUSRs == [linked.usr, unlinked.usr, partial.usr])
-    #expect(facts.encodingSensitiveOwnerUSRs == [partial.usr])
+    #expect(semanticIndex.decodingSensitiveOwnerUSRs == [linked.usr, unlinked.usr, partial.usr])
+    #expect(semanticIndex.encodingSensitiveOwnerUSRs == [partial.usr])
     #expect(
-        facts.customDecodingImplementationOwnerUSRs == [
+        semanticIndex.customDecodingImplementationOwnerUSRs == [
             linked.usr, unlinked.usr, partial.usr,
         ])
-    #expect(facts.customEncodingImplementationOwnerUSRs.isEmpty)
+    #expect(semanticIndex.customEncodingImplementationOwnerUSRs.isEmpty)
     #expect(
-        facts.customSerializationImplementationOwnerUSRs == [
+        semanticIndex.customSerializationImplementationOwnerUSRs == [
             linked.usr, unlinked.usr, partial.usr,
         ])
 }

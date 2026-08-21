@@ -9,7 +9,8 @@ import Testing
     let directory = try makeTemporaryDirectory()
     let selectedDirectory = directory.appendingPathComponent("Selected", isDirectory: true)
     let otherDirectory = directory.appendingPathComponent("Other", isDirectory: true)
-    try FileManager.default.createDirectory(at: selectedDirectory, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: selectedDirectory, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: otherDirectory, withIntermediateDirectories: true)
 
     let declarationFile = selectedDirectory.appendingPathComponent("Declaration.swift")
@@ -20,7 +21,7 @@ import Testing
     try (referenceLine + "\n").write(to: referenceFile, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [declarationFile.path, referenceFile.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-localModel",
         name: "LocalModel",
         kind: "struct",
@@ -28,7 +29,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let declaration = OccurrenceRecord(
+    let declaration = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: declarationFile.path,
         line: 1,
@@ -41,7 +42,7 @@ import Testing
         symbolProvider: "swift",
         relations: []
     )
-    let reference = OccurrenceRecord(
+    let reference = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: referenceFile.path,
         line: 1,
@@ -56,11 +57,11 @@ import Testing
     )
 
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(
+        analyzer: RenameEligibilityAnalyzer(
             sourceRoot: directory,
             obfuscationRoots: [declarationFile]
         ),
-        mappingStore: MappingStore()
+        mappingStore: RenameMappingStore()
     )
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
@@ -70,28 +71,28 @@ import Testing
         ),
         sourceCache: cache
     )
-    let entry = try #require(plan.entries.first)
+    let entry = try #require(plan.renames.first)
 
-    #expect(plan.entries.count == 1)
+    #expect(plan.renames.count == 1)
     #expect(entry.oldName == "LocalModel")
     #expect(entry.newName == "Oa")
     #expect(
-        entry.replacements.map(\.path).sorted()
+        entry.edits.map(\.path).sorted()
             == [
                 SourcePathNormalizer.canonicalPath(declarationFile.path),
                 SourcePathNormalizer.canonicalPath(referenceFile.path),
             ].sorted())
-    #expect(plan.denied.isEmpty)
+    #expect(plan.rejections.isEmpty)
 }
 
-@Test func renamePlannerCoordinatesClosedOverrideComponents() throws {
+@Test func renamePlannerCoordinatesClosedOverrideFamilies() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     try copyFixture(to: file)
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let baseSymbol = SymbolRecord(
+    let baseSymbol = IndexSnapshot.Symbol(
         usr: "usr-base-run",
         name: "run()",
         kind: "instanceMethod",
@@ -99,7 +100,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let childSymbol = SymbolRecord(
+    let childSymbol = IndexSnapshot.Symbol(
         usr: "usr-child-run",
         name: "run()",
         kind: "instanceMethod",
@@ -107,7 +108,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let baseOccurrence = OccurrenceRecord(
+    let baseOccurrence = IndexSnapshot.Occurrence(
         symbol: baseSymbol,
         path: file.path,
         line: 1,
@@ -120,7 +121,7 @@ import Testing
         symbolProvider: "swift",
         relations: []
     )
-    let childOccurrence = OccurrenceRecord(
+    let childOccurrence = IndexSnapshot.Occurrence(
         symbol: childSymbol,
         path: file.path,
         line: 2,
@@ -132,7 +133,7 @@ import Testing
         rolesDescription: "decl",
         symbolProvider: "swift",
         relations: [
-            RelationRecord(
+            IndexSnapshot.Relation(
                 usr: baseSymbol.usr,
                 name: baseSymbol.name,
                 rolesRaw: 1,
@@ -141,9 +142,9 @@ import Testing
         ]
     )
 
-    let mappingStore = MappingStore()
+    let mappingStore = RenameMappingStore()
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
         mappingStore: mappingStore
     )
     let plan = planner.makePlan(
@@ -155,31 +156,31 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(plan.conflicts.isEmpty)
-    #expect(plan.entries.count == 2)
-    #expect(plan.denied.isEmpty)
-    #expect(Set(plan.entries.map(\.oldName)) == ["run"])
-    #expect(Set(plan.entries.map(\.newName)).count == 1)
+    #expect(plan.editConflicts.isEmpty)
+    #expect(plan.renames.count == 2)
+    #expect(plan.rejections.isEmpty)
+    #expect(Set(plan.renames.map(\.oldName)) == ["run"])
+    #expect(Set(plan.renames.map(\.newName)).count == 1)
     #expect(
         Set(
             [baseSymbol, childSymbol].compactMap {
-                mappingStore.entry(for: $0.usr)?.obfuscatedName
+                mappingStore.rename(for: $0.usr)?.obfuscatedName
             }
         ).count == 1)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
-    let newName = try #require(plan.entries.first?.newName)
+    let newName = try #require(plan.renames.first?.newName)
     #expect(patched.contains("func \(newName)()"))
     #expect(patched.contains("override func \(newName)()"))
 }
 
-@Test func renamePlannerCoordinatesBaseOfOnlyOverrideComponents() throws {
+@Test func renamePlannerCoordinatesBaseOfOnlyOverrideFamilies() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("BaseOf.swift")
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
-    let base = SymbolRecord(
+    let base = IndexSnapshot.Symbol(
         usr: "usr-base-render",
         name: "render()",
         kind: "instanceMethod",
@@ -187,7 +188,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let child = SymbolRecord(
+    let child = IndexSnapshot.Symbol(
         usr: "usr-child-render",
         name: "render()",
         kind: "instanceMethod",
@@ -203,7 +204,7 @@ import Testing
             token: "render",
             roles: [.definition, .baseOf],
             relations: [
-                RelationRecord(
+                IndexSnapshot.Relation(
                     usr: child.usr,
                     name: child.name,
                     rolesRaw: 0,
@@ -213,7 +214,7 @@ import Testing
         ),
         testOccurrence(child, path: file.path, line: 2, token: "render", roles: [.definition]),
     ]
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
@@ -223,10 +224,10 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(plan.conflicts.isEmpty)
-    #expect(plan.entries.count == 2)
-    #expect(Set(plan.entries.map(\.newName)).count == 1)
-    #expect(plan.denied.isEmpty)
+    #expect(plan.editConflicts.isEmpty)
+    #expect(plan.renames.count == 2)
+    #expect(Set(plan.renames.map(\.newName)).count == 1)
+    #expect(plan.rejections.isEmpty)
 }
 
 @Test func renamePlannerRenamesNominalClassHierarchyWithoutCoordinatingTypeNames() throws {
@@ -234,7 +235,7 @@ import Testing
     let file = directory.appendingPathComponent("ClassHierarchy.swift")
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
-    let base = SymbolRecord(
+    let base = IndexSnapshot.Symbol(
         usr: "usr-base-class",
         name: "Base",
         kind: "class",
@@ -242,7 +243,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let child = SymbolRecord(
+    let child = IndexSnapshot.Symbol(
         usr: "usr-child-class",
         name: "Child",
         kind: "class",
@@ -258,7 +259,7 @@ import Testing
             token: "Base",
             roles: [.definition, .baseOf],
             relations: [
-                RelationRecord(
+                IndexSnapshot.Relation(
                     usr: child.usr,
                     name: child.name,
                     rolesRaw: 0,
@@ -269,7 +270,7 @@ import Testing
         testOccurrence(child, path: file.path, line: 2, token: "Child", roles: [.definition]),
         testOccurrence(base, path: file.path, line: 2, token: "Base", roles: [.reference]),
     ]
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
@@ -278,20 +279,20 @@ import Testing
         ),
         sourceCache: cache
     )
-    let entries = plan.entries.filter { $0.usr == base.usr || $0.usr == child.usr }
+    let entries = plan.renames.filter { $0.usr == base.usr || $0.usr == child.usr }
 
     #expect(entries.count == 2)
     #expect(Set(entries.map(\.newName)).count == 2)
-    #expect(plan.denied.allSatisfy { $0.usr != base.usr && $0.usr != child.usr })
+    #expect(plan.rejections.allSatisfy { $0.usr != base.usr && $0.usr != child.usr })
 }
 
-@Test func renamePlannerDeniesOverrideComponentThatLeavesSelectedSourceRoots() throws {
+@Test func renamePlannerDeniesOverrideFamilyThatLeavesSelectedSourceRoots() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("ExternalBase.swift")
     let line = "class Child: ExternalBase { override func run() {} }"
     try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
-    let child = SymbolRecord(
+    let child = IndexSnapshot.Symbol(
         usr: "usr-local-child-run",
         name: "run()",
         kind: "instanceMethod",
@@ -307,7 +308,7 @@ import Testing
         token: "run",
         roles: [.definition, .overrideOf],
         relations: [
-            RelationRecord(
+            IndexSnapshot.Relation(
                 usr: externalBaseUSR,
                 name: "run()",
                 rolesRaw: 0,
@@ -315,7 +316,7 @@ import Testing
             )
         ]
     )
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
@@ -325,8 +326,8 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(plan.entries.isEmpty)
-    let denial = try #require(plan.denied.first { $0.usr == child.usr })
+    #expect(plan.renames.isEmpty)
+    let denial = try #require(plan.rejections.first { $0.usr == child.usr })
     #expect(
         denial.reasons.contains { reason in
             reason.contains("coordinated override/base component denied atomically")
@@ -334,12 +335,12 @@ import Testing
         })
 }
 
-@Test func renamePlannerDeniesOverrideComponentThatReachesObjectiveCRuntimeDispatch() throws {
+@Test func renamePlannerDeniesOverrideFamilyThatReachesObjectiveCRuntimeDispatch() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("RuntimeOverride.swift")
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
-    let base = SymbolRecord(
+    let base = IndexSnapshot.Symbol(
         usr: "c:@M@Sample@objc(cs)LegacyBase(im)run",
         name: "run()",
         kind: "instanceMethod",
@@ -347,7 +348,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let child = SymbolRecord(
+    let child = IndexSnapshot.Symbol(
         usr: "s:6Sample5ChildC3runyyF",
         name: "run()",
         kind: "instanceMethod",
@@ -364,7 +365,7 @@ import Testing
             token: "run",
             roles: [.definition, .overrideOf],
             relations: [
-                RelationRecord(
+                IndexSnapshot.Relation(
                     usr: base.usr,
                     name: base.name,
                     rolesRaw: 0,
@@ -373,7 +374,7 @@ import Testing
             ]
         ),
     ]
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
@@ -383,26 +384,28 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(plan.entries.isEmpty)
-    #expect(plan.denied.count == 2)
+    #expect(plan.renames.isEmpty)
+    #expect(plan.rejections.count == 2)
     #expect(
-        plan.denied.allSatisfy { decision in
-            decision.reasons.contains { $0.contains("coordinated override/base component denied atomically") }
+        plan.rejections.allSatisfy { decision in
+            decision.reasons.contains {
+                $0.contains("coordinated override/base component denied atomically")
+            }
         })
     #expect(
-        plan.denied.contains { decision in
+        plan.rejections.contains { decision in
             decision.usr == child.usr
                 && decision.reasons.contains { $0.contains("runtime-reflected") }
         })
 }
 
-@Test func renamePlannerDistinguishesTupleAndFunctionTypealiasesByCompilerSyntax() throws {
+@Test func renamePlannerDistinguishesTupleAndFunctionTypeAliasesByCompilerSyntax() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     try copyFixture(to: file)
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
-    let owner = SymbolRecord(
+    let owner = IndexSnapshot.Symbol(
         usr: "usr-namespace",
         name: "Namespace",
         kind: "enum",
@@ -410,7 +413,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let payloadTypealias = SymbolRecord(
+    let payloadTypeAlias = IndexSnapshot.Symbol(
         usr: "usr-payload",
         name: "Payload",
         kind: "typealias",
@@ -418,7 +421,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let handlerTypealias = SymbolRecord(
+    let handlerTypeAlias = IndexSnapshot.Symbol(
         usr: "usr-handler",
         name: "Handler",
         kind: "typealias",
@@ -426,7 +429,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let ownerOccurrence = OccurrenceRecord(
+    let ownerOccurrence = IndexSnapshot.Occurrence(
         symbol: owner,
         path: file.path,
         line: 1,
@@ -439,8 +442,8 @@ import Testing
         symbolProvider: "swift",
         relations: []
     )
-    let payloadTypealiasOccurrence = OccurrenceRecord(
-        symbol: payloadTypealias,
+    let payloadTypeAliasOccurrence = IndexSnapshot.Occurrence(
+        symbol: payloadTypeAlias,
         path: file.path,
         line: 2,
         utf8Column: utf8Column(of: "Payload", in: lines[1]),
@@ -451,11 +454,12 @@ import Testing
         rolesDescription: "decl",
         symbolProvider: "swift",
         relations: [
-            RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 1, roles: ["childOf"])
+            IndexSnapshot.Relation(
+                usr: owner.usr, name: owner.name, rolesRaw: 1, roles: ["childOf"])
         ]
     )
-    let handlerTypealiasOccurrence = OccurrenceRecord(
-        symbol: handlerTypealias,
+    let handlerTypeAliasOccurrence = IndexSnapshot.Occurrence(
+        symbol: handlerTypeAlias,
         path: file.path,
         line: 3,
         utf8Column: utf8Column(of: "Handler", in: lines[2]),
@@ -466,11 +470,12 @@ import Testing
         rolesDescription: "decl",
         symbolProvider: "swift",
         relations: [
-            RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 1, roles: ["childOf"])
+            IndexSnapshot.Relation(
+                usr: owner.usr, name: owner.name, rolesRaw: 1, roles: ["childOf"])
         ]
     )
-    let handlerReference = OccurrenceRecord(
-        symbol: handlerTypealias,
+    let handlerReference = IndexSnapshot.Occurrence(
+        symbol: handlerTypeAlias,
         path: file.path,
         line: 7,
         utf8Column: utf8Column(of: "Handler", in: lines[6]),
@@ -484,34 +489,37 @@ import Testing
     )
 
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
-        mappingStore: MappingStore()
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
+        mappingStore: RenameMappingStore()
     )
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
-            symbols: [owner, payloadTypealias, handlerTypealias],
+            symbols: [owner, payloadTypeAlias, handlerTypeAlias],
             occurrences: [
                 ownerOccurrence,
-                payloadTypealiasOccurrence,
-                handlerTypealiasOccurrence,
+                payloadTypeAliasOccurrence,
+                handlerTypeAliasOccurrence,
                 handlerReference,
             ]
         ),
         sourceCache: cache
     )
 
-    let handlerEntry = try #require(plan.entries.first { $0.usr == handlerTypealias.usr })
-    #expect(handlerEntry.replacements.count == 2)
-    #expect(plan.denied.count == 2)
-    #expect(plan.denied.allSatisfy { $0.reasons.contains("tuple typealias constructor occurrences are incomplete") })
-    #expect(Set(plan.denied.map(\.usr)) == [owner.usr, payloadTypealias.usr])
-    #expect(plan.typealiasSyntaxFacts.directTupleTypealiases == 1)
-    #expect(plan.typealiasSyntaxFacts.functionTypealiases == 1)
-    #expect(plan.typealiasSyntaxFacts.tupleRelatedOwnerUSRs == 1)
-    #expect(plan.typealiasSyntaxFacts.unresolvedTypealiasDeclarations == 0)
+    let handlerEntry = try #require(plan.renames.first { $0.usr == handlerTypeAlias.usr })
+    #expect(handlerEntry.edits.count == 2)
+    #expect(plan.rejections.count == 2)
+    #expect(
+        plan.rejections.allSatisfy {
+            $0.reasons.contains("tuple typealias constructor occurrences are incomplete")
+        })
+    #expect(Set(plan.rejections.map(\.usr)) == [owner.usr, payloadTypeAlias.usr])
+    #expect(plan.typeAliasSyntaxReport.directTupleTypeAliases == 1)
+    #expect(plan.typeAliasSyntaxReport.functionTypeAliases == 1)
+    #expect(plan.typeAliasSyntaxReport.tupleRelatedOwnerUSRs == 1)
+    #expect(plan.typeAliasSyntaxReport.unresolvedTypeAliasDeclarations == 0)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("typealias \(handlerEntry.newName) =\n        (Int) -> Void"))
     #expect(patched.contains("Namespace.\(handlerEntry.newName)"))
@@ -525,7 +533,8 @@ import Testing
     let directory = try makeTemporaryDirectory()
     let selectedDirectory = directory.appendingPathComponent("Selected", isDirectory: true)
     let otherDirectory = directory.appendingPathComponent("Other", isDirectory: true)
-    try FileManager.default.createDirectory(at: selectedDirectory, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: selectedDirectory, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: otherDirectory, withIntermediateDirectories: true)
 
     let selectedFile = selectedDirectory.appendingPathComponent("Reference.swift")
@@ -536,7 +545,7 @@ import Testing
     try (declarationLine + "\n").write(to: declarationFile, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [selectedFile.path, declarationFile.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-externalModel",
         name: "ExternalModel",
         kind: "struct",
@@ -544,7 +553,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let reference = OccurrenceRecord(
+    let reference = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: selectedFile.path,
         line: 1,
@@ -557,7 +566,7 @@ import Testing
         symbolProvider: "swift",
         relations: []
     )
-    let declaration = OccurrenceRecord(
+    let declaration = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: declarationFile.path,
         line: 1,
@@ -572,11 +581,11 @@ import Testing
     )
 
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(
+        analyzer: RenameEligibilityAnalyzer(
             sourceRoot: directory,
             obfuscationRoots: [selectedFile]
         ),
-        mappingStore: MappingStore()
+        mappingStore: RenameMappingStore()
     )
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
@@ -587,10 +596,10 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(plan.entries.isEmpty)
-    #expect(plan.denied.count == 1)
+    #expect(plan.renames.isEmpty)
+    #expect(plan.rejections.count == 1)
     #expect(
-        plan.denied.first?.reasons.contains {
+        plan.rejections.first?.reasons.contains {
             $0.contains("no declaration or definition occurrence inside selected source roots")
         } == true)
 }

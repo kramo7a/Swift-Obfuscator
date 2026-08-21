@@ -1,68 +1,72 @@
 import Foundation
 
-public struct CommandResult: Sendable {
-    public let executable: String
-    public let arguments: [String]
-    public let workingDirectory: String?
-    public let exitCode: Int32
-    public let stdout: String
-    public let stderr: String
-    public let stdoutLogPath: String?
-    public let stderrLogPath: String?
-
-    public var succeeded: Bool {
-        exitCode == 0
-    }
-
-    public var commandLine: String {
-        ([executable] + arguments).map(Self.shellQuoted).joined(separator: " ")
-    }
-
-    public var combinedOutput: String {
-        if stderr.isEmpty {
-            return stdout
-        }
-        if stdout.isEmpty {
-            return stderr
-        }
-        return stdout + "\n" + stderr
-    }
-
-    private static func shellQuoted(_ value: String) -> String {
-        if value.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.init(charactersIn: "\"'\\$"))) == nil {
-            return value
-        }
-        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-}
-
-public enum CommandRunnerError: LocalizedError {
-    case launchFailed(String)
-    case failed(CommandResult)
-
-    public var errorDescription: String? {
-        switch self {
-        case .launchFailed(let message):
-            return message
-        case .failed(let result):
-            var lines = ["Command failed with exit code \(result.exitCode): \(result.commandLine)"]
-            if let stdoutLogPath = result.stdoutLogPath {
-                lines.append("stdout log: \(stdoutLogPath)")
-            }
-            if let stderrLogPath = result.stderrLogPath {
-                lines.append("stderr log: \(stderrLogPath)")
-            }
-            let outputTail = result.combinedOutput.tailLines(120)
-            if !outputTail.isEmpty {
-                lines.append("output tail:")
-                lines.append(outputTail)
-            }
-            return lines.joined(separator: "\n")
-        }
-    }
-}
-
 public final class CommandRunner {
+    public struct Result: Sendable {
+        public let executable: String
+        public let arguments: [String]
+        public let workingDirectory: String?
+        public let exitCode: Int32
+        public let stdout: String
+        public let stderr: String
+        public let stdoutLogPath: String?
+        public let stderrLogPath: String?
+
+        public var isSuccessful: Bool {
+            exitCode == 0
+        }
+
+        public var commandLine: String {
+            ([executable] + arguments).map(Self.shellQuoted).joined(separator: " ")
+        }
+
+        public var combinedOutput: String {
+            if stderr.isEmpty {
+                return stdout
+            }
+            if stdout.isEmpty {
+                return stderr
+            }
+            return stdout + "\n" + stderr
+        }
+
+        private static func shellQuoted(_ value: String) -> String {
+            if value.rangeOfCharacter(
+                from: CharacterSet.whitespacesAndNewlines.union(
+                    .init(charactersIn: "\"'\\$")
+                )
+            ) == nil {
+                return value
+            }
+            return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }
+    }
+
+    public enum Error: LocalizedError {
+        case launchFailed(String)
+        case failed(CommandRunner.Result)
+
+        public var errorDescription: String? {
+            switch self {
+            case .launchFailed(let message):
+                return message
+            case .failed(let result):
+                var lines = ["Command failed with exit code \(result.exitCode): \(result.commandLine)"]
+                if let stdoutLogPath = result.stdoutLogPath {
+                    lines.append("stdout log: \(stdoutLogPath)")
+                }
+                if let stderrLogPath = result.stderrLogPath {
+                    lines.append("stderr log: \(stderrLogPath)")
+                }
+                let outputTail = result.combinedOutput.tailLines(120)
+                if !outputTail.isEmpty {
+                    lines.append("output tail:")
+                    lines.append(outputTail)
+                }
+                return lines.joined(separator: "\n")
+            }
+        }
+    }
+
     private let fileManager: FileManager
     private let logDirectory: URL?
 
@@ -78,7 +82,7 @@ public final class CommandRunner {
         workingDirectory: URL? = nil,
         environment: [String: String]? = nil,
         allowNonZeroExit: Bool = false
-    ) throws -> CommandResult {
+    ) throws -> CommandRunner.Result {
         let logDirectory = logDirectory?.standardizedFileURL
         let tempDirectory = logDirectory ?? fileManager.temporaryDirectory
         if let logDirectory {
@@ -117,7 +121,7 @@ public final class CommandRunner {
         do {
             try process.run()
         } catch {
-            throw CommandRunnerError.launchFailed("Failed to launch \(executable): \(error.localizedDescription)")
+            throw CommandRunner.Error.launchFailed("Failed to launch \(executable): \(error.localizedDescription)")
         }
 
         process.waitUntilExit()
@@ -126,7 +130,7 @@ public final class CommandRunner {
 
         let stdout = String(data: try Data(contentsOf: stdoutURL), encoding: .utf8) ?? ""
         let stderr = String(data: try Data(contentsOf: stderrURL), encoding: .utf8) ?? ""
-        let result = CommandResult(
+        let result = CommandRunner.Result(
             executable: executable,
             arguments: arguments,
             workingDirectory: workingDirectory?.path,
@@ -137,8 +141,8 @@ public final class CommandRunner {
             stderrLogPath: logDirectory == nil ? nil : stderrURL.path
         )
 
-        guard result.succeeded || allowNonZeroExit else {
-            throw CommandRunnerError.failed(result)
+        guard result.isSuccessful || allowNonZeroExit else {
+            throw CommandRunner.Error.failed(result)
         }
         return result
     }

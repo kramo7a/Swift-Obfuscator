@@ -3,6 +3,29 @@ import Foundation
 public enum IndexSnapshotCache {
     public static let currentFormatVersion = 1
 
+    public enum Error: LocalizedError {
+        case unsupportedFormat(Int)
+        case sourceManifestMismatch
+        case invalidPathIndex(Int)
+        case invalidSymbolIndex(Int)
+        case missingSymbol(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .unsupportedFormat(let version):
+                return "Unsupported index snapshot cache format version: \(version)"
+            case .sourceManifestMismatch:
+                return "Index snapshot cache does not match the validated source manifest. Run again without --reuse-index."
+            case .invalidPathIndex(let index):
+                return "Index snapshot cache contains an invalid path index: \(index)"
+            case .invalidSymbolIndex(let index):
+                return "Index snapshot cache contains an invalid symbol index: \(index)"
+            case .missingSymbol(let usr):
+                return "Index snapshot cache cannot find symbol for USR: \(usr)"
+            }
+        }
+    }
+
     public static func save(
         snapshot: IndexSnapshot,
         sourceManifest: IndexSourceManifest,
@@ -24,35 +47,12 @@ public enum IndexSnapshotCache {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         let file = try PropertyListDecoder().decode(CacheFile.self, from: data)
         guard file.formatVersion == currentFormatVersion else {
-            throw IndexSnapshotCacheError.unsupportedFormat(file.formatVersion)
+            throw IndexSnapshotCache.Error.unsupportedFormat(file.formatVersion)
         }
         guard file.sourceManifest == sourceManifest else {
-            throw IndexSnapshotCacheError.sourceManifestMismatch
+            throw IndexSnapshotCache.Error.sourceManifestMismatch
         }
         return try file.snapshot()
-    }
-}
-
-public enum IndexSnapshotCacheError: LocalizedError {
-    case unsupportedFormat(Int)
-    case sourceManifestMismatch
-    case invalidPathIndex(Int)
-    case invalidSymbolIndex(Int)
-    case missingSymbol(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .unsupportedFormat(let version):
-            return "Unsupported index snapshot cache format version: \(version)"
-        case .sourceManifestMismatch:
-            return "Index snapshot cache does not match the validated source manifest. Run again without --reuse-index."
-        case .invalidPathIndex(let index):
-            return "Index snapshot cache contains an invalid path index: \(index)"
-        case .invalidSymbolIndex(let index):
-            return "Index snapshot cache contains an invalid symbol index: \(index)"
-        case .missingSymbol(let usr):
-            return "Index snapshot cache cannot find symbol for USR: \(usr)"
-        }
     }
 }
 
@@ -61,7 +61,7 @@ private struct CacheFile: Codable {
     let sourceManifest: IndexSourceManifest
     let paths: [String]
     let sourceFilePathIndices: [Int]
-    let symbols: [SymbolRecord]
+    let symbols: [IndexSnapshot.Symbol]
     let occurrences: [CachedOccurrence]
 
     init(snapshot: IndexSnapshot, sourceManifest: IndexSourceManifest) throws {
@@ -72,7 +72,7 @@ private struct CacheFile: Codable {
         let pathIndices = Dictionary(uniqueKeysWithValues: paths.enumerated().map { ($1, $0) })
         sourceFilePathIndices = try snapshot.sourceFiles.map { path in
             guard let index = pathIndices[path] else {
-                throw IndexSnapshotCacheError.invalidPathIndex(-1)
+                throw IndexSnapshotCache.Error.invalidPathIndex(-1)
             }
             return index
         }
@@ -81,10 +81,10 @@ private struct CacheFile: Codable {
         let symbolIndices = Dictionary(uniqueKeysWithValues: symbols.enumerated().map { ($1.usr, $0) })
         occurrences = try snapshot.occurrences.map { occurrence in
             guard let pathIndex = pathIndices[occurrence.path] else {
-                throw IndexSnapshotCacheError.invalidPathIndex(-1)
+                throw IndexSnapshotCache.Error.invalidPathIndex(-1)
             }
             guard let symbolIndex = symbolIndices[occurrence.usr] else {
-                throw IndexSnapshotCacheError.missingSymbol(occurrence.usr)
+                throw IndexSnapshotCache.Error.missingSymbol(occurrence.usr)
             }
             return CachedOccurrence(
                 symbolIndex: symbolIndex,
@@ -106,9 +106,9 @@ private struct CacheFile: Codable {
         let sourceFiles = try sourceFilePathIndices.map(path(at:))
         let occurrences = try occurrences.map { cached in
             guard symbols.indices.contains(cached.symbolIndex) else {
-                throw IndexSnapshotCacheError.invalidSymbolIndex(cached.symbolIndex)
+                throw IndexSnapshotCache.Error.invalidSymbolIndex(cached.symbolIndex)
             }
-            return OccurrenceRecord(
+            return IndexSnapshot.Occurrence(
                 symbol: symbols[cached.symbolIndex],
                 path: try path(at: cached.pathIndex),
                 line: cached.line,
@@ -127,7 +127,7 @@ private struct CacheFile: Codable {
 
     private func path(at index: Int) throws -> String {
         guard paths.indices.contains(index) else {
-            throw IndexSnapshotCacheError.invalidPathIndex(index)
+            throw IndexSnapshotCache.Error.invalidPathIndex(index)
         }
         return paths[index]
     }
@@ -144,5 +144,5 @@ private struct CachedOccurrence: Codable {
     let roles: [String]
     let rolesDescription: String
     let symbolProvider: String
-    let relations: [RelationRecord]
+    let relations: [IndexSnapshot.Relation]
 }

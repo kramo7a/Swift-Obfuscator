@@ -5,13 +5,13 @@ import Testing
 
 // MARK: - Language-required names
 
-@Test func safetyAnalyzerAllowsTypeStoredPropertiesWithoutMemberwiseInitializerSupport() throws {
+@Test func renameEligibilityAnalyzerAllowsTypeStoredPropertiesWithoutMemberwiseInitializerSupport() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("StoredProperties.swift")
     try copyFixture(to: file)
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
-    let analyzer = SafetyAnalyzer(sourceRoot: directory)
+    let analyzer = RenameEligibilityAnalyzer(sourceRoot: directory)
 
     func decision(
         usr: String,
@@ -20,8 +20,8 @@ import Testing
         ownerUSR: String,
         ownerName: String,
         line: Int
-    ) -> SafetyDecision {
-        let symbol = SymbolRecord(
+    ) -> RenameEligibility {
+        let symbol = IndexSnapshot.Symbol(
             usr: usr,
             name: name,
             kind: kind,
@@ -29,7 +29,7 @@ import Testing
             propertiesRaw: 0,
             properties: "[]"
         )
-        let occurrence = OccurrenceRecord(
+        let occurrence = IndexSnapshot.Occurrence(
             symbol: symbol,
             path: file.path,
             line: line,
@@ -41,11 +41,11 @@ import Testing
             rolesDescription: "decl",
             symbolProvider: "swift",
             relations: [
-                RelationRecord(usr: ownerUSR, name: ownerName, rolesRaw: 1, roles: ["childOf"])
+                IndexSnapshot.Relation(usr: ownerUSR, name: ownerName, rolesRaw: 1, roles: ["childOf"])
             ]
         )
         return analyzer.analyze(
-            group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+            group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
             sourceCache: cache
         )
     }
@@ -58,7 +58,7 @@ import Testing
         ownerName: "Settings",
         line: 1
     )
-    #expect(structTypeProperty.allowed)
+    #expect(structTypeProperty.isEligible)
     #expect(
         !structTypeProperty.reasons.contains(
             "stored property declarations require memberwise initializer label support"))
@@ -71,7 +71,7 @@ import Testing
         ownerName: "Settings",
         line: 1
     )
-    #expect(structInstanceProperty.allowed)
+    #expect(structInstanceProperty.isEligible)
     #expect(!structInstanceProperty.reasons.contains { $0.contains("memberwise initializer") })
 
     let classTypeProperty = decision(
@@ -82,20 +82,20 @@ import Testing
         ownerName: "Registry",
         line: 2
     )
-    #expect(classTypeProperty.allowed)
+    #expect(classTypeProperty.isEligible)
     #expect(
         !classTypeProperty.reasons.contains("stored property declarations require memberwise initializer label support")
     )
 }
 
-@Test func safetyAnalyzerDeniesPropertyWrapperRequiredNames() throws {
+@Test func renameEligibilityAnalyzerDeniesPropertyWrapperRequiredNames() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     let line = "var wrappedValue: String { value }"
     try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-wrappedValue",
         name: "wrappedValue",
         kind: "instanceProperty",
@@ -103,7 +103,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 1,
@@ -117,23 +117,23 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache
     )
 
-    #expect(decision.allowed == false)
+    #expect(decision.isEligible == false)
     #expect(decision.reasons.contains("language-required declaration name wrappedValue"))
 }
 
-@Test func safetyAnalyzerDeniesResultBuilderRequiredNames() throws {
+@Test func renameEligibilityAnalyzerDeniesResultBuilderRequiredNames() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     let line = "static func buildBlock<T>(_ value: T) -> T { value }"
     try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-buildBlock",
         name: "buildBlock",
         kind: "staticMethod",
@@ -141,7 +141,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 1,
@@ -155,23 +155,23 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache
     )
 
-    #expect(decision.allowed == false)
+    #expect(decision.isEligible == false)
     #expect(decision.reasons.contains("language-required declaration name buildBlock"))
 }
 
-@Test func safetyAnalyzerDeniesStringInterpolationRequiredNames() throws {
+@Test func renameEligibilityAnalyzerDeniesStringInterpolationRequiredNames() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     let line = "mutating func appendInterpolation(json data: Data) {}"
     try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-appendInterpolation",
         name: "appendInterpolation",
         kind: "instanceMethod",
@@ -179,7 +179,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 1,
@@ -193,11 +193,11 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache
     )
 
-    #expect(decision.allowed == false)
+    #expect(decision.isEligible == false)
     #expect(decision.reasons.contains("language-required declaration name appendInterpolation"))
 }

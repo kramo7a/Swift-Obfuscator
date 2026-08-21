@@ -14,7 +14,7 @@ public enum ReportRenderer {
         }
         lines.append("")
         lines.append("OCCURRENCES BY USR")
-        for group in snapshot.groupsByUSR {
+        for group in snapshot.occurrenceGroups {
             lines.append("- \(group.symbol.name) | usr=\(group.usr) | kind=\(group.symbol.kind) | count=\(group.occurrences.count)")
             for occurrence in group.occurrences {
                 lines.append("  \(occurrence.path):\(occurrence.line):\(occurrence.utf8Column) | roles=\(occurrence.roles.joined(separator: ",")) | provider=\(occurrence.symbolProvider)")
@@ -29,18 +29,18 @@ public enum ReportRenderer {
     public static func renderDryRun(plan: RenamePlan, compact: Bool = false) -> String {
         var lines: [String] = []
         lines.append("DRY-RUN REPORT")
-        lines.append("planned symbols: \(plan.entries.count)")
-        lines.append("planned replacements: \(plan.replacements.count)")
-        lines.append("denied symbols: \(plan.denied.count)")
-        lines.append("conflicts: \(plan.conflicts.count)")
+        lines.append("planned symbols: \(plan.renames.count)")
+        lines.append("planned replacements: \(plan.edits.count)")
+        lines.append("denied symbols: \(plan.rejections.count)")
+        lines.append("conflicts: \(plan.editConflicts.count)")
         lines.append("")
 
-        if !plan.entries.isEmpty {
+        if !plan.renames.isEmpty {
             lines.append("PLANNED RENAMES")
-            for entry in plan.entries {
-                lines.append("- \(entry.oldName) -> \(entry.newName) | kind=\(entry.kind) | usr=\(entry.usr) | replacements=\(entry.replacements.count)")
+            for entry in plan.renames {
+                lines.append("- \(entry.oldName) -> \(entry.newName) | kind=\(entry.kind) | usr=\(entry.usr) | replacements=\(entry.edits.count)")
                 if !compact {
-                    for replacement in entry.replacements {
+                    for replacement in entry.edits {
                         lines.append("  \(replacement.path):\(replacement.line):\(replacement.utf8Column)")
                     }
                 }
@@ -48,22 +48,22 @@ public enum ReportRenderer {
             lines.append("")
         }
 
-        if !plan.denied.isEmpty {
+        if !plan.rejections.isEmpty {
             lines.append("DENIED")
             if compact {
                 lines.append("- per-symbol denial details omitted by --compact-report")
             } else {
-                for decision in plan.denied {
-                    lines.append("- \(decision.symbolName) | kind=\(decision.kind) | usr=\(decision.usr)")
+                for decision in plan.rejections {
+                    lines.append("- \(decision.symbolName) | kind=\(decision.symbolKind) | usr=\(decision.usr)")
                     lines.append("  reasons: \(decision.reasons.joined(separator: "; "))")
                 }
             }
             lines.append("")
         }
 
-        if !plan.conflicts.isEmpty {
+        if !plan.editConflicts.isEmpty {
             lines.append("CONFLICTS")
-            for conflict in plan.conflicts {
+            for conflict in plan.editConflicts {
                 lines.append("- \(conflict)")
             }
         }

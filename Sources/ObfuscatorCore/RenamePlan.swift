@@ -1,190 +1,198 @@
 import Foundation
 
-public struct RenamePlanEntry: Codable, Sendable {
-    public let usr: String
-    public let kind: String
-    public let oldName: String
-    public let newName: String
-    public let replacements: [SourceReplacement]
-}
-
 public struct RenamePlan: Codable, Sendable {
-    public let entries: [RenamePlanEntry]
-    public let denied: [SafetyDecision]
-    public let conflicts: [String]
-    public let supportReplacements: [SourceReplacement]
-    public let parameterFacts: ParameterFactsSummary
-    public let parameterSyntaxFacts: ParameterSyntaxFactsSummary
-    public let parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary
-    public let parameterCallArgumentBindingFacts: ParameterCallArgumentBindingFactsSummary
-    public let parameterCallableReferenceSyntaxFacts: ParameterCallableReferenceSyntaxFactsSummary
-    public let parameterCallableReferenceBindingFacts: ParameterCallableReferenceBindingFactsSummary
-    public let parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary
-    public let parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary
-    public let parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary
-    public let enumCaseComponentFacts: EnumCaseComponentFactsSummary
-    public let compilerRawValueFacts: CompilerRawValueFactsSummary
-    public let enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary
-    public let genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary
-    public let typealiasSyntaxFacts: TypealiasSyntaxFactsSummary
+    public struct Entry: Codable, Sendable {
+        public let usr: String
+        public let kind: String
+        public let oldName: String
+        public let newName: String
+        public let edits: [SourcePatcher.Edit]
+
+        private enum CodingKeys: String, CodingKey {
+            case usr
+            case kind
+            case oldName
+            case newName
+            case edits = "replacements"
+        }
+    }
+
+    public let renames: [RenamePlan.Entry]
+    public let rejections: [RenameEligibility]
+    public let editConflicts: [String]
+    public let preservationEdits: [SourcePatcher.Edit]
+    public let callableReport: CallableSignature.Report
+    public let parameterSyntaxReport: ParameterSyntax.Report
+    public let callSiteSyntaxReport: CallSiteSyntax.Report
+    public let callArgumentBindingReport: CallArgumentBinding.Report
+    public let callableReferenceSyntaxReport: CallableReferenceSyntax.Report
+    public let callableReferenceBindingReport: CallableReferenceBinding.Report
+    public let externalLabelReport: ExternalLabel.Report
+    public let externalLabelRenameReport: ExternalLabel.RenameReport
+    public let localBindingRenameReport: LocalBindingRename.Report
+    public let enumCaseSemanticsReport: EnumCaseSemantics.Report
+    public let enumRawValueReport: EnumRawValue.Report
+    public let enumCaseSyntaxReport: EnumCaseSyntax.Report
+    public let genericParameterReport: GenericParameterAnalysis.Report
+    public let typeAliasSyntaxReport: TypeAliasSyntax.Report
 
     public init(
-        entries: [RenamePlanEntry],
-        denied: [SafetyDecision],
-        conflicts: [String],
-        supportReplacements: [SourceReplacement] = [],
-        parameterFacts: ParameterFactsSummary = .empty,
-        parameterSyntaxFacts: ParameterSyntaxFactsSummary = .empty,
-        parameterCallSiteSyntaxFacts: ParameterCallSiteSyntaxFactsSummary = .empty,
-        parameterCallArgumentBindingFacts: ParameterCallArgumentBindingFactsSummary = .empty,
-        parameterCallableReferenceSyntaxFacts: ParameterCallableReferenceSyntaxFactsSummary = .empty,
-        parameterCallableReferenceBindingFacts: ParameterCallableReferenceBindingFactsSummary = .empty,
-        parameterExternalLabelComponentFacts: ParameterExternalLabelComponentFactsSummary = .empty,
-        parameterExternalLabelRenameOutcome: ParameterExternalLabelRenameOutcomeSummary = .empty,
-        parameterLocalBindingOutcome: ParameterLocalBindingOutcomeSummary = .empty,
-        enumCaseComponentFacts: EnumCaseComponentFactsSummary = .empty,
-        compilerRawValueFacts: CompilerRawValueFactsSummary = .empty,
-        enumCaseSyntaxFacts: EnumCaseSyntaxFactsSummary = .empty,
-        genericParameterSyntaxFacts: GenericParameterSyntaxFactsSummary = .empty,
-        typealiasSyntaxFacts: TypealiasSyntaxFactsSummary = .empty
+        renames: [RenamePlan.Entry],
+        rejections: [RenameEligibility],
+        editConflicts: [String],
+        preservationEdits: [SourcePatcher.Edit] = [],
+        callableReport: CallableSignature.Report = .empty,
+        parameterSyntaxReport: ParameterSyntax.Report = .empty,
+        callSiteSyntaxReport: CallSiteSyntax.Report = .empty,
+        callArgumentBindingReport: CallArgumentBinding.Report = .empty,
+        callableReferenceSyntaxReport: CallableReferenceSyntax.Report = .empty,
+        callableReferenceBindingReport: CallableReferenceBinding.Report = .empty,
+        externalLabelReport: ExternalLabel.Report = .empty,
+        externalLabelRenameReport: ExternalLabel.RenameReport = .empty,
+        localBindingRenameReport: LocalBindingRename.Report = .empty,
+        enumCaseSemanticsReport: EnumCaseSemantics.Report = .empty,
+        enumRawValueReport: EnumRawValue.Report = .empty,
+        enumCaseSyntaxReport: EnumCaseSyntax.Report = .empty,
+        genericParameterReport: GenericParameterAnalysis.Report = .empty,
+        typeAliasSyntaxReport: TypeAliasSyntax.Report = .empty
     ) {
-        self.entries = entries
-        self.denied = denied
-        self.conflicts = conflicts
-        self.supportReplacements = supportReplacements
-        self.parameterFacts = parameterFacts
-        self.parameterSyntaxFacts = parameterSyntaxFacts
-        self.parameterCallSiteSyntaxFacts = parameterCallSiteSyntaxFacts
-        self.parameterCallArgumentBindingFacts = parameterCallArgumentBindingFacts
-        self.parameterCallableReferenceSyntaxFacts = parameterCallableReferenceSyntaxFacts
-        self.parameterCallableReferenceBindingFacts = parameterCallableReferenceBindingFacts
-        self.parameterExternalLabelComponentFacts = parameterExternalLabelComponentFacts
-        self.parameterExternalLabelRenameOutcome = parameterExternalLabelRenameOutcome
-        self.parameterLocalBindingOutcome = parameterLocalBindingOutcome
-        self.enumCaseComponentFacts = enumCaseComponentFacts
-        self.compilerRawValueFacts = compilerRawValueFacts
-        self.enumCaseSyntaxFacts = enumCaseSyntaxFacts
-        self.genericParameterSyntaxFacts = genericParameterSyntaxFacts
-        self.typealiasSyntaxFacts = typealiasSyntaxFacts
+        self.renames = renames
+        self.rejections = rejections
+        self.editConflicts = editConflicts
+        self.preservationEdits = preservationEdits
+        self.callableReport = callableReport
+        self.parameterSyntaxReport = parameterSyntaxReport
+        self.callSiteSyntaxReport = callSiteSyntaxReport
+        self.callArgumentBindingReport = callArgumentBindingReport
+        self.callableReferenceSyntaxReport = callableReferenceSyntaxReport
+        self.callableReferenceBindingReport = callableReferenceBindingReport
+        self.externalLabelReport = externalLabelReport
+        self.externalLabelRenameReport = externalLabelRenameReport
+        self.localBindingRenameReport = localBindingRenameReport
+        self.enumCaseSemanticsReport = enumCaseSemanticsReport
+        self.enumRawValueReport = enumRawValueReport
+        self.enumCaseSyntaxReport = enumCaseSyntaxReport
+        self.genericParameterReport = genericParameterReport
+        self.typeAliasSyntaxReport = typeAliasSyntaxReport
     }
 
     private enum CodingKeys: String, CodingKey {
-        case entries
-        case denied
-        case conflicts
-        case supportReplacements
-        case parameterFacts
-        case parameterSyntaxFacts
-        case parameterCallSiteSyntaxFacts
-        case parameterCallArgumentBindingFacts
-        case parameterCallableReferenceSyntaxFacts
-        case parameterCallableReferenceBindingFacts
-        case parameterExternalLabelComponentFacts
-        case parameterExternalLabelRenameOutcome
-        case parameterLocalBindingOutcome
-        case enumCaseComponentFacts
-        case compilerRawValueFacts
-        case enumCaseSyntaxFacts
-        case genericParameterSyntaxFacts
-        case typealiasSyntaxFacts
+        case renames = "entries"
+        case rejections = "denied"
+        case editConflicts = "conflicts"
+        case preservationEdits = "supportReplacements"
+        case callableReport = "parameterFacts"
+        case parameterSyntaxReport = "parameterSyntaxFacts"
+        case callSiteSyntaxReport = "parameterCallSiteSyntaxFacts"
+        case callArgumentBindingReport = "parameterCallArgumentBindingFacts"
+        case callableReferenceSyntaxReport = "parameterCallableReferenceSyntaxFacts"
+        case callableReferenceBindingReport = "parameterCallableReferenceBindingFacts"
+        case externalLabelReport = "parameterExternalLabelComponentFacts"
+        case externalLabelRenameReport = "parameterExternalLabelRenameOutcome"
+        case localBindingRenameReport = "parameterLocalBindingOutcome"
+        case enumCaseSemanticsReport = "enumCaseComponentFacts"
+        case enumRawValueReport = "compilerRawValueFacts"
+        case enumCaseSyntaxReport = "enumCaseSyntaxFacts"
+        case genericParameterReport = "genericParameterSyntaxFacts"
+        case typeAliasSyntaxReport = "typealiasSyntaxFacts"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        entries = try container.decode([RenamePlanEntry].self, forKey: .entries)
-        denied = try container.decode([SafetyDecision].self, forKey: .denied)
-        conflicts = try container.decode([String].self, forKey: .conflicts)
-        supportReplacements =
+        renames = try container.decode([RenamePlan.Entry].self, forKey: .renames)
+        rejections = try container.decode([RenameEligibility].self, forKey: .rejections)
+        editConflicts = try container.decode([String].self, forKey: .editConflicts)
+        preservationEdits =
             try container.decodeIfPresent(
-                [SourceReplacement].self,
-                forKey: .supportReplacements
+                [SourcePatcher.Edit].self,
+                forKey: .preservationEdits
             ) ?? []
-        parameterFacts =
+        callableReport =
             try container.decodeIfPresent(
-                ParameterFactsSummary.self,
-                forKey: .parameterFacts
+                CallableSignature.Report.self,
+                forKey: .callableReport
             ) ?? .empty
-        parameterSyntaxFacts =
+        parameterSyntaxReport =
             try container.decodeIfPresent(
-                ParameterSyntaxFactsSummary.self,
-                forKey: .parameterSyntaxFacts
+                ParameterSyntax.Report.self,
+                forKey: .parameterSyntaxReport
             ) ?? .empty
-        parameterCallSiteSyntaxFacts =
+        callSiteSyntaxReport =
             try container.decodeIfPresent(
-                ParameterCallSiteSyntaxFactsSummary.self,
-                forKey: .parameterCallSiteSyntaxFacts
+                CallSiteSyntax.Report.self,
+                forKey: .callSiteSyntaxReport
             ) ?? .empty
-        parameterCallArgumentBindingFacts =
+        callArgumentBindingReport =
             try container.decodeIfPresent(
-                ParameterCallArgumentBindingFactsSummary.self,
-                forKey: .parameterCallArgumentBindingFacts
+                CallArgumentBinding.Report.self,
+                forKey: .callArgumentBindingReport
             ) ?? .empty
-        parameterCallableReferenceSyntaxFacts =
+        callableReferenceSyntaxReport =
             try container.decodeIfPresent(
-                ParameterCallableReferenceSyntaxFactsSummary.self,
-                forKey: .parameterCallableReferenceSyntaxFacts
+                CallableReferenceSyntax.Report.self,
+                forKey: .callableReferenceSyntaxReport
             ) ?? .empty
-        parameterCallableReferenceBindingFacts =
+        callableReferenceBindingReport =
             try container.decodeIfPresent(
-                ParameterCallableReferenceBindingFactsSummary.self,
-                forKey: .parameterCallableReferenceBindingFacts
+                CallableReferenceBinding.Report.self,
+                forKey: .callableReferenceBindingReport
             ) ?? .empty
-        parameterExternalLabelComponentFacts =
+        externalLabelReport =
             try container.decodeIfPresent(
-                ParameterExternalLabelComponentFactsSummary.self,
-                forKey: .parameterExternalLabelComponentFacts
+                ExternalLabel.Report.self,
+                forKey: .externalLabelReport
             ) ?? .empty
-        parameterExternalLabelRenameOutcome =
+        externalLabelRenameReport =
             try container.decodeIfPresent(
-                ParameterExternalLabelRenameOutcomeSummary.self,
-                forKey: .parameterExternalLabelRenameOutcome
+                ExternalLabel.RenameReport.self,
+                forKey: .externalLabelRenameReport
             ) ?? .empty
-        parameterLocalBindingOutcome =
+        localBindingRenameReport =
             try container.decodeIfPresent(
-                ParameterLocalBindingOutcomeSummary.self,
-                forKey: .parameterLocalBindingOutcome
+                LocalBindingRename.Report.self,
+                forKey: .localBindingRenameReport
             ) ?? .empty
-        enumCaseComponentFacts =
+        enumCaseSemanticsReport =
             try container.decodeIfPresent(
-                EnumCaseComponentFactsSummary.self,
-                forKey: .enumCaseComponentFacts
+                EnumCaseSemantics.Report.self,
+                forKey: .enumCaseSemanticsReport
             ) ?? .empty
-        compilerRawValueFacts =
+        enumRawValueReport =
             try container.decodeIfPresent(
-                CompilerRawValueFactsSummary.self,
-                forKey: .compilerRawValueFacts
+                EnumRawValue.Report.self,
+                forKey: .enumRawValueReport
             ) ?? .empty
-        enumCaseSyntaxFacts =
+        enumCaseSyntaxReport =
             try container.decodeIfPresent(
-                EnumCaseSyntaxFactsSummary.self,
-                forKey: .enumCaseSyntaxFacts
+                EnumCaseSyntax.Report.self,
+                forKey: .enumCaseSyntaxReport
             ) ?? .empty
-        genericParameterSyntaxFacts =
+        genericParameterReport =
             try container.decodeIfPresent(
-                GenericParameterSyntaxFactsSummary.self,
-                forKey: .genericParameterSyntaxFacts
+                GenericParameterAnalysis.Report.self,
+                forKey: .genericParameterReport
             ) ?? .empty
-        typealiasSyntaxFacts =
+        typeAliasSyntaxReport =
             try container.decodeIfPresent(
-                TypealiasSyntaxFactsSummary.self,
-                forKey: .typealiasSyntaxFacts
+                TypeAliasSyntax.Report.self,
+                forKey: .typeAliasSyntaxReport
             ) ?? .empty
     }
 
-    public var replacements: [SourceReplacement] {
+    public var edits: [SourcePatcher.Edit] {
         var seen: Set<String> = []
-        return (entries.flatMap(\.replacements) + supportReplacements)
+        return (renames.flatMap(\.edits) + preservationEdits)
             .sorted { lhs, rhs in
                 (lhs.path, lhs.byteOffset, lhs.usr) < (rhs.path, rhs.byteOffset, rhs.usr)
             }
-            .filter { replacement in
+            .filter { edit in
                 // One source token can carry more than one semantic USR (for
                 // example a witness satisfying two protocol requirements).
                 // Applying the identical byte edit twice would fail validation,
                 // so keep one physical edit while retaining every semantic plan
                 // entry and mapping.
                 let key =
-                    "\(replacement.path):\(replacement.byteOffset):\(replacement.length):\(replacement.oldName)->\(replacement.newName)"
+                    "\(edit.path):\(edit.byteOffset):\(edit.length):\(edit.oldName)->\(edit.newName)"
                 return seen.insert(key).inserted
             }
     }

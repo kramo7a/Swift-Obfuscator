@@ -259,7 +259,7 @@ options and configuration precedence.
 ```sh
 swift build
 swift test
-swift test --filter nameGeneratorProducesStableNames
+swift test --filter obfuscatedNameGeneratorProducesStableNames
 swift run swift-obfuscator --help
 bash -n analyze_ipa_macho.sh
 ```

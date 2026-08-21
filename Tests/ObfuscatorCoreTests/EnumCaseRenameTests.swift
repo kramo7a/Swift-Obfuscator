@@ -7,7 +7,7 @@ import Testing
 
 @Test func enumCasePlannerKeepsStringMatchedCaseDeniedWithoutBlockingSafeSibling() throws {
     let directory = try makeTemporaryDirectory()
-    let file = directory.appendingPathComponent("EnumCasePlanning.swift")
+    let file = directory.appendingPathComponent("EnumCaseRename.swift")
     try copyFixture(to: file)
 
     let safe = testSymbol("s:planner-safe", "Safe", .enum)
@@ -48,42 +48,42 @@ import Testing
     )
     let cache = try SourceFileCache(paths: [file.path])
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
-        generator: NameGenerator(prefix: "Case")
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
+        generator: ObfuscatedNameGenerator(prefix: "Case")
     )
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    let safeEntries = plan.entries.filter { [idle.usr, payload.usr].contains($0.usr) }
+    let safeEntries = plan.renames.filter { [idle.usr, payload.usr].contains($0.usr) }
     #expect(safeEntries.count == 2)
     #expect(safeEntries.allSatisfy { $0.kind == "enumConstant" })
     #expect(safeEntries.allSatisfy { $0.newName.first?.isLowercase == true })
-    #expect(safeEntries.flatMap(\.replacements).count == 6)
-    let valueEntry = try #require(plan.entries.first { $0.usr == value.usr })
-    #expect(valueEntry.replacements.count == 2)
-    let queuedEntry = try #require(plan.entries.first { $0.usr == queued.usr })
-    let blockedValueEntry = try #require(plan.entries.first { $0.usr == blockedValue.usr })
-    #expect(queuedEntry.replacements.count == 2)
-    #expect(blockedValueEntry.replacements.count == 2)
-    #expect(plan.parameterCallSiteSyntaxFacts.resolvedEnumCasePatterns == 1)
-    #expect(!plan.entries.contains { $0.usr == logged.usr })
-    let loggedDenial = try #require(plan.denied.first { $0.usr == logged.usr })
+    #expect(safeEntries.flatMap(\.edits).count == 6)
+    let valueEntry = try #require(plan.renames.first { $0.usr == value.usr })
+    #expect(valueEntry.edits.count == 2)
+    let queuedEntry = try #require(plan.renames.first { $0.usr == queued.usr })
+    let blockedValueEntry = try #require(plan.renames.first { $0.usr == blockedValue.usr })
+    #expect(queuedEntry.edits.count == 2)
+    #expect(blockedValueEntry.edits.count == 2)
+    #expect(plan.callSiteSyntaxReport.resolvedEnumCasePatterns == 1)
+    #expect(!plan.renames.contains { $0.usr == logged.usr })
+    let loggedDenial = try #require(plan.rejections.first { $0.usr == logged.usr })
     #expect(
         loggedDenial.reasons.contains { reason in
             reason.contains("candidate subset") && reason.contains("stringLiteralSpelling")
         }
     )
-    #expect(!plan.denied.contains { $0.usr == queued.usr || $0.usr == blockedValue.usr })
+    #expect(!plan.rejections.contains { $0.usr == queued.usr || $0.usr == blockedValue.usr })
     #expect(
-        plan.denied.filter { $0.usr == logged.usr }.allSatisfy {
+        plan.rejections.filter { $0.usr == logged.usr }.allSatisfy {
             $0.reasons.contains { reason in
                 reason.contains("denied atomically") && reason.contains("stringLiteralSpelling")
             }
         })
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.editConflicts.isEmpty)
 
     let idleEntry = try #require(safeEntries.first { $0.usr == idle.usr })
     let payloadEntry = try #require(safeEntries.first { $0.usr == payload.usr })
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("case \(idleEntry.newName)"))
     #expect(patched.contains("case \(payloadEntry.newName)(\(valueEntry.newName): Int)"))
@@ -146,34 +146,38 @@ import Testing
     )
     let cache = try SourceFileCache(paths: [file.path])
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
-        generator: NameGenerator(prefix: "Case")
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
+        generator: ObfuscatedNameGenerator(prefix: "Case")
     )
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    let component = try #require(
-        plan.enumCaseSyntaxFacts.components.first { $0.ownerUSR == owner.usr }
+    let syntaxOwner = try #require(
+        plan.enumCaseSyntaxReport.owners.first { $0.ownerUSR == owner.usr }
     )
-    #expect(component.blockers.isEmpty)
-    let implicitFacts = try #require(component.members.first { $0.caseUSR == implicit.usr })
-    let stableFacts = try #require(component.members.first { $0.caseUSR == stable.usr })
-    #expect(!implicitFacts.hasExplicitRawValue)
-    #expect(implicitFacts.implicitRawValueLiteral == "\"implicit\"")
-    #expect(implicitFacts.blockers.isEmpty)
-    #expect(stableFacts.hasExplicitRawValue)
-    #expect(stableFacts.blockers.isEmpty)
-    let implicitEntry = try #require(plan.entries.first { $0.usr == implicit.usr })
-    let stableEntry = try #require(plan.entries.first { $0.usr == stable.usr })
-    #expect(implicitEntry.replacements.count == 2)
-    #expect(stableEntry.replacements.count == 2)
+    #expect(syntaxOwner.blockers.isEmpty)
+    let implicitMember = try #require(
+        syntaxOwner.members.first { $0.caseUSR == implicit.usr }
+    )
+    let stableMember = try #require(
+        syntaxOwner.members.first { $0.caseUSR == stable.usr }
+    )
+    #expect(!implicitMember.hasExplicitRawValue)
+    #expect(implicitMember.implicitRawValueLiteral == "\"implicit\"")
+    #expect(implicitMember.blockers.isEmpty)
+    #expect(stableMember.hasExplicitRawValue)
+    #expect(stableMember.blockers.isEmpty)
+    let implicitEntry = try #require(plan.renames.first { $0.usr == implicit.usr })
+    let stableEntry = try #require(plan.renames.first { $0.usr == stable.usr })
+    #expect(implicitEntry.edits.count == 2)
+    #expect(stableEntry.edits.count == 2)
     let implicitSupportUSR = "implicit-raw-value:\(implicit.usr)"
-    let implicitSupport = plan.supportReplacements.first { replacement in
+    let implicitSupport = plan.preservationEdits.first { replacement in
         replacement.usr == implicitSupportUSR
     }
     #expect(implicitSupport?.newName == " = \"implicit\"")
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("case \(implicitEntry.newName) = \"implicit\""))
     #expect(patched.contains("case \(stableEntry.newName) = \"wire_stable\""))
@@ -209,46 +213,46 @@ import Testing
     )
     _ = try runner.run(executable: beforeExecutable.path, arguments: [])
 
-    let snapshot = try IndexReader().read(
+    let snapshot = try IndexSnapshotReader().read(
         storePath: store,
         databasePath: database,
         sourceRoot: directory
     )
     let cache = try SourceFileCache(paths: [file.path])
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
-        generator: NameGenerator(prefix: "Case")
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
+        generator: ObfuscatedNameGenerator(prefix: "Case")
     )
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    let stableFacts = try #require(
-        plan.enumCaseComponentFacts.components.first {
+    let stableOwner = try #require(
+        plan.enumCaseSemanticsReport.owners.first {
             $0.ownerName == "StableWire"
         })
-    let implicitFacts = try #require(
-        plan.enumCaseComponentFacts.components.first {
+    let implicitOwner = try #require(
+        plan.enumCaseSemanticsReport.owners.first {
             $0.ownerName == "ImplicitWire"
         })
-    let customFacts = try #require(
-        plan.enumCaseComponentFacts.components.first {
+    let customOwner = try #require(
+        plan.enumCaseSemanticsReport.owners.first {
             $0.ownerName == "CustomWire"
         })
-    #expect(stableFacts.hasRawType)
-    #expect(stableFacts.isSerializationSensitive)
-    #expect(!stableFacts.hasManualSerializationContract)
-    #expect(customFacts.hasCustomSerializationImplementation)
+    #expect(stableOwner.hasRawType)
+    #expect(stableOwner.isSerializationSensitive)
+    #expect(!stableOwner.hasManualSerializationContract)
+    #expect(customOwner.hasCustomSerializationImplementation)
 
     let stableSyntax = try #require(
-        plan.enumCaseSyntaxFacts.components.first {
-            $0.ownerUSR == stableFacts.ownerUSR
+        plan.enumCaseSyntaxReport.owners.first {
+            $0.ownerUSR == stableOwner.ownerUSR
         })
     let implicitSyntax = try #require(
-        plan.enumCaseSyntaxFacts.components.first {
-            $0.ownerUSR == implicitFacts.ownerUSR
+        plan.enumCaseSyntaxReport.owners.first {
+            $0.ownerUSR == implicitOwner.ownerUSR
         })
     let customSyntax = try #require(
-        plan.enumCaseSyntaxFacts.components.first {
-            $0.ownerUSR == customFacts.ownerUSR
+        plan.enumCaseSyntaxReport.owners.first {
+            $0.ownerUSR == customOwner.ownerUSR
         })
     #expect(stableSyntax.blockers.isEmpty)
     #expect(!implicitSyntax.blockers.contains(.rawType))
@@ -267,14 +271,14 @@ import Testing
     #expect(implicitSecondSyntax.blockers.isEmpty)
     #expect(customSyntax.blockers.contains(.serializationContract))
 
-    let plannedUSRs = Set(plan.entries.map(\.usr))
-    #expect(Set(stableFacts.caseUSRs).isSubset(of: plannedUSRs))
+    let plannedUSRs = Set(plan.renames.map(\.usr))
+    #expect(Set(stableOwner.caseUSRs).isSubset(of: plannedUSRs))
     #expect(plannedUSRs.contains(implicitFirstSyntax.caseUSR))
     #expect(plannedUSRs.contains(implicitSecondSyntax.caseUSR))
-    #expect(Set(customFacts.caseUSRs).isDisjoint(with: plannedUSRs))
-    #expect(plan.conflicts.isEmpty)
+    #expect(Set(customOwner.caseUSRs).isDisjoint(with: plannedUSRs))
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("= \"wire_first\""))
     #expect(patched.contains("= \"wire_second\""))
@@ -306,12 +310,12 @@ import Testing
             file.path,
         ]
     )
-    let snapshot = try IndexReader().read(
+    let snapshot = try IndexSnapshotReader().read(
         storePath: store,
         databasePath: database,
         sourceRoot: directory
     )
-    func enumCaseDeclaration(line: Int) -> OccurrenceRecord? {
+    func enumCaseDeclaration(line: Int) -> IndexSnapshot.Occurrence? {
         snapshot.occurrences.first {
             $0.line == line
                 && $0.symbol.kind == "enumConstant"
@@ -329,21 +333,21 @@ import Testing
     #expect(!ordinaryIdle.relations.contains { $0.roles.contains("overrideOf") })
 
     let cache = try SourceFileCache(paths: [file.path])
-    let indexedFacts = IndexedSemanticFacts(
+    let semanticIndex = SemanticIndex(
         snapshot: snapshot,
         obfuscationRoots: [directory]
     )
-    let componentFacts = EnumCaseComponentFacts(
+    let semantics = EnumCaseSemantics.Index(
         snapshot: snapshot,
-        indexedFacts: indexedFacts,
+        semanticIndex: semanticIndex,
         obfuscationRoots: [directory]
     )
     let witness = try #require(
-        componentFacts.components.first {
+        semantics.owners.first {
             $0.ownerName == "Witness"
         })
     let ordinary = try #require(
-        componentFacts.components.first {
+        semantics.owners.first {
             $0.ownerName == "Ordinary"
         })
     #expect(witness.hasProtocolConformance)
@@ -352,35 +356,35 @@ import Testing
     #expect(ordinary.hasProtocolConformance)
     #expect(!ordinary.hasProtocolCaseWitness)
     #expect(ordinary.members.allSatisfy { !$0.isProtocolRequirementWitness })
-    #expect(componentFacts.summary.protocolConformanceOwnerComponents == 2)
-    #expect(componentFacts.summary.protocolConformanceCases == 4)
-    #expect(componentFacts.summary.protocolWitnessOwnerComponents == 1)
-    #expect(componentFacts.summary.protocolWitnessCases == 2)
+    #expect(semantics.report.protocolConformanceOwnerCount == 2)
+    #expect(semantics.report.protocolConformanceCases == 4)
+    #expect(semantics.report.protocolWitnessOwnerCount == 1)
+    #expect(semantics.report.protocolWitnessCases == 2)
 
-    let syntaxFacts = EnumCaseSyntaxFacts(
+    let syntaxIndex = EnumCaseSyntax.Index(
         snapshot: snapshot,
-        semanticFacts: componentFacts,
+        semantics: semantics,
         sourceCache: cache,
         obfuscationRoots: [directory]
     )
     let witnessSyntax = try #require(
-        syntaxFacts.components.first {
+        syntaxIndex.owners.first {
             $0.ownerUSR == witness.ownerUSR
         })
     let ordinarySyntax = try #require(
-        syntaxFacts.components.first {
+        syntaxIndex.owners.first {
             $0.ownerUSR == ordinary.ownerUSR
         })
     #expect(witnessSyntax.blockers.contains(.protocolConformance))
     #expect(ordinarySyntax.blockers.isEmpty)
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let plannedUSRs = Set(plan.entries.map(\.usr))
+    let plannedUSRs = Set(plan.renames.map(\.usr))
     #expect(Set(ordinary.caseUSRs).isSubset(of: plannedUSRs))
     #expect(Set(witness.caseUSRs).isDisjoint(with: plannedUSRs))
     for usr in witness.caseUSRs {
-        let decisions = plan.denied.filter { $0.usr == usr }
+        let decisions = plan.rejections.filter { $0.usr == usr }
         #expect(decisions.count == 1)
         #expect(
             decisions.first?.reasons.contains {
@@ -391,9 +395,9 @@ import Testing
                 $0.contains("protocol members require relation-aware witness renaming")
             } == true)
     }
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     _ = try CommandRunner().run(
         executable: "/usr/bin/xcrun",
         arguments: ["swiftc", "-typecheck", file.path]
@@ -423,21 +427,21 @@ import Testing
     )
     _ = try runner.run(executable: beforeExecutable.path, arguments: [])
 
-    let snapshot = try IndexReader().read(
+    let snapshot = try IndexSnapshotReader().read(
         storePath: store,
         databasePath: database,
         sourceRoot: directory
     )
     let cache = try SourceFileCache(paths: [file.path])
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
-        generator: NameGenerator(prefix: "Raw")
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
+        generator: ObfuscatedNameGenerator(prefix: "Raw")
     )
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    func entry(_ name: String) throws -> RenamePlanEntry {
+    func entry(_ name: String) throws -> RenamePlan.Entry {
         try #require(
-            plan.entries.first {
+            plan.renames.first {
                 $0.kind == "enumConstant" && $0.oldName == name
             })
     }
@@ -447,11 +451,11 @@ import Testing
     _ = try entry("two")
     let three = try entry("three")
     #expect(
-        !plan.entries.contains {
+        !plan.renames.contains {
             $0.kind == "enumConstant" && $0.oldName == "visible"
         })
     let codingKeyUSR = try #require(
-        snapshot.groupsByUSR.first {
+        snapshot.occurrenceGroups.first {
             $0.symbol.kind == "enumConstant"
                 && $0.symbol.name == "value"
                 && $0.occurrences.contains { occurrence in
@@ -461,20 +465,20 @@ import Testing
                 }
         }
     ).usr
-    let codingKeyEntry = try #require(plan.entries.first { $0.usr == codingKeyUSR })
+    let codingKeyEntry = try #require(plan.renames.first { $0.usr == codingKeyUSR })
     let codingPropertyEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.kind == "instanceProperty" && $0.oldName == "value"
         })
     #expect(codingKeyEntry.newName == codingPropertyEntry.newName)
-    #expect(plan.compilerRawValueFacts.resolvedImplicitRawValues >= 5)
+    #expect(plan.enumRawValueReport.resolvedImplicitRawValues >= 5)
     #expect(
-        plan.supportReplacements.count { replacement in
+        plan.preservationEdits.count { replacement in
             replacement.usr.hasPrefix("implicit-raw-value:")
         } == 5)
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("case \(alpha.newName) = \"alpha\""))
     #expect(patched.contains("case \(beta.newName) = \"beta\""))

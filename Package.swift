@@ -37,6 +37,10 @@ let package = Package(
             resources: [
                 .copy("Fixtures")
             ]
+        ),
+        .testTarget(
+            name: "SwiftObfuscatorTests",
+            dependencies: ["SwiftObfuscator"]
         )
     ],
     cxxLanguageStandard: .cxx17

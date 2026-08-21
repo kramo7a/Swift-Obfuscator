@@ -5,14 +5,14 @@ import Testing
 
 // MARK: - Protocol and override coordination
 
-@Test func safetyAnalyzerDeniesProtocolMembersUntilWitnessesAreRenamedTogether() throws {
+@Test func renameEligibilityAnalyzerDeniesProtocolMembersUntilWitnessesAreRenamedTogether() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     try copyFixture(to: file)
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-run",
         name: "run",
         kind: "instanceMethod",
@@ -20,7 +20,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 2,
@@ -34,24 +34,25 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(
+            usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache,
-        indexedFacts: IndexedSemanticFacts(protocolRequirementUSRs: [symbol.usr])
+        semanticIndex: SemanticIndex(protocolRequirementUSRs: [symbol.usr])
     )
 
-    #expect(decision.allowed == false)
+    #expect(decision.isEligible == false)
     #expect(decision.reasons.contains("protocol members require relation-aware witness renaming"))
 }
 
-@Test func safetyAnalyzerAllowsProtocolNominalConformanceReferences() throws {
+@Test func renameEligibilityAnalyzerAllowsProtocolNominalConformanceReferences() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     try copyFixture(to: file)
     let lines = fixtureLines(at: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-analyzer",
         name: "Analyzer",
         kind: "protocol",
@@ -59,7 +60,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let declaration = OccurrenceRecord(
+    let declaration = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 1,
@@ -72,7 +73,7 @@ import Testing
         symbolProvider: "swift",
         relations: []
     )
-    let conformanceReference = OccurrenceRecord(
+    let conformanceReference = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 2,
@@ -84,7 +85,7 @@ import Testing
         rolesDescription: "ref",
         symbolProvider: "swift",
         relations: [
-            RelationRecord(
+            IndexSnapshot.Relation(
                 usr: "usr-runner",
                 name: "Runner",
                 rolesRaw: 1,
@@ -93,23 +94,26 @@ import Testing
         ]
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [declaration, conformanceReference]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(
+            usr: symbol.usr, symbol: symbol, occurrences: [declaration, conformanceReference]),
         sourceCache: cache
     )
 
-    #expect(decision.allowed == true)
-    #expect(decision.oldName == "Analyzer")
+    #expect(decision.isEligible == true)
+    #expect(decision.originalName == "Analyzer")
 }
 
-@Test func safetyAnalyzerDeniesLocalProtocolMembersUntilWitnessesAreRenamedTogether() throws {
+@Test func renameEligibilityAnalyzerDeniesLocalProtocolMembersUntilWitnessesAreRenamedTogether()
+    throws
+{
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("Sample.swift")
     let line = "enum Interval { fileprivate protocol Quality { var title: String { get } } }"
     try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let symbol = SymbolRecord(
+    let symbol = IndexSnapshot.Symbol(
         usr: "usr-title",
         name: "title",
         kind: "instanceProperty",
@@ -117,7 +121,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let occurrence = OccurrenceRecord(
+    let occurrence = IndexSnapshot.Occurrence(
         symbol: symbol,
         path: file.path,
         line: 1,
@@ -131,13 +135,14 @@ import Testing
         relations: []
     )
 
-    let decision = SafetyAnalyzer(sourceRoot: directory).analyze(
-        group: USROccurrenceGroup(usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
+    let decision = RenameEligibilityAnalyzer(sourceRoot: directory).analyze(
+        group: IndexSnapshot.OccurrenceGroup(
+            usr: symbol.usr, symbol: symbol, occurrences: [occurrence]),
         sourceCache: cache,
-        indexedFacts: IndexedSemanticFacts(protocolRequirementUSRs: [symbol.usr])
+        semanticIndex: SemanticIndex(protocolRequirementUSRs: [symbol.usr])
     )
 
-    #expect(decision.allowed == false)
+    #expect(decision.isEligible == false)
     #expect(decision.reasons.contains("protocol members require relation-aware witness renaming"))
 }
 
@@ -147,7 +152,7 @@ import Testing
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let protocolSymbol = SymbolRecord(
+    let protocolSymbol = IndexSnapshot.Symbol(
         usr: "usr-analyzer-protocol",
         name: "Analyzer",
         kind: "protocol",
@@ -155,7 +160,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let requirement = SymbolRecord(
+    let requirement = IndexSnapshot.Symbol(
         usr: "usr-analyzer-run-requirement",
         name: "run()",
         kind: "instanceMethod",
@@ -163,7 +168,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let firstWitness = SymbolRecord(
+    let firstWitness = IndexSnapshot.Symbol(
         usr: "usr-first-run-witness",
         name: "run()",
         kind: "instanceMethod",
@@ -171,7 +176,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let secondWitness = SymbolRecord(
+    let secondWitness = IndexSnapshot.Symbol(
         usr: "usr-second-run-witness",
         name: "run()",
         kind: "instanceMethod",
@@ -179,13 +184,13 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let childOfProtocol = RelationRecord(
+    let childOfProtocol = IndexSnapshot.Relation(
         usr: protocolSymbol.usr,
         name: protocolSymbol.name,
         rolesRaw: 0,
         roles: ["childOf"]
     )
-    let overridesRequirement = RelationRecord(
+    let overridesRequirement = IndexSnapshot.Relation(
         usr: requirement.usr,
         name: requirement.name,
         rolesRaw: 0,
@@ -193,7 +198,8 @@ import Testing
     )
 
     let occurrences = [
-        testOccurrence(protocolSymbol, path: file.path, line: 1, token: "Analyzer", roles: [.definition]),
+        testOccurrence(
+            protocolSymbol, path: file.path, line: 1, token: "Analyzer", roles: [.definition]),
         testOccurrence(
             requirement,
             path: file.path,
@@ -228,42 +234,45 @@ import Testing
             roles: [.definition, .overrideOf],
             relations: [overridesRequirement]
         ),
-        testOccurrence(requirement, path: file.path, line: 6, token: "run", roles: [.reference, .call]),
-        testOccurrence(firstWitness, path: file.path, line: 7, token: "run", roles: [.reference, .call]),
-        testOccurrence(secondWitness, path: file.path, line: 8, token: "run", roles: [.reference, .call]),
+        testOccurrence(
+            requirement, path: file.path, line: 6, token: "run", roles: [.reference, .call]),
+        testOccurrence(
+            firstWitness, path: file.path, line: 7, token: "run", roles: [.reference, .call]),
+        testOccurrence(
+            secondWitness, path: file.path, line: 8, token: "run", roles: [.reference, .call]),
     ]
     let snapshot = IndexSnapshot(
         sourceFiles: [file.path],
         symbols: [protocolSymbol, requirement, firstWitness, secondWitness],
         occurrences: occurrences
     )
-    let mappingStore = MappingStore()
+    let mappingStore = RenameMappingStore()
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
         mappingStore: mappingStore
     )
 
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let componentEntries = plan.entries.filter {
+    let componentEntries = plan.renames.filter {
         [requirement.usr, firstWitness.usr, secondWitness.usr].contains($0.usr)
     }
 
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.editConflicts.isEmpty)
     #expect(componentEntries.count == 3)
     #expect(Set(componentEntries.map(\.oldName)) == ["run"])
     #expect(Set(componentEntries.map(\.newName)).count == 1)
     #expect(
-        plan.denied.allSatisfy {
+        plan.rejections.allSatisfy {
             ![requirement.usr, firstWitness.usr, secondWitness.usr].contains($0.usr)
         })
     #expect(
         Set(
             [requirement, firstWitness, secondWitness].compactMap {
-                mappingStore.entry(for: $0.usr)?.obfuscatedName
+                mappingStore.rename(for: $0.usr)?.obfuscatedName
             }
         ).count == 1)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     let newName = try #require(componentEntries.first?.newName)
     #expect(patched.contains("protocol Oa"))
@@ -278,7 +287,7 @@ import Testing
     let file = directory.appendingPathComponent("ProtocolProperty.swift")
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
-    let owner = SymbolRecord(
+    let owner = IndexSnapshot.Symbol(
         usr: "usr-payload-protocol",
         name: "Payload",
         kind: "protocol",
@@ -286,7 +295,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let requirement = SymbolRecord(
+    let requirement = IndexSnapshot.Symbol(
         usr: "usr-payload-value-requirement",
         name: "value",
         kind: "instanceProperty",
@@ -294,7 +303,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let witness = SymbolRecord(
+    let witness = IndexSnapshot.Symbol(
         usr: "usr-model-value-witness",
         name: "value",
         kind: "instanceProperty",
@@ -310,7 +319,10 @@ import Testing
             line: 2,
             token: "value",
             roles: [.definition, .childOf],
-            relations: [RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])]
+            relations: [
+                IndexSnapshot.Relation(
+                    usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])
+            ]
         ),
         testOccurrence(
             witness,
@@ -319,7 +331,7 @@ import Testing
             token: "value",
             roles: [.definition, .overrideOf],
             relations: [
-                RelationRecord(
+                IndexSnapshot.Relation(
                     usr: requirement.usr,
                     name: requirement.name,
                     rolesRaw: 0,
@@ -328,7 +340,7 @@ import Testing
             ]
         ),
     ]
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
@@ -337,12 +349,12 @@ import Testing
         ),
         sourceCache: cache
     )
-    let entries = plan.entries.filter { $0.usr == requirement.usr || $0.usr == witness.usr }
+    let entries = plan.renames.filter { $0.usr == requirement.usr || $0.usr == witness.usr }
 
     #expect(entries.count == 2)
     #expect(Set(entries.map(\.newName)).count == 1)
     #expect(
-        !plan.denied.contains { decision in
+        !plan.rejections.contains { decision in
             (decision.usr == requirement.usr || decision.usr == witness.usr)
                 && decision.reasons.contains(where: { $0.contains("memberwise initializer") })
         })
@@ -353,7 +365,7 @@ import Testing
     let file = directory.appendingPathComponent("AssociatedType.swift")
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
-    let owner = SymbolRecord(
+    let owner = IndexSnapshot.Symbol(
         usr: "usr-payload",
         name: "Payload",
         kind: "protocol",
@@ -361,7 +373,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let requirement = SymbolRecord(
+    let requirement = IndexSnapshot.Symbol(
         usr: "usr-payload-dto",
         name: "DTO",
         kind: "typealias",
@@ -369,7 +381,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let witness = SymbolRecord(
+    let witness = IndexSnapshot.Symbol(
         usr: "usr-message-dto",
         name: "DTO",
         kind: "typealias",
@@ -386,7 +398,7 @@ import Testing
             token: "DTO",
             roles: [.definition, .childOf],
             relations: [
-                RelationRecord(
+                IndexSnapshot.Relation(
                     usr: owner.usr,
                     name: owner.name,
                     rolesRaw: 0,
@@ -401,13 +413,13 @@ import Testing
             token: "DTO",
             roles: [.definition, .overrideOf, .baseOf],
             relations: [
-                RelationRecord(
+                IndexSnapshot.Relation(
                     usr: requirement.usr,
                     name: requirement.name,
                     rolesRaw: 0,
                     roles: ["overrideOf"]
                 ),
-                RelationRecord(
+                IndexSnapshot.Relation(
                     usr: requirement.usr,
                     name: requirement.name,
                     rolesRaw: 0,
@@ -416,7 +428,7 @@ import Testing
             ]
         ),
     ]
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
@@ -425,19 +437,19 @@ import Testing
         ),
         sourceCache: cache
     )
-    let entries = plan.entries.filter { $0.usr == requirement.usr || $0.usr == witness.usr }
+    let entries = plan.renames.filter { $0.usr == requirement.usr || $0.usr == witness.usr }
 
     #expect(entries.count == 2)
     #expect(Set(entries.map(\.newName)).count == 1)
-    #expect(plan.denied.allSatisfy { $0.usr != requirement.usr && $0.usr != witness.usr })
+    #expect(plan.rejections.allSatisfy { $0.usr != requirement.usr && $0.usr != witness.usr })
 }
 
-@Test func renamePlannerDeniesProtocolComponentThatReachesExternalRequirement() throws {
+@Test func renamePlannerDeniesProtocolFamilyThatReachesExternalRequirement() throws {
     let directory = try makeTemporaryDirectory()
     let file = directory.appendingPathComponent("ExternalRequirement.swift")
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
-    let owner = SymbolRecord(
+    let owner = IndexSnapshot.Symbol(
         usr: "usr-local-service",
         name: "LocalService",
         kind: "protocol",
@@ -445,7 +457,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let requirement = SymbolRecord(
+    let requirement = IndexSnapshot.Symbol(
         usr: "usr-local-send",
         name: "send()",
         kind: "instanceMethod",
@@ -453,7 +465,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let witness = SymbolRecord(
+    let witness = IndexSnapshot.Symbol(
         usr: "usr-client-send",
         name: "send()",
         kind: "instanceMethod",
@@ -461,27 +473,31 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let localOverride = RelationRecord(
+    let localOverride = IndexSnapshot.Relation(
         usr: requirement.usr,
         name: requirement.name,
         rolesRaw: 0,
         roles: ["overrideOf"]
     )
-    let externalOverride = RelationRecord(
+    let externalOverride = IndexSnapshot.Relation(
         usr: "s:15ExternalPackage0A7ServiceP4sendyyF",
         name: "send()",
         rolesRaw: 0,
         roles: ["overrideOf"]
     )
     let occurrences = [
-        testOccurrence(owner, path: file.path, line: 1, token: "LocalService", roles: [.definition]),
+        testOccurrence(
+            owner, path: file.path, line: 1, token: "LocalService", roles: [.definition]),
         testOccurrence(
             requirement,
             path: file.path,
             line: 1,
             token: "send",
             roles: [.definition, .childOf],
-            relations: [RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])]
+            relations: [
+                IndexSnapshot.Relation(
+                    usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])
+            ]
         ),
         testOccurrence(
             witness,
@@ -492,7 +508,7 @@ import Testing
             relations: [localOverride, externalOverride]
         ),
     ]
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
@@ -502,9 +518,9 @@ import Testing
         sourceCache: cache
     )
     let componentUSRs = Set([requirement.usr, witness.usr])
-    let componentDenials = plan.denied.filter { componentUSRs.contains($0.usr) }
+    let componentDenials = plan.rejections.filter { componentUSRs.contains($0.usr) }
 
-    #expect(plan.entries.allSatisfy { !componentUSRs.contains($0.usr) })
+    #expect(plan.renames.allSatisfy { !componentUSRs.contains($0.usr) })
     #expect(componentDenials.count == 2)
     #expect(
         componentDenials.allSatisfy { decision in
@@ -520,7 +536,7 @@ import Testing
     let file = directory.appendingPathComponent("ObjectiveCProtocol.swift")
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
-    let owner = SymbolRecord(
+    let owner = IndexSnapshot.Symbol(
         usr: "c:@M@Sample@objc(pl)LegacyService",
         name: "LegacyService",
         kind: "protocol",
@@ -528,7 +544,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let requirement = SymbolRecord(
+    let requirement = IndexSnapshot.Symbol(
         usr: "c:@M@Sample@objc(pl)LegacyService(im)ping",
         name: "ping()",
         kind: "instanceMethod",
@@ -536,7 +552,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let witness = SymbolRecord(
+    let witness = IndexSnapshot.Symbol(
         usr: "s:6Sample7AdapterC4pingyyF",
         name: "ping()",
         kind: "instanceMethod",
@@ -545,14 +561,18 @@ import Testing
         properties: "[]"
     )
     let occurrences = [
-        testOccurrence(owner, path: file.path, line: 1, token: "LegacyService", roles: [.definition]),
+        testOccurrence(
+            owner, path: file.path, line: 1, token: "LegacyService", roles: [.definition]),
         testOccurrence(
             requirement,
             path: file.path,
             line: 1,
             token: "ping",
             roles: [.definition, .childOf],
-            relations: [RelationRecord(usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])]
+            relations: [
+                IndexSnapshot.Relation(
+                    usr: owner.usr, name: owner.name, rolesRaw: 0, roles: ["childOf"])
+            ]
         ),
         testOccurrence(
             witness,
@@ -561,7 +581,7 @@ import Testing
             token: "ping",
             roles: [.definition, .overrideOf],
             relations: [
-                RelationRecord(
+                IndexSnapshot.Relation(
                     usr: requirement.usr,
                     name: requirement.name,
                     rolesRaw: 0,
@@ -570,7 +590,7 @@ import Testing
             ]
         ),
     ]
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(
         snapshot: IndexSnapshot(
             sourceFiles: [file.path],
@@ -580,14 +600,15 @@ import Testing
         sourceCache: cache
     )
 
-    #expect(plan.entries.allSatisfy { $0.usr != requirement.usr && $0.usr != witness.usr })
+    #expect(plan.renames.allSatisfy { $0.usr != requirement.usr && $0.usr != witness.usr })
     #expect(
-        plan.denied.contains { decision in
+        plan.rejections.contains { decision in
             decision.usr == requirement.usr
-                && decision.reasons.contains("Objective-C-compatible USR requires a stable runtime name")
+                && decision.reasons.contains(
+                    "Objective-C-compatible USR requires a stable runtime name")
         })
     #expect(
-        plan.denied.contains { decision in
+        plan.rejections.contains { decision in
             decision.usr == witness.usr
                 && decision.reasons.contains("override relations require coordinated renaming")
         })

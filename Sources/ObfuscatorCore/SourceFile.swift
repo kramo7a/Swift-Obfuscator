@@ -1,11 +1,5 @@
 import Foundation
 
-public struct IdentifierToken: Sendable {
-    public let name: String
-    public let byteRange: Range<Int>
-    public let isBackticked: Bool
-}
-
 public final class SourceFileCache {
     private let fileManager: FileManager
     private var filesByCanonicalPath: [String: SourceFile] = [:]
@@ -28,6 +22,12 @@ public final class SourceFileCache {
 }
 
 public struct SourceFile: Sendable {
+    public struct IdentifierToken: Sendable {
+        public let name: String
+        public let byteRange: Range<Int>
+        public let isBackticked: Bool
+    }
+
     public let path: String
     public let data: Data
     private let lineStarts: [Int]

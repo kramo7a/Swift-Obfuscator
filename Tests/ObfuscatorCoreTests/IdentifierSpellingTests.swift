@@ -28,14 +28,14 @@ import Testing
     )
     _ = try runner.run(executable: beforeExecutable.path, arguments: [])
 
-    let snapshot = try IndexReader().read(
+    let snapshot = try IndexSnapshotReader().read(
         storePath: store,
         databasePath: database,
         sourceRoot: directory
     )
     let cache = try SourceFileCache(paths: [file.path])
     let boxGroup = try #require(
-        snapshot.groupsByUSR.first {
+        snapshot.occurrenceGroups.first {
             $0.symbol.kind == "struct" && $0.symbol.name == "ContextualBox"
         })
     #expect(
@@ -51,43 +51,43 @@ import Testing
             return token.name == "Self"
         })
     let accessorUSRs = Set(
-        snapshot.groupsByUSR.filter {
-            SafetyAnalyzer.isAccessorOccurrenceGroup($0)
+        snapshot.occurrenceGroups.filter {
+            RenameEligibilityAnalyzer.isAccessorOccurrenceGroup($0)
         }.map(\.usr))
     #expect(!accessorUSRs.isEmpty)
     let subscriptUSRs = Set(
-        snapshot.groupsByUSR.filter {
+        snapshot.occurrenceGroups.filter {
             $0.symbol.name.hasPrefix("subscript(")
         }.map(\.usr))
     #expect(!subscriptUSRs.isEmpty)
 
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
-        generator: NameGenerator(prefix: "Ctx")
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
+        generator: ObfuscatedNameGenerator(prefix: "Ctx")
     )
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let boxEntry = try #require(plan.entries.first { $0.usr == boxGroup.usr })
+    let boxEntry = try #require(plan.renames.first { $0.usr == boxGroup.usr })
     let getEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.kind == "instanceMethod" && $0.oldName == "get"
         })
     let setEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.kind == "instanceMethod" && $0.oldName == "set"
         })
     let prefixEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.kind == "instanceProperty" && $0.oldName == "prefix"
         })
-    #expect(boxEntry.replacements.allSatisfy { $0.oldName == "ContextualBox" })
-    #expect(getEntry.replacements.allSatisfy { $0.oldName == "get" })
-    #expect(setEntry.replacements.allSatisfy { $0.oldName == "set" })
-    #expect(prefixEntry.replacements.allSatisfy { $0.oldName == "prefix" })
-    #expect(Set(plan.entries.map(\.usr)).isDisjoint(with: accessorUSRs))
-    #expect(Set(plan.entries.map(\.usr)).isDisjoint(with: subscriptUSRs))
-    #expect(plan.conflicts.isEmpty)
+    #expect(boxEntry.edits.allSatisfy { $0.oldName == "ContextualBox" })
+    #expect(getEntry.edits.allSatisfy { $0.oldName == "get" })
+    #expect(setEntry.edits.allSatisfy { $0.oldName == "set" })
+    #expect(prefixEntry.edits.allSatisfy { $0.oldName == "prefix" })
+    #expect(Set(plan.renames.map(\.usr)).isDisjoint(with: accessorUSRs))
+    #expect(Set(plan.renames.map(\.usr)).isDisjoint(with: subscriptUSRs))
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("Self("))
     #expect(patched.contains("didSet"))
@@ -127,35 +127,35 @@ import Testing
     )
     _ = try runner.run(executable: beforeExecutable.path, arguments: [])
 
-    let snapshot = try IndexReader().read(
+    let snapshot = try IndexSnapshotReader().read(
         storePath: store,
         databasePath: database,
         sourceRoot: directory
     )
     let cache = try SourceFileCache(paths: [file.path])
     var planner = RenamePlanner(
-        analyzer: SafetyAnalyzer(sourceRoot: directory),
-        generator: NameGenerator(prefix: "Esc")
+        analyzer: RenameEligibilityAnalyzer(sourceRoot: directory),
+        generator: ObfuscatedNameGenerator(prefix: "Esc")
     )
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
     let typeEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.kind == "struct" && $0.oldName == "Type"
         })
     let defaultEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.kind == "staticProperty" && $0.oldName == "default"
         })
     let doEntry = try #require(
-        plan.entries.first {
+        plan.renames.first {
             $0.kind == "instanceMethod" && $0.oldName == "do"
         })
-    #expect(typeEntry.replacements.count == 2)
-    #expect(defaultEntry.replacements.count == 2)
-    #expect(doEntry.replacements.count == 2)
-    #expect(plan.conflicts.isEmpty)
+    #expect(typeEntry.edits.count == 2)
+    #expect(defaultEntry.edits.count == 2)
+    #expect(doEntry.edits.count == 2)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("struct `\(typeEntry.newName)`"))
     #expect(patched.contains("static let `\(defaultEntry.newName)`"))
@@ -274,27 +274,27 @@ import Testing
         ]
     )
     let cache = try SourceFileCache(paths: [file.path])
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
 
-    let contextualFacts = try #require(
-        plan.enumCaseSyntaxFacts.components.first {
+    let contextualMember = try #require(
+        plan.enumCaseSyntaxReport.owners.first {
             $0.ownerUSR == contextual.usr
         })
-    let escapedFacts = try #require(
-        plan.enumCaseSyntaxFacts.components.first {
+    let escapedMember = try #require(
+        plan.enumCaseSyntaxReport.owners.first {
             $0.ownerUSR == escaped.usr
         })
-    #expect(contextualFacts.blockers.isEmpty)
-    #expect(escapedFacts.blockers.isEmpty)
+    #expect(contextualMember.blockers.isEmpty)
+    #expect(escapedMember.blockers.isEmpty)
     let expectedUSRs = Set([open.usr, get.usr, left.usr, publicCase.usr])
-    #expect(expectedUSRs.isSubset(of: Set(plan.entries.map(\.usr))))
-    let escapedEntry = try #require(plan.entries.first { $0.usr == escaped.usr })
-    let publicEntry = try #require(plan.entries.first { $0.usr == publicCase.usr })
-    #expect(publicEntry.replacements.count == 2)
-    #expect(plan.conflicts.isEmpty)
+    #expect(expectedUSRs.isSubset(of: Set(plan.renames.map(\.usr))))
+    let escapedEntry = try #require(plan.renames.first { $0.usr == escaped.usr })
+    let publicEntry = try #require(plan.renames.first { $0.usr == publicCase.usr })
+    #expect(publicEntry.edits.count == 2)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(!patched.contains("case open"))
     #expect(!patched.contains("case get"))

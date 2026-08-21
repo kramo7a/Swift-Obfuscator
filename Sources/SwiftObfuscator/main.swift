@@ -7,7 +7,7 @@ struct SwiftObfuscatorCLI {
         let arguments = Array(CommandLine.arguments.dropFirst())
         var summary = RunSummary(command: .dryRun)
         var printSummaryJSON = arguments.contains("--summary-json") || arguments.contains("--json")
-        var output: CLIOutput?
+        var output: RunOutputWriter?
         defer {
             output?.close()
         }
@@ -16,27 +16,27 @@ struct SwiftObfuscatorCLI {
             let fileManager = FileManager.default
             var options = try parse(arguments)
             try validateCoverageOptions(options)
-            printSummaryJSON = options.printSummaryJSON
+            printSummaryJSON = options.isSummaryJSONEnabled
             summary.command = options.command
             summary.phase = .prepare
             options.projectRoot = options.projectRoot.standardizedFileURL
             let paths = try resolveRunPaths(for: options, fileManager: fileManager)
             try recordRunConfiguration(options: options, paths: paths, summary: &summary)
 
-            output = try CLIOutput(
+            output = try RunOutputWriter(
                 outputDirectory: paths.outputDirectory,
                 verbosity: options.verbosity,
-                printsHumanOutput: !options.printSummaryJSON,
+                isHumanOutputEnabled: !options.isSummaryJSONEnabled,
                 fileManager: fileManager
             )
             guard let output else {
-                throw CLIError.invalidArguments("Failed to initialize output writer.")
+                throw CLI.Error.invalidArguments("Failed to initialize output writer.")
             }
 
             try writeRunConfiguration(options: options, paths: paths, output: output)
             let runner = CommandRunner(logDirectory: output.logsDirectory)
-            let builder = ProjectBuilder(runner: runner)
-            let indexedBuild = try prepareIndex(
+            let builder = XcodeIndexBuilder(runner: runner)
+            let preparedIndex = try prepareIndex(
                 options: options,
                 paths: paths,
                 builder: builder,
@@ -44,36 +44,36 @@ struct SwiftObfuscatorCLI {
                 summary: &summary
             )
 
-            let preparedPlan: PreparedPlan
+            let preparedRenamePlan: PreparedRenamePlan
             switch try preparePlan(
                 options: options,
                 paths: paths,
-                indexedBuild: indexedBuild,
+                preparedIndex: preparedIndex,
                 runner: runner,
                 output: output,
                 fileManager: fileManager,
                 summary: &summary
             ) {
-            case .dumpOnly:
+            case .dumpCompleted:
                 summary.status = .success
                 summary.phase = .completed
                 finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
                 return
             case .ready(let result):
-                preparedPlan = result
+                preparedRenamePlan = result
             }
 
-            try recordPlanningResults(
-                preparedPlan.plan,
-                selectedSourceFiles: preparedPlan.selectedSourceFiles,
-                compactReport: options.compactReport,
+            try recordPlanResults(
+                preparedRenamePlan.plan,
+                selectedSourceFiles: preparedRenamePlan.selectedSourceFiles,
+                compactReport: options.isCompactReportEnabled,
                 output: output,
                 summary: &summary
             )
             try writeCoverageReportIfRequested(
-                plan: preparedPlan.plan,
-                snapshot: preparedPlan.snapshotForCoverage,
-                selectedSourceFiles: preparedPlan.selectedSourceFiles,
+                plan: preparedRenamePlan.plan,
+                snapshot: preparedRenamePlan.snapshotForCoverage,
+                selectedSourceFiles: preparedRenamePlan.selectedSourceFiles,
                 existingCohortPath: paths.existingCoverageCohortPath,
                 newCohortPath: paths.newCoverageCohortPath,
                 cohortIdentifier: options.coverageCohortIdentifier,
@@ -88,16 +88,18 @@ struct SwiftObfuscatorCLI {
             case .dump:
                 break
             case .dryRun:
-                if options.verifyBuild {
-                    output.write("Verify build: initial indexed build succeeded; dry-run did not modify sources.")
+                if options.isBuildVerificationEnabled {
+                    output.write(
+                        "Verify build: initial indexed build succeeded; dry-run did not modify sources."
+                    )
                 }
             case .apply:
                 try applyPlan(
-                    preparedPlan.plan,
+                    preparedRenamePlan.plan,
                     to: paths.obfuscatedCodeOutputDirectory,
-                    selectedSourceFiles: preparedPlan.selectedSourceFiles,
+                    selectedSourceFiles: preparedRenamePlan.selectedSourceFiles,
                     projectRoot: options.projectRoot,
-                    mappingStore: preparedPlan.mappingStore,
+                    mappingStore: preparedRenamePlan.mappingStore,
                     mappingPath: paths.mappingPath,
                     output: output,
                     summary: &summary
@@ -106,7 +108,7 @@ struct SwiftObfuscatorCLI {
                     options: options,
                     obfuscatedCodeOutputDirectory: paths.obfuscatedCodeOutputDirectory,
                     builder: builder,
-                    scheme: indexedBuild.scheme,
+                    scheme: preparedIndex.scheme,
                     derivedDataPath: paths.derivedDataPath,
                     output: output,
                     summary: &summary
@@ -115,17 +117,17 @@ struct SwiftObfuscatorCLI {
             summary.status = .success
             summary.phase = .completed
             finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
-        } catch let error as CLIError {
+        } catch let error as CLI.Error {
             summary.status = .failure
-            summary.error = RunErrorSummary(message: error.localizedDescription)
+            summary.failure = RunSummary.Failure(message: error.localizedDescription)
             writeError("error: \(error.localizedDescription)", output: output)
-            writeError(helpText, output: output)
+            writeError(CLI.helpText, output: output)
             finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
             output?.close()
             exit(1)
         } catch {
             summary.status = .failure
-            summary.error = summarize(error)
+            summary.failure = summarize(error)
             writeError("error: \(error.localizedDescription)", output: output)
             finish(summary: summary, output: output, printSummaryJSON: printSummaryJSON)
             output?.close()
@@ -136,12 +138,13 @@ struct SwiftObfuscatorCLI {
     // MARK: - Run preparation
 
     static func resolveRunPaths(
-        for options: CLIOptions,
+        for options: CLI.Options,
         fileManager: FileManager
     ) throws -> RunPaths {
         let outputDirectory =
             (options.outputDirectory
-            ?? options.projectRoot.appendingPathComponent(".obfuscator", isDirectory: true)).standardizedFileURL
+            ?? options.projectRoot.appendingPathComponent(".obfuscator", isDirectory: true))
+            .standardizedFileURL
         let obfuscatedCodeOutputDirectory = try options.obfuscatedCodeOutputPath.map {
             try resolveObfuscatedCodeOutput($0, projectRoot: options.projectRoot)
         }
@@ -152,10 +155,12 @@ struct SwiftObfuscatorCLI {
 
         let derivedData =
             (options.derivedDataPath
-            ?? outputDirectory.appendingPathComponent("DerivedData", isDirectory: true)).standardizedFileURL
+            ?? outputDirectory.appendingPathComponent("DerivedData", isDirectory: true))
+            .standardizedFileURL
         let indexDatabase =
             (options.databasePath
-            ?? outputDirectory.appendingPathComponent("IndexDatabase", isDirectory: true)).standardizedFileURL
+            ?? outputDirectory.appendingPathComponent("IndexDatabase", isDirectory: true))
+            .standardizedFileURL
         let mapping =
             (options.mappingPath
             ?? outputDirectory.appendingPathComponent("mapping.json")).standardizedFileURL
@@ -173,7 +178,7 @@ struct SwiftObfuscatorCLI {
                     of: obfuscatedCodeOutputDirectory
                 )
             else {
-                throw CLIError.invalidArguments(
+                throw CLI.Error.invalidArguments(
                     "Obfuscated code output cannot be the project root or its ancestor: "
                         + obfuscatedCodeOutputDirectory.path
                 )
@@ -201,7 +206,7 @@ struct SwiftObfuscatorCLI {
     }
 
     static func recordRunConfiguration(
-        options: CLIOptions,
+        options: CLI.Options,
         paths: RunPaths,
         summary: inout RunSummary
     ) throws {
@@ -216,15 +221,15 @@ struct SwiftObfuscatorCLI {
                     toOutputRoot: outputDirectory
                 ).path
             }
-            return SourceRootSummary(path: sourceRoot.path, outputPath: outputPath)
+            return RunSummary.SourceRoot(path: sourceRoot.path, outputPath: outputPath)
         }
         summary.counters.sourceRoots = paths.selectedSourceRoots.count
     }
 
     static func writeRunConfiguration(
-        options: CLIOptions,
+        options: CLI.Options,
         paths: RunPaths,
-        output: CLIOutput
+        output: RunOutputWriter
     ) throws {
         output.write("Output directory: \(paths.outputDirectory.path)")
         if let obfuscatedCodeOutputDirectory = paths.obfuscatedCodeOutputDirectory {
@@ -249,20 +254,20 @@ struct SwiftObfuscatorCLI {
     }
 
     static func prepareIndex(
-        options: CLIOptions,
+        options: CLI.Options,
         paths: RunPaths,
-        builder: ProjectBuilder,
-        output: CLIOutput,
+        builder: XcodeIndexBuilder,
+        output: RunOutputWriter,
         summary: inout RunSummary
-    ) throws -> IndexedBuild {
-        let indexedBuild: IndexedBuild
-        if options.reuseIndex {
+    ) throws -> PreparedIndex {
+        let preparedIndex: PreparedIndex
+        if options.isIndexReuseEnabled {
             summary.phase = .validateIndexSources
             output.write(
                 "Reusing existing index database after validating all Swift sources...",
                 visibility: .quiet
             )
-            indexedBuild = IndexedBuild(
+            preparedIndex = PreparedIndex(
                 scheme: try options.scheme ?? builder.inferScheme(projectRoot: options.projectRoot),
                 indexStorePath: paths.derivedDataPath
                     .appendingPathComponent("Index.noindex/DataStore", isDirectory: true)
@@ -274,7 +279,7 @@ struct SwiftObfuscatorCLI {
                 visibility: .quiet
             )
             let result = try builder.build(
-                ProjectBuildOptions(
+                XcodeIndexBuilder.Options(
                     projectRoot: options.projectRoot,
                     scheme: options.scheme,
                     configuration: options.configuration,
@@ -282,37 +287,37 @@ struct SwiftObfuscatorCLI {
                     derivedDataPath: paths.derivedDataPath,
                     extraXcodebuildArguments: options.extraXcodebuildArguments
                 ))
-            indexedBuild = IndexedBuild(
+            preparedIndex = PreparedIndex(
                 scheme: result.scheme,
                 indexStorePath: result.indexStorePath
             )
             output.write("Build succeeded: scheme=\(result.scheme)", visibility: .quiet)
         }
 
-        summary.build = BuildSummary(
-            scheme: indexedBuild.scheme,
+        summary.build = RunSummary.Build(
+            scheme: preparedIndex.scheme,
             derivedDataPath: paths.derivedDataPath.path,
-            indexStorePath: indexedBuild.indexStorePath.path
+            indexStorePath: preparedIndex.indexStorePath.path
         )
-        output.write("Index store: \(indexedBuild.indexStorePath.path)")
-        return indexedBuild
+        output.write("Index store: \(preparedIndex.indexStorePath.path)")
+        return preparedIndex
     }
 
     // MARK: - Plan preparation
 
     static func preparePlan(
-        options: CLIOptions,
+        options: CLI.Options,
         paths: RunPaths,
-        indexedBuild: IndexedBuild,
+        preparedIndex: PreparedIndex,
         runner: CommandRunner,
-        output: CLIOutput,
+        output: RunOutputWriter,
         fileManager: FileManager,
         summary: inout RunSummary
-    ) throws -> PlanPreparation {
+    ) throws -> PreparedPlanResult {
         var sourceCache: SourceFileCache?
         var sourceManifest: IndexSourceManifest?
-        if options.reuseIndex {
-            let currentSourceFiles = try SourceFileFinder.swiftFiles(
+        if options.isIndexReuseEnabled {
+            let currentSourceFiles = try SwiftSourceFinder.swiftFiles(
                 in: options.projectRoot,
                 excluding: paths.excludedSourceRoots,
                 fileManager: fileManager
@@ -329,7 +334,7 @@ struct SwiftObfuscatorCLI {
             )
         }
 
-        let inputMappingStore = try MappingStore.load(from: paths.mappingPath)
+        let inputMappings = try RenameMappingStore.load(from: paths.mappingPath)
         let executableURL = URL(
             fileURLWithPath: CommandLine.arguments[0],
             relativeTo: URL(
@@ -342,7 +347,7 @@ struct SwiftObfuscatorCLI {
             paths: paths,
             executableURL: executableURL,
             sourceManifest: sourceManifest,
-            mappingStore: inputMappingStore
+            mappingStore: inputMappings
         )
 
         if let cachedPlan {
@@ -355,9 +360,9 @@ struct SwiftObfuscatorCLI {
                 visibility: .quiet
             )
             return .ready(
-                PreparedPlan(
+                PreparedRenamePlan(
                     plan: cachedPlan.plan,
-                    mappingStore: MappingStore(entries: cachedPlan.outputMappingEntries),
+                    mappingStore: RenameMappingStore(renames: cachedPlan.outputRenames),
                     selectedSourceFiles: selectedSourceFiles(
                         from: cachedPlan.sourceFiles,
                         under: paths.selectedSourceRoots
@@ -367,9 +372,11 @@ struct SwiftObfuscatorCLI {
         }
 
         let snapshot: IndexSnapshot
-        if options.reuseIndex, fileManager.fileExists(atPath: paths.indexSnapshotCachePath.path) {
+        if options.isIndexReuseEnabled,
+            fileManager.fileExists(atPath: paths.indexSnapshotCachePath.path)
+        {
             guard let sourceManifest else {
-                throw CLIError.invalidArguments("Failed to validate indexed Swift sources.")
+                throw CLI.Error.invalidArguments("Failed to validate indexed Swift sources.")
             }
             summary.phase = .loadIndexSnapshot
             snapshot = try IndexSnapshotCache.load(
@@ -383,12 +390,12 @@ struct SwiftObfuscatorCLI {
             )
         } else {
             summary.phase = .readIndex
-            snapshot = try IndexReader(runner: runner).read(
-                storePath: indexedBuild.indexStorePath,
+            snapshot = try IndexSnapshotReader(runner: runner).read(
+                storePath: preparedIndex.indexStorePath,
                 databasePath: paths.indexDatabasePath,
                 sourceRoot: options.projectRoot,
                 excludedSourceRoots: paths.excludedSourceRoots,
-                reuseExistingDatabase: options.reuseIndex
+                reuseExistingDatabase: options.isIndexReuseEnabled
             )
         }
 
@@ -397,7 +404,7 @@ struct SwiftObfuscatorCLI {
                 .map(SourcePathNormalizer.canonicalPath)
                 .sorted()
             guard sourceCache.allPaths == indexedPaths else {
-                throw CLIError.invalidArguments(
+                throw CLI.Error.invalidArguments(
                     "Index database source paths do not match the validated source manifest. "
                         + "Run again without --reuse-index."
                 )
@@ -413,10 +420,10 @@ struct SwiftObfuscatorCLI {
         }
 
         if !fileManager.fileExists(atPath: paths.indexSnapshotCachePath.path)
-            || !options.reuseIndex
+            || !options.isIndexReuseEnabled
         {
             guard let sourceManifest else {
-                throw CLIError.invalidArguments(
+                throw CLI.Error.invalidArguments(
                     "Failed to capture indexed Swift source manifest."
                 )
             }
@@ -438,29 +445,29 @@ struct SwiftObfuscatorCLI {
             visibility: .quiet
         )
 
-        if options.command == .dump || options.dumpIndex {
+        if options.command == .dump || options.isIndexDumpEnabled {
             summary.phase = .dumpIndex
             let dump = ReportRenderer.renderDump(snapshot: snapshot)
             let dumpPath = try output.writeArtifact(named: "index-dump.txt", contents: dump)
             summary.artifacts.indexDump = dumpPath.path
-            let visibility: ConsoleVisibility = options.verbosity == .quiet ? .verbose : .normal
+            let visibility: MessageLevel = options.verbosity == .quiet ? .verbose : .normal
             output.write(dump, visibility: visibility)
             output.write("Index dump saved: \(dumpPath.path)", visibility: .quiet)
             if options.command == .dump {
-                return .dumpOnly
+                return .dumpCompleted
             }
         }
 
         summary.phase = .planRenames
         guard let sourceCache, let sourceManifest else {
-            throw CLIError.invalidArguments("Failed to load indexed Swift sources.")
+            throw CLI.Error.invalidArguments("Failed to load indexed Swift sources.")
         }
         var planner = RenamePlanner(
-            analyzer: SafetyAnalyzer(
+            analyzer: RenameEligibilityAnalyzer(
                 sourceRoot: options.projectRoot,
                 obfuscationRoots: paths.selectedSourceRoots
             ),
-            mappingStore: inputMappingStore
+            mappingStore: inputMappings
         )
         let plan = planner.makePlan(snapshot: snapshot, sourceCache: sourceCache)
         let sourceFilesForPlan = selectedSourceFiles(
@@ -468,16 +475,16 @@ struct SwiftObfuscatorCLI {
             under: paths.selectedSourceRoots
         )
 
-        let planCacheKey = try RenamePlanCacheKey.make(
+        let planCacheKey = try RenamePlanCache.Key.make(
             toolURL: executableURL,
             sourceManifest: sourceManifest,
             obfuscationRoots: paths.selectedSourceRoots,
-            mappingStore: inputMappingStore
+            mappingStore: inputMappings
         )
         try RenamePlanCache.save(
-            CachedRenamePlan(
+            RenamePlanCache.Value(
                 plan: plan,
-                outputMappingEntries: planner.mappingStore.allEntries(),
+                outputRenames: planner.mappingStore.allRenames(),
                 sourceFiles: snapshot.sourceFiles,
                 indexedSymbolCount: snapshot.symbols.count,
                 indexedOccurrenceCount: snapshot.occurrences.count
@@ -490,7 +497,7 @@ struct SwiftObfuscatorCLI {
         output.write("Rename plan cache saved: \(paths.renamePlanCachePath.path)")
 
         return .ready(
-            PreparedPlan(
+            PreparedRenamePlan(
                 plan: plan,
                 mappingStore: planner.mappingStore,
                 selectedSourceFiles: sourceFilesForPlan,
@@ -499,22 +506,22 @@ struct SwiftObfuscatorCLI {
     }
 
     static func loadCachedPlanIfAvailable(
-        options: CLIOptions,
+        options: CLI.Options,
         paths: RunPaths,
         executableURL: URL,
         sourceManifest: IndexSourceManifest?,
-        mappingStore: MappingStore
-    ) throws -> CachedRenamePlan? {
-        guard options.reuseIndex,
+        mappingStore: RenameMappingStore
+    ) throws -> RenamePlanCache.Value? {
+        guard options.isIndexReuseEnabled,
             options.command != .dump,
-            !options.dumpIndex,
+            !options.isIndexDumpEnabled,
             paths.existingCoverageCohortPath == nil,
             paths.newCoverageCohortPath == nil,
             let sourceManifest
         else {
             return nil
         }
-        let key = try RenamePlanCacheKey.make(
+        let key = try RenamePlanCache.Key.make(
             toolURL: executableURL,
             sourceManifest: sourceManifest,
             obfuscationRoots: paths.selectedSourceRoots,
@@ -530,34 +537,34 @@ struct SwiftObfuscatorCLI {
         to obfuscatedCodeOutputDirectory: URL?,
         selectedSourceFiles: [String],
         projectRoot: URL,
-        mappingStore: MappingStore,
+        mappingStore: RenameMappingStore,
         mappingPath: URL,
-        output: CLIOutput,
+        output: RunOutputWriter,
         summary: inout RunSummary
     ) throws {
         summary.phase = .apply
-        let replacements = plan.replacements
+        let edits = plan.edits
 
         if let obfuscatedCodeOutputDirectory {
             let writtenFiles = try SourcePatcher().writePatchedCopies(
                 sourceFiles: selectedSourceFiles,
-                replacements: replacements,
+                edits: edits,
                 sourceRoot: projectRoot,
                 outputRoot: obfuscatedCodeOutputDirectory
             )
             summary.counters.writtenSourceFiles = writtenFiles.count
-            output.write("Applied replacements: \(replacements.count)", visibility: .quiet)
+            output.write("Applied replacements: \(edits.count)", visibility: .quiet)
             output.write("Written source files: \(writtenFiles.count)", visibility: .quiet)
         } else {
-            try SourcePatcher().apply(replacements)
+            try SourcePatcher().apply(edits)
             output.write(
-                "Applied replacements to project source files: \(replacements.count)",
+                "Applied replacements to project source files: \(edits.count)",
                 visibility: .quiet
             )
         }
-        summary.counters.appliedReplacements = replacements.count
+        summary.counters.appliedReplacements = edits.count
 
-        guard !replacements.isEmpty else {
+        guard !edits.isEmpty else {
             return
         }
         try mappingStore.save(to: mappingPath)
@@ -566,15 +573,15 @@ struct SwiftObfuscatorCLI {
     }
 
     static func verifyAppliedBuildIfRequested(
-        options: CLIOptions,
+        options: CLI.Options,
         obfuscatedCodeOutputDirectory: URL?,
-        builder: ProjectBuilder,
+        builder: XcodeIndexBuilder,
         scheme: String,
         derivedDataPath: URL,
-        output: CLIOutput,
+        output: RunOutputWriter,
         summary: inout RunSummary
     ) throws {
-        guard options.verifyBuild else {
+        guard options.isBuildVerificationEnabled else {
             return
         }
         guard obfuscatedCodeOutputDirectory == nil else {
@@ -587,7 +594,7 @@ struct SwiftObfuscatorCLI {
         summary.phase = .verifyBuild
         output.write("Verifying patched build...")
         _ = try builder.build(
-            ProjectBuildOptions(
+            XcodeIndexBuilder.Options(
                 projectRoot: options.projectRoot,
                 scheme: scheme,
                 configuration: options.configuration,
@@ -598,36 +605,36 @@ struct SwiftObfuscatorCLI {
         output.write("Verify build succeeded.")
     }
 
-    static func recordPlanningResults(
+    static func recordPlanResults(
         _ plan: RenamePlan,
         selectedSourceFiles: [String],
         compactReport: Bool,
-        output: CLIOutput,
+        output: RunOutputWriter,
         summary: inout RunSummary
     ) throws {
         summary.counters.selectedSourceFiles = selectedSourceFiles.count
         output.write("Selected source files=\(selectedSourceFiles.count)", visibility: .quiet)
 
-        let replacements = plan.replacements
-        try SourcePatcher().validate(replacements)
-        summary.counters.plannedSymbols = plan.entries.count
-        summary.counters.plannedReplacements = replacements.count
-        summary.counters.deniedSymbols = plan.denied.count
-        summary.counters.conflicts = plan.conflicts.count
-        summary.parameterFacts = plan.parameterFacts
-        summary.parameterSyntaxFacts = plan.parameterSyntaxFacts
-        summary.parameterCallSiteSyntaxFacts = plan.parameterCallSiteSyntaxFacts
-        summary.parameterCallArgumentBindingFacts = plan.parameterCallArgumentBindingFacts
-        summary.parameterCallableReferenceSyntaxFacts = plan.parameterCallableReferenceSyntaxFacts
-        summary.parameterCallableReferenceBindingFacts = plan.parameterCallableReferenceBindingFacts
-        summary.parameterExternalLabelComponentFacts = plan.parameterExternalLabelComponentFacts
-        summary.parameterExternalLabelRenameOutcome = plan.parameterExternalLabelRenameOutcome
-        summary.parameterLocalBindingOutcome = plan.parameterLocalBindingOutcome
-        summary.enumCaseComponentFacts = plan.enumCaseComponentFacts
-        summary.compilerRawValueFacts = plan.compilerRawValueFacts
-        summary.enumCaseSyntaxFacts = plan.enumCaseSyntaxFacts
-        summary.genericParameterSyntaxFacts = plan.genericParameterSyntaxFacts
-        summary.typealiasSyntaxFacts = plan.typealiasSyntaxFacts
+        let edits = plan.edits
+        try SourcePatcher().validate(edits)
+        summary.counters.plannedSymbols = plan.renames.count
+        summary.counters.plannedReplacements = edits.count
+        summary.counters.rejectedSymbols = plan.rejections.count
+        summary.counters.editConflicts = plan.editConflicts.count
+        summary.callableReport = plan.callableReport
+        summary.parameterSyntaxReport = plan.parameterSyntaxReport
+        summary.callSiteSyntaxReport = plan.callSiteSyntaxReport
+        summary.callArgumentBindingReport = plan.callArgumentBindingReport
+        summary.callableReferenceSyntaxReport = plan.callableReferenceSyntaxReport
+        summary.callableReferenceBindingReport = plan.callableReferenceBindingReport
+        summary.externalLabelReport = plan.externalLabelReport
+        summary.externalLabelRenameReport = plan.externalLabelRenameReport
+        summary.localBindingRenameReport = plan.localBindingRenameReport
+        summary.enumCaseSemanticsReport = plan.enumCaseSemanticsReport
+        summary.enumRawValueReport = plan.enumRawValueReport
+        summary.enumCaseSyntaxReport = plan.enumCaseSyntaxReport
+        summary.genericParameterReport = plan.genericParameterReport
+        summary.typeAliasSyntaxReport = plan.typeAliasSyntaxReport
 
         let report = ReportRenderer.renderDryRun(plan: plan, compact: compactReport)
         let reportPath = try output.writeArtifact(
@@ -637,8 +644,8 @@ struct SwiftObfuscatorCLI {
         summary.artifacts.dryRunReport = reportPath.path
         output.write(report, visibility: .verbose)
         output.write(
-            "Dry-run summary: planned=\(plan.entries.count), replacements=\(replacements.count), "
-                + "denied=\(plan.denied.count), conflicts=\(plan.conflicts.count)",
+            "Dry-run summary: planned=\(plan.renames.count), replacements=\(edits.count), "
+                + "denied=\(plan.rejections.count), conflicts=\(plan.editConflicts.count)",
             visibility: .quiet
         )
         output.write("Dry-run report saved: \(reportPath.path)", visibility: .quiet)
@@ -653,7 +660,7 @@ struct SwiftObfuscatorCLI {
         cohortIdentifier: String?,
         expectedCount: Int?,
         outputDirectory: URL,
-        output: CLIOutput,
+        output: RunOutputWriter,
         fileManager: FileManager,
         summary: inout RunSummary
     ) throws {
@@ -661,7 +668,7 @@ struct SwiftObfuscatorCLI {
             return
         }
         guard let snapshot else {
-            throw CLIError.invalidArguments(
+            throw CLI.Error.invalidArguments(
                 "Coverage reporting requires an index snapshot. Run without a cached rename plan."
             )
         }
@@ -669,7 +676,7 @@ struct SwiftObfuscatorCLI {
         let cohort: CoverageCohort
         if let newCohortPath {
             guard let cohortIdentifier, let expectedCount else {
-                throw CLIError.invalidArguments(
+                throw CLI.Error.invalidArguments(
                     "Creating a coverage cohort requires --coverage-cohort-id "
                         + "and --coverage-expected-count."
                 )
@@ -702,7 +709,7 @@ struct SwiftObfuscatorCLI {
         summary.artifacts.coverageReport = reportPath.path
         summary.counters.cohortDenominator = report.denominator
         summary.counters.cohortRenamed = report.renamed
-        summary.counters.cohortDenied = report.denied
+        summary.counters.cohortRejected = report.rejected
         summary.counters.cohortMissingFromIndex = report.missingFromIndex
         summary.counters.cohortUnclassified = report.unclassified
         summary.counters.cohortCoveragePercent = report.coveragePercent
@@ -717,22 +724,25 @@ struct SwiftObfuscatorCLI {
 
     // MARK: - Run reporting
 
-    static func finish(summary: RunSummary, output: CLIOutput?, printSummaryJSON: Bool) {
+    static func finish(summary: RunSummary, output: RunOutputWriter?, printSummaryJSON: Bool) {
         var summary = summary
         if let output {
             summary.artifacts.runLog = output.runLogURL.path
             summary.logs = logPaths(in: output.logsDirectory, including: output.runLogURL)
-            summary.artifacts.runSummary = output.outputDirectory.appendingPathComponent("run-summary.json").path
+            summary.artifacts.runSummary =
+                output.outputDirectory.appendingPathComponent("run-summary.json").path
         }
 
         let json = renderSummaryJSON(summary)
 
         if let output {
             do {
-                let summaryPath = try output.writeArtifact(named: "run-summary.json", contents: json)
+                let summaryPath = try output.writeArtifact(
+                    named: "run-summary.json", contents: json)
                 output.write("Run summary saved: \(summaryPath.path)", visibility: .quiet)
             } catch {
-                output.writeError("warning: failed to write run summary: \(error.localizedDescription)")
+                output.writeError(
+                    "warning: failed to write run summary: \(error.localizedDescription)")
             }
             if printSummaryJSON {
                 output.writeJSONToStdout(json)
@@ -753,14 +763,14 @@ struct SwiftObfuscatorCLI {
         return json
     }
 
-    static func summarize(_ error: Error) -> RunErrorSummary {
-        if let commandError = error as? CommandRunnerError {
+    static func summarize(_ error: Error) -> RunSummary.Failure {
+        if let commandError = error as? CommandRunner.Error {
             switch commandError {
             case .launchFailed(let message):
-                return RunErrorSummary(message: message)
+                return RunSummary.Failure(message: message)
             case .failed(let result):
                 let outputTail = result.combinedOutput.tailLines(120)
-                return RunErrorSummary(
+                return RunSummary.Failure(
                     message: "Command failed with exit code \(result.exitCode)",
                     commandLine: result.commandLine,
                     exitCode: result.exitCode,
@@ -770,10 +780,12 @@ struct SwiftObfuscatorCLI {
                 )
             }
         }
-        return RunErrorSummary(message: error.localizedDescription)
+        return RunSummary.Failure(message: error.localizedDescription)
     }
 
-    static func logPaths(in logsDirectory: URL, including runLogURL: URL, fileManager: FileManager = .default)
+    static func logPaths(
+        in logsDirectory: URL, including runLogURL: URL, fileManager: FileManager = .default
+    )
         -> [String]
     {
         var paths: [String] = []
@@ -787,7 +799,9 @@ struct SwiftObfuscatorCLI {
         }
 
         append(runLogURL)
-        if let contents = try? fileManager.contentsOfDirectory(at: logsDirectory, includingPropertiesForKeys: nil) {
+        if let contents = try? fileManager.contentsOfDirectory(
+            at: logsDirectory, includingPropertiesForKeys: nil)
+        {
             for url in contents where url.pathExtension == "log" {
                 append(url)
             }
@@ -797,15 +811,15 @@ struct SwiftObfuscatorCLI {
 
     // MARK: - Arguments
 
-    static func parse(_ arguments: [String]) throws -> CLIOptions {
+    static func parse(_ arguments: [String]) throws -> CLI.Options {
         if arguments.contains("--help") || arguments.contains("-h") {
-            print(helpText)
+            print(CLI.helpText)
             exit(0)
         }
 
-        var options = CLIOptions()
+        var options = CLI.Options()
         var index = 0
-        if let first = arguments.first, let command = Command(rawValue: first) {
+        if let first = arguments.first, let command = CLI.Command(rawValue: first) {
             options.command = command
             index = 1
         }
@@ -817,15 +831,20 @@ struct SwiftObfuscatorCLI {
                 options.extraXcodebuildArguments.append(contentsOf: arguments[(index + 1)...])
                 return options
             case "--project":
-                options.projectRoot = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+                options.projectRoot = URL(
+                    fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--source", "--source-root":
-                options.sourceRootPaths.append(try value(after: argument, in: arguments, index: &index))
+                options.sourceRootPaths.append(
+                    try value(after: argument, in: arguments, index: &index))
             case "--output":
-                options.outputDirectory = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+                options.outputDirectory = URL(
+                    fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--obfuscated-code-output":
-                options.obfuscatedCodeOutputPath = try value(after: argument, in: arguments, index: &index)
+                options.obfuscatedCodeOutputPath = try value(
+                    after: argument, in: arguments, index: &index)
             case let inline where inline.hasPrefix("--obfuscated-code-output="):
-                options.obfuscatedCodeOutputPath = try inlineValue(inline, option: "--obfuscated-code-output")
+                options.obfuscatedCodeOutputPath = try inlineValue(
+                    inline, option: "--obfuscated-code-output")
             case "--scheme":
                 options.scheme = try value(after: argument, in: arguments, index: &index)
             case "--configuration":
@@ -835,11 +854,14 @@ struct SwiftObfuscatorCLI {
             case "--no-destination":
                 options.destination = nil
             case "--derived-data":
-                options.derivedDataPath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+                options.derivedDataPath = URL(
+                    fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--database":
-                options.databasePath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+                options.databasePath = URL(
+                    fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--mapping":
-                options.mappingPath = URL(fileURLWithPath: try value(after: argument, in: arguments, index: &index))
+                options.mappingPath = URL(
+                    fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--coverage-cohort":
                 options.coverageCohortPath = URL(
                     fileURLWithPath: try value(after: argument, in: arguments, index: &index))
@@ -847,65 +869,74 @@ struct SwiftObfuscatorCLI {
                 options.createCoverageCohortPath = URL(
                     fileURLWithPath: try value(after: argument, in: arguments, index: &index))
             case "--coverage-cohort-id":
-                options.coverageCohortIdentifier = try value(after: argument, in: arguments, index: &index)
+                options.coverageCohortIdentifier = try value(
+                    after: argument, in: arguments, index: &index)
             case "--coverage-expected-count":
                 let value = try value(after: argument, in: arguments, index: &index)
                 guard let count = Int(value), count > 0 else {
-                    throw CLIError.invalidArguments("--coverage-expected-count must be a positive integer: \(value)")
+                    throw CLI.Error.invalidArguments(
+                        "--coverage-expected-count must be a positive integer: \(value)")
                 }
                 options.coverageExpectedCount = count
             case "--dump":
-                options.dumpIndex = true
+                options.isIndexDumpEnabled = true
             case "--verify-build":
-                options.verifyBuild = true
+                options.isBuildVerificationEnabled = true
             case "--reuse-index":
-                options.reuseIndex = true
+                options.isIndexReuseEnabled = true
             case "--compact-report":
-                options.compactReport = true
+                options.isCompactReportEnabled = true
             case "--quiet":
                 options.verbosity = .quiet
             case "--verbose":
                 options.verbosity = .verbose
             case "--summary-json", "--json":
-                options.printSummaryJSON = true
+                options.isSummaryJSONEnabled = true
             case "--xcodebuild-arg":
-                options.extraXcodebuildArguments.append(try value(after: argument, in: arguments, index: &index))
+                options.extraXcodebuildArguments.append(
+                    try value(after: argument, in: arguments, index: &index))
             default:
-                throw CLIError.invalidArguments("Unknown argument: \(argument)")
+                throw CLI.Error.invalidArguments("Unknown argument: \(argument)")
             }
             index += 1
         }
         return options
     }
 
-    static func validateCoverageOptions(_ options: CLIOptions) throws {
+    static func validateCoverageOptions(_ options: CLI.Options) throws {
         if options.coverageCohortPath != nil, options.createCoverageCohortPath != nil {
-            throw CLIError.invalidArguments("Use either --coverage-cohort or --create-coverage-cohort, not both.")
+            throw CLI.Error.invalidArguments(
+                "Use either --coverage-cohort or --create-coverage-cohort, not both.")
         }
         if options.createCoverageCohortPath != nil {
             guard let identifier = options.coverageCohortIdentifier, !identifier.isEmpty else {
-                throw CLIError.invalidArguments("--create-coverage-cohort requires --coverage-cohort-id.")
+                throw CLI.Error.invalidArguments(
+                    "--create-coverage-cohort requires --coverage-cohort-id.")
             }
             guard options.coverageExpectedCount != nil else {
-                throw CLIError.invalidArguments(
+                throw CLI.Error.invalidArguments(
                     "--create-coverage-cohort requires --coverage-expected-count so the denominator cannot drift silently."
                 )
             }
         } else if options.coverageCohortIdentifier != nil || options.coverageExpectedCount != nil {
-            throw CLIError.invalidArguments(
-                "--coverage-cohort-id and --coverage-expected-count are only valid with --create-coverage-cohort.")
+            throw CLI.Error.invalidArguments(
+                "--coverage-cohort-id and --coverage-expected-count are only valid with --create-coverage-cohort."
+            )
         }
         if options.command == .dump,
             options.coverageCohortPath != nil || options.createCoverageCohortPath != nil
         {
-            throw CLIError.invalidArguments("Coverage reporting is available for dry-run and apply, not dump.")
+            throw CLI.Error.invalidArguments(
+                "Coverage reporting is available for dry-run and apply, not dump.")
         }
     }
 
-    static func value(after option: String, in arguments: [String], index: inout Int) throws -> String {
+    static func value(after option: String, in arguments: [String], index: inout Int) throws
+        -> String
+    {
         let valueIndex = index + 1
         guard valueIndex < arguments.count else {
-            throw CLIError.invalidArguments("Missing value after \(option)")
+            throw CLI.Error.invalidArguments("Missing value after \(option)")
         }
         index = valueIndex
         return arguments[valueIndex]
@@ -914,11 +945,11 @@ struct SwiftObfuscatorCLI {
     static func inlineValue(_ argument: String, option: String) throws -> String {
         let prefix = option + "="
         guard argument.hasPrefix(prefix) else {
-            throw CLIError.invalidArguments("Invalid argument: \(argument)")
+            throw CLI.Error.invalidArguments("Invalid argument: \(argument)")
         }
         let value = String(argument.dropFirst(prefix.count))
         guard !value.isEmpty else {
-            throw CLIError.invalidArguments("Missing value after \(option)")
+            throw CLI.Error.invalidArguments("Missing value after \(option)")
         }
         return value
     }
@@ -939,16 +970,18 @@ struct SwiftObfuscatorCLI {
             let root = resolvePath(requestedPath, relativeTo: projectRoot).standardizedFileURL
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory) else {
-                throw CLIError.invalidArguments("Source path does not exist: \(root.path)")
+                throw CLI.Error.invalidArguments("Source path does not exist: \(root.path)")
             }
             guard isDirectory.boolValue || root.pathExtension == "swift" else {
-                throw CLIError.invalidArguments("Source path must be a directory or Swift source file: \(root.path)")
+                throw CLI.Error.invalidArguments(
+                    "Source path must be a directory or Swift source file: \(root.path)")
             }
             guard isSameOrDescendant(root, of: projectRoot) else {
-                throw CLIError.invalidArguments("Source path must be inside project root: \(root.path)")
+                throw CLI.Error.invalidArguments(
+                    "Source path must be inside project root: \(root.path)")
             }
             if let excludedRoot = excludedRoots.first(where: { isSameOrDescendant(root, of: $0) }) {
-                throw CLIError.invalidArguments(
+                throw CLI.Error.invalidArguments(
                     "Source path cannot be inside generated output directory: \(root.path) (output: \(excludedRoot.path))"
                 )
             }
@@ -965,7 +998,8 @@ struct SwiftObfuscatorCLI {
     static func resolveObfuscatedCodeOutput(_ path: String, projectRoot: URL) throws -> URL {
         let output = resolvePath(path, relativeTo: projectRoot).standardizedFileURL
         guard normalizedPath(output) != normalizedPath(projectRoot) else {
-            throw CLIError.invalidArguments("Obfuscated code output cannot be the project root: \(output.path)")
+            throw CLI.Error.invalidArguments(
+                "Obfuscated code output cannot be the project root: \(output.path)")
         }
         return output
     }
@@ -980,7 +1014,9 @@ struct SwiftObfuscatorCLI {
         try fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
     }
 
-    static func selectedSourceFiles(from sourceFiles: [String], under sourceRoots: [URL]) -> [String] {
+    static func selectedSourceFiles(from sourceFiles: [String], under sourceRoots: [URL])
+        -> [String]
+    {
         sourceFiles.filter { sourceFile in
             let sourceURL = URL(fileURLWithPath: sourceFile).standardizedFileURL
             return sourceRoots.contains { isSameOrDescendant(sourceURL, of: $0) }
@@ -995,10 +1031,11 @@ struct SwiftObfuscatorCLI {
         return root.appendingPathComponent(path, isDirectory: true)
     }
 
-    static func mapProjectPath(_ url: URL, fromProjectRoot projectRoot: URL, toOutputRoot outputRoot: URL) throws -> URL
-    {
+    static func mapProjectPath(
+        _ url: URL, fromProjectRoot projectRoot: URL, toOutputRoot outputRoot: URL
+    ) throws -> URL {
         guard isSameOrDescendant(url, of: projectRoot) else {
-            throw CLIError.invalidArguments("Path must be inside project root: \(url.path)")
+            throw CLI.Error.invalidArguments("Path must be inside project root: \(url.path)")
         }
         let projectPath = normalizedPath(projectRoot)
         let path = normalizedPath(url)
@@ -1030,7 +1067,7 @@ struct SwiftObfuscatorCLI {
         return path
     }
 
-    static func writeError(_ message: String, output: CLIOutput?) {
+    static func writeError(_ message: String, output: RunOutputWriter?) {
         if let output {
             output.writeError(message)
         } else {
@@ -1049,39 +1086,41 @@ extension String {
     }
 }
 
-let helpText = """
-    Usage:
-      swift-obfuscator dump [options]
-      swift-obfuscator dry-run [options]
-      swift-obfuscator apply [options] [--verify-build]
+extension CLI {
+    static let helpText = """
+        Usage:
+          swift-obfuscator dump [options]
+          swift-obfuscator dry-run [options]
+          swift-obfuscator apply [options] [--verify-build]
 
-    Options:
-      --project PATH             Project, workspace, or SwiftPM package root. Default: current directory.
-      --source-root PATH         Source file or directory to obfuscate. Repeatable. Relative paths resolve under --project. Default: --project.
-      --source PATH              Alias for --source-root.
-      --obfuscated-code-output PATH
-                                 Write obfuscated Swift files to PATH instead of patching project sources in-place. Relative paths resolve under --project.
-      --output PATH              Artifact directory for logs, reports, DerivedData, IndexDatabase, and mapping. Default: <project>/.obfuscator.
-      --scheme NAME              xcodebuild scheme. If omitted, the first listed scheme is used.
-      --configuration NAME       xcodebuild configuration.
-      --destination SPEC         xcodebuild destination. Default: platform=macOS.
-      --no-destination           Do not pass -destination.
-      --derived-data PATH        DerivedData path. Default: <output>/DerivedData.
-      --database PATH            IndexStoreDB database path. Default: <output>/IndexDatabase.
-      --mapping PATH             Mapping JSON path. Default: <output>/mapping.json.
-      --coverage-cohort PATH     Compare the current plan with an immutable USR cohort and write coverage-report.json.
-      --create-coverage-cohort PATH
-                                 Create an immutable baseline cohort, refusing to overwrite an existing file.
-      --coverage-cohort-id ID    Stable revision/configuration identifier required when creating a cohort.
-      --coverage-expected-count N
-                                 Required expected denominator when creating a cohort; generation fails on drift.
-      --dump                     Print full symbol/USR/occurrence dump before planning.
-      --verify-build             After in-place apply, run xcodebuild again. For external code output, report the initial indexed build status.
-      --reuse-index              Skip the initial build/import and reuse the existing IndexStoreDB only after every Swift source matches the saved SHA-256 manifest.
-      --compact-report           Omit per-occurrence and per-symbol denial details from dry-run-report.txt while preserving counters and planned rename entries.
-      --quiet                    Print only phase-level progress, counters, and artifact paths.
-      --verbose                  Print full dry-run and dump reports to stdout. Reports are always saved as artifacts.
-      --summary-json, --json     Print only run-summary JSON to stdout. Human output still goes to logs.
-      --xcodebuild-arg VALUE     Extra xcodebuild argument. Repeatable.
-      --                         Pass the remaining arguments directly to xcodebuild before "build".
-    """
+        Options:
+          --project PATH             Project, workspace, or SwiftPM package root. Default: current directory.
+          --source-root PATH         Source file or directory to obfuscate. Repeatable. Relative paths resolve under --project. Default: --project.
+          --source PATH              Alias for --source-root.
+          --obfuscated-code-output PATH
+                                     Write obfuscated Swift files to PATH instead of patching project sources in-place. Relative paths resolve under --project.
+          --output PATH              Artifact directory for logs, reports, DerivedData, IndexDatabase, and mapping. Default: <project>/.obfuscator.
+          --scheme NAME              xcodebuild scheme. If omitted, the first listed scheme is used.
+          --configuration NAME       xcodebuild configuration.
+          --destination SPEC         xcodebuild destination. Default: platform=macOS.
+          --no-destination           Do not pass -destination.
+          --derived-data PATH        DerivedData path. Default: <output>/DerivedData.
+          --database PATH            IndexStoreDB database path. Default: <output>/IndexDatabase.
+          --mapping PATH             Mapping JSON path. Default: <output>/mapping.json.
+          --coverage-cohort PATH     Compare the current plan with an immutable USR cohort and write coverage-report.json.
+          --create-coverage-cohort PATH
+                                     Create an immutable baseline cohort, refusing to overwrite an existing file.
+          --coverage-cohort-id ID    Stable revision/configuration identifier required when creating a cohort.
+          --coverage-expected-count N
+                                     Required expected denominator when creating a cohort; generation fails on drift.
+          --dump                     Print full symbol/USR/occurrence dump before planning.
+          --verify-build             After in-place apply, run xcodebuild again. For external code output, report the initial indexed build status.
+          --reuse-index              Skip the initial build/import and reuse the existing IndexStoreDB only after every Swift source matches the saved SHA-256 manifest.
+          --compact-report           Omit per-occurrence and per-symbol denial details from dry-run-report.txt while preserving counters and planned rename entries.
+          --quiet                    Print only phase-level progress, counters, and artifact paths.
+          --verbose                  Print full dry-run and dump reports to stdout. Reports are always saved as artifacts.
+          --summary-json, --json     Print only run-summary JSON to stdout. Human output still goes to logs.
+          --xcodebuild-arg VALUE     Extra xcodebuild argument. Repeatable.
+          --                         Pass the remaining arguments directly to xcodebuild before "build".
+        """
+}

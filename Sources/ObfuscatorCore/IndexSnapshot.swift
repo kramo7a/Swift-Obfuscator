@@ -1,67 +1,88 @@
 import Foundation
 import IndexStoreDB
 
-public struct SymbolRecord: Codable, Hashable, Sendable {
-    public let usr: String
-    public let name: String
-    public let kind: String
-    public let language: String
-    public let propertiesRaw: UInt64
-    public let properties: String
-
-    public init(usr: String, name: String, kind: String, language: String, propertiesRaw: UInt64, properties: String) {
-        self.usr = usr
-        self.name = name
-        self.kind = kind
-        self.language = language
-        self.propertiesRaw = propertiesRaw
-        self.properties = properties
-    }
-}
-
-public struct RelationRecord: Codable, Hashable, Sendable {
-    public let usr: String
-    public let name: String
-    public let rolesRaw: UInt64
-    public let roles: [String]
-}
-
-public struct OccurrenceRecord: Codable, Hashable, Sendable {
-    public let symbol: SymbolRecord
-    public let path: String
-    public let line: Int
-    public let utf8Column: Int
-    public let moduleName: String
-    public let isSystem: Bool
-    public let rolesRaw: UInt64
-    public let roles: [String]
-    public let rolesDescription: String
-    public let symbolProvider: String
-    public let relations: [RelationRecord]
-
-    public var usr: String {
-        symbol.usr
-    }
-}
-
-public struct USROccurrenceGroup: Sendable {
-    public let usr: String
-    public let symbol: SymbolRecord
-    public let occurrences: [OccurrenceRecord]
-}
+typealias IndexStoreSymbol = Symbol
 
 public struct IndexSnapshot: Sendable {
-    public let sourceFiles: [String]
-    public let symbols: [SymbolRecord]
-    public let occurrences: [OccurrenceRecord]
+    public struct Location: Hashable, Sendable {
+        public let path: String
+        public let line: Int
+        public let utf8Column: Int
 
-    public var groupsByUSR: [USROccurrenceGroup] {
+        public init(path: String, line: Int, utf8Column: Int) {
+            self.path = SourcePathNormalizer.canonicalPath(path)
+            self.line = line
+            self.utf8Column = utf8Column
+        }
+    }
+
+    public struct Symbol: Codable, Hashable, Sendable {
+        public let usr: String
+        public let name: String
+        public let kind: String
+        public let language: String
+        public let propertiesRaw: UInt64
+        public let properties: String
+
+        public init(
+            usr: String,
+            name: String,
+            kind: String,
+            language: String,
+            propertiesRaw: UInt64,
+            properties: String
+        ) {
+            self.usr = usr
+            self.name = name
+            self.kind = kind
+            self.language = language
+            self.propertiesRaw = propertiesRaw
+            self.properties = properties
+        }
+    }
+
+    public struct Relation: Codable, Hashable, Sendable {
+        public let usr: String
+        public let name: String
+        public let rolesRaw: UInt64
+        public let roles: [String]
+    }
+
+    public struct Occurrence: Codable, Hashable, Sendable {
+        public let symbol: Symbol
+        public let path: String
+        public let line: Int
+        public let utf8Column: Int
+        public let moduleName: String
+        public let isSystem: Bool
+        public let rolesRaw: UInt64
+        public let roles: [String]
+        public let rolesDescription: String
+        public let symbolProvider: String
+        public let relations: [Relation]
+
+        public var usr: String {
+            symbol.usr
+        }
+    }
+
+    public struct OccurrenceGroup: Sendable {
+        public let usr: String
+        public let symbol: Symbol
+        public let occurrences: [Occurrence]
+    }
+
+    public let sourceFiles: [String]
+    public let symbols: [Symbol]
+    public let occurrences: [Occurrence]
+
+    public var occurrenceGroups: [OccurrenceGroup] {
         let grouped = Dictionary(grouping: occurrences, by: \.usr)
         return grouped.compactMap { usr, occurrences in
             guard let symbol = occurrences.first?.symbol else {
                 return nil
             }
-            return USROccurrenceGroup(
+            return OccurrenceGroup(
                 usr: usr,
                 symbol: symbol,
                 occurrences: occurrences.sorted { lhs, rhs in
@@ -75,8 +96,8 @@ public struct IndexSnapshot: Sendable {
     }
 }
 
-extension SymbolRecord {
-    init(_ symbol: Symbol) {
+extension IndexSnapshot.Symbol {
+    init(_ symbol: IndexStoreSymbol) {
         self.init(
             usr: symbol.usr,
             name: symbol.name,
@@ -88,10 +109,10 @@ extension SymbolRecord {
     }
 }
 
-extension OccurrenceRecord {
+extension IndexSnapshot.Occurrence {
     init(_ occurrence: SymbolOccurrence) {
         self.init(
-            symbol: SymbolRecord(occurrence.symbol),
+            symbol: IndexSnapshot.Symbol(occurrence.symbol),
             path: occurrence.location.path,
             line: occurrence.location.line,
             utf8Column: occurrence.location.utf8Column,
@@ -101,12 +122,12 @@ extension OccurrenceRecord {
             roles: occurrence.roles.names,
             rolesDescription: String(describing: occurrence.roles),
             symbolProvider: String(describing: occurrence.symbolProvider),
-            relations: occurrence.relations.map(RelationRecord.init)
+            relations: occurrence.relations.map(IndexSnapshot.Relation.init)
         )
     }
 }
 
-extension RelationRecord {
+extension IndexSnapshot.Relation {
     init(_ relation: SymbolRelation) {
         self.init(
             usr: relation.symbol.usr,

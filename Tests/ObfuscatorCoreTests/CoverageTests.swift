@@ -8,7 +8,7 @@ import Testing
 @Test func coverageCohortUsesExplicitSourceSurfaceIndependentOfRenameEligibility() throws {
     let path = "/tmp/CoverageSample.swift"
     let outsidePath = "/tmp/OutsideSelection.swift"
-    let renamedProperty = SymbolRecord(
+    let renamedProperty = IndexSnapshot.Symbol(
         usr: "usr-renamed-property",
         name: "renamedValue",
         kind: "instanceProperty",
@@ -16,7 +16,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let deniedProperty = SymbolRecord(
+    let deniedProperty = IndexSnapshot.Symbol(
         usr: "usr-denied-property",
         name: "storedValue",
         kind: "instanceProperty",
@@ -24,7 +24,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let getter = SymbolRecord(
+    let getter = IndexSnapshot.Symbol(
         usr: "usr-getter",
         name: "getter:renamedValue",
         kind: "instanceMethod",
@@ -32,7 +32,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let setter = SymbolRecord(
+    let setter = IndexSnapshot.Symbol(
         usr: "usr-setter",
         name: "setter:storedValue",
         kind: "instanceMethod",
@@ -40,7 +40,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let parameter = SymbolRecord(
+    let parameter = IndexSnapshot.Symbol(
         usr: "usr-parameter",
         name: "value",
         kind: "parameter",
@@ -48,7 +48,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let enumCase = SymbolRecord(
+    let enumCase = IndexSnapshot.Symbol(
         usr: "usr-enum-case",
         name: "ready",
         kind: "enumConstant",
@@ -56,7 +56,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let runtimeProperty = SymbolRecord(
+    let runtimeProperty = IndexSnapshot.Symbol(
         usr: "c:objc-runtime-property",
         name: "runtimeValue",
         kind: "instanceProperty",
@@ -64,7 +64,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let constructor = SymbolRecord(
+    let constructor = IndexSnapshot.Symbol(
         usr: "usr-constructor",
         name: "init(value:)",
         kind: "constructor",
@@ -72,7 +72,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let compilerDerivedProperty = SymbolRecord(
+    let compilerDerivedProperty = IndexSnapshot.Symbol(
         usr: "usr-compiler-derived-property",
         name: "$value",
         kind: "instanceProperty",
@@ -80,7 +80,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let outsideProperty = SymbolRecord(
+    let outsideProperty = IndexSnapshot.Symbol(
         usr: "usr-outside-property",
         name: "outsideValue",
         kind: "instanceProperty",
@@ -90,12 +90,12 @@ import Testing
     )
 
     func occurrence(
-        _ symbol: SymbolRecord,
+        _ symbol: IndexSnapshot.Symbol,
         path occurrencePath: String? = nil,
         roles: [String] = ["declaration"],
-        relation: RelationRecord? = nil
-    ) -> OccurrenceRecord {
-        OccurrenceRecord(
+        relation: IndexSnapshot.Relation? = nil
+    ) -> IndexSnapshot.Occurrence {
+        IndexSnapshot.Occurrence(
             symbol: symbol,
             path: occurrencePath ?? path,
             line: 1,
@@ -129,7 +129,7 @@ import Testing
             occurrence(deniedProperty),
             occurrence(
                 getter,
-                relation: RelationRecord(
+                relation: IndexSnapshot.Relation(
                     usr: renamedProperty.usr,
                     name: renamedProperty.name,
                     rolesRaw: 1,
@@ -145,93 +145,93 @@ import Testing
         ]
     )
     let plan = RenamePlan(
-        entries: [
-            RenamePlanEntry(
+        renames: [
+            RenamePlan.Entry(
                 usr: renamedProperty.usr,
                 kind: renamedProperty.kind,
                 oldName: renamedProperty.name,
                 newName: "oa",
-                replacements: []
+                edits: []
             )
         ],
-        denied: [
-            SafetyDecision(
+        rejections: [
+            RenameEligibility(
                 usr: deniedProperty.usr,
                 symbolName: deniedProperty.name,
-                kind: deniedProperty.kind,
-                allowed: false,
-                oldName: deniedProperty.name,
+                symbolKind: deniedProperty.kind,
+                isEligible: false,
+                originalName: deniedProperty.name,
                 reasons: [
                     "stored property declarations require memberwise initializer label support",
                     "implicit occurrence at \(path):1:1",
                 ]
             ),
-            SafetyDecision(
+            RenameEligibility(
                 usr: getter.usr,
                 symbolName: getter.name,
-                kind: getter.kind,
-                allowed: false,
-                oldName: nil,
+                symbolKind: getter.kind,
+                isEligible: false,
+                originalName: nil,
                 reasons: ["implicit occurrence at \(path):1:1"]
             ),
-            SafetyDecision(
+            RenameEligibility(
                 usr: setter.usr,
                 symbolName: setter.name,
-                kind: setter.kind,
-                allowed: false,
-                oldName: nil,
+                symbolKind: setter.kind,
+                isEligible: false,
+                originalName: nil,
                 reasons: ["implicit occurrence at \(path):1:1"]
             ),
-            SafetyDecision(
+            RenameEligibility(
                 usr: parameter.usr,
                 symbolName: parameter.name,
-                kind: parameter.kind,
-                allowed: false,
-                oldName: parameter.name,
+                symbolKind: parameter.kind,
+                isEligible: false,
+                originalName: parameter.name,
                 reasons: ["unsupported symbol kind parameter"]
             ),
-            SafetyDecision(
+            RenameEligibility(
                 usr: enumCase.usr,
                 symbolName: enumCase.name,
-                kind: enumCase.kind,
-                allowed: false,
-                oldName: enumCase.name,
+                symbolKind: enumCase.kind,
+                isEligible: false,
+                originalName: enumCase.name,
                 reasons: ["unsupported symbol kind enumConstant"]
             ),
-            SafetyDecision(
+            RenameEligibility(
                 usr: runtimeProperty.usr,
                 symbolName: runtimeProperty.name,
-                kind: runtimeProperty.kind,
-                allowed: false,
-                oldName: runtimeProperty.name,
+                symbolKind: runtimeProperty.kind,
+                isEligible: false,
+                originalName: runtimeProperty.name,
                 reasons: ["Objective-C-compatible USR requires a stable runtime name"]
             ),
-            SafetyDecision(
+            RenameEligibility(
                 usr: constructor.usr,
                 symbolName: constructor.name,
-                kind: constructor.kind,
-                allowed: false,
-                oldName: "init",
+                symbolKind: constructor.kind,
+                isEligible: false,
+                originalName: "init",
                 reasons: ["unsupported symbol kind constructor"]
             ),
-            SafetyDecision(
+            RenameEligibility(
                 usr: compilerDerivedProperty.usr,
                 symbolName: compilerDerivedProperty.name,
-                kind: compilerDerivedProperty.kind,
-                allowed: false,
-                oldName: compilerDerivedProperty.name,
+                symbolKind: compilerDerivedProperty.kind,
+                isEligible: false,
+                originalName: compilerDerivedProperty.name,
                 reasons: ["implicit occurrence at \(path):1:1"]
             ),
-            SafetyDecision(
+            RenameEligibility(
                 usr: outsideProperty.usr,
                 symbolName: outsideProperty.name,
-                kind: outsideProperty.kind,
-                allowed: false,
-                oldName: outsideProperty.name,
+                symbolKind: outsideProperty.kind,
+                isEligible: false,
+                originalName: outsideProperty.name,
                 reasons: ["no declaration or definition occurrence inside selected source roots"]
             ),
         ],
-        conflicts: []
+        editConflicts: []
     )
 
     let cohort = try CoverageAnalyzer.makeBaselineCohort(
@@ -255,7 +255,7 @@ import Testing
             ].sorted())
     #expect(cohort.denominator == 5)
     #expect(report.renamed == 1)
-    #expect(report.denied == 4)
+    #expect(report.rejected == 4)
     #expect(report.bySymbolKind.first { $0.kind == "parameter" }?.denominator == 1)
     #expect(report.bySymbolKind.first { $0.kind == "parameter" }?.renamed == 0)
     #expect(report.bySymbolKind.first { $0.kind == "enumConstant" }?.denominator == 1)

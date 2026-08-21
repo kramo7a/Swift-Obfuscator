@@ -11,7 +11,7 @@ import Testing
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let runtimeMethod = SymbolRecord(
+    let runtimeMethod = IndexSnapshot.Symbol(
         usr: "c:@M@Fixture@objc(cs)RuntimeBridge(im)executePayload:",
         name: "execute(payload:)",
         kind: "instanceMethod",
@@ -19,7 +19,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let value = SymbolRecord(
+    let value = IndexSnapshot.Symbol(
         usr: "s:FixtureRuntimeParameterValue",
         name: "value",
         kind: "parameter",
@@ -27,7 +27,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let childOfMethod = RelationRecord(
+    let childOfMethod = IndexSnapshot.Relation(
         usr: runtimeMethod.usr,
         name: runtimeMethod.name,
         rolesRaw: 0,
@@ -62,20 +62,20 @@ import Testing
     )
     _ = try CommandRunner().run(executable: beforeExecutable.path, arguments: [])
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let entry = try #require(plan.entries.first { $0.usr == value.usr })
-    #expect(entry.replacements.count == 2)
+    let entry = try #require(plan.renames.first { $0.usr == value.usr })
+    #expect(entry.edits.count == 2)
     #expect(
-        plan.parameterExternalLabelComponentFacts.blockerComponents == [
+        plan.externalLabelReport.familyCountsByBlocker == [
             "objectiveCRuntimeDispatch": 1
         ])
-    #expect(plan.parameterExternalLabelRenameOutcome.candidateParameterUSRs == 0)
-    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
-    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.externalLabelRenameReport.candidateParameterCount == 0)
+    #expect(plan.localBindingRenameReport.candidateCount == 1)
+    #expect(plan.localBindingRenameReport.renamedCount == 1)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("@objc(executePayload:)"))
     #expect(patched.contains("func execute(payload \(entry.newName): Int)"))
@@ -96,7 +96,7 @@ import Testing
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let runtimeMethod = SymbolRecord(
+    let runtimeMethod = IndexSnapshot.Symbol(
         usr: "c:@M@Fixture@objc(cs)RuntimeBridge(im)executePayload:",
         name: "execute(payload:)",
         kind: "instanceMethod",
@@ -104,7 +104,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let payload = SymbolRecord(
+    let payload = IndexSnapshot.Symbol(
         usr: "s:FixtureSharedRuntimeParameterPayload",
         name: "payload",
         kind: "parameter",
@@ -112,7 +112,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let childOfMethod = RelationRecord(
+    let childOfMethod = IndexSnapshot.Relation(
         usr: runtimeMethod.usr,
         name: runtimeMethod.name,
         rolesRaw: 0,
@@ -147,24 +147,24 @@ import Testing
     )
     _ = try CommandRunner().run(executable: beforeExecutable.path, arguments: [])
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let entry = try #require(plan.entries.first { $0.usr == payload.usr })
-    #expect(entry.replacements.count == 2)
+    let entry = try #require(plan.renames.first { $0.usr == payload.usr })
+    #expect(entry.edits.count == 2)
     #expect(
-        entry.replacements.contains {
+        entry.edits.contains {
             $0.length == 0 && $0.oldName.isEmpty && $0.newName == " \(entry.newName)"
         })
     #expect(
-        plan.parameterExternalLabelComponentFacts.blockerComponents == [
+        plan.externalLabelReport.familyCountsByBlocker == [
             "objectiveCRuntimeDispatch": 1
         ])
-    #expect(plan.parameterExternalLabelRenameOutcome.candidateParameterUSRs == 0)
-    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
-    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.externalLabelRenameReport.candidateParameterCount == 0)
+    #expect(plan.localBindingRenameReport.candidateCount == 1)
+    #expect(plan.localBindingRenameReport.renamedCount == 1)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("@objc(executePayload:)"))
     #expect(patched.contains("func execute(payload \(entry.newName): Int)"))
@@ -185,7 +185,7 @@ import Testing
     try copyFixture(to: file)
     let cache = try SourceFileCache(paths: [file.path])
 
-    let outer = SymbolRecord(
+    let outer = IndexSnapshot.Symbol(
         usr: "s:FixtureOuterFunction",
         name: "outer()",
         kind: "function",
@@ -193,7 +193,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let layer = SymbolRecord(
+    let layer = IndexSnapshot.Symbol(
         usr: "s:FixtureNestedFunctionLayer",
         name: "layer",
         kind: "parameter",
@@ -201,7 +201,7 @@ import Testing
         propertiesRaw: 0,
         properties: "[]"
     )
-    let childOfOuter = RelationRecord(
+    let childOfOuter = IndexSnapshot.Relation(
         usr: outer.usr,
         name: outer.name,
         rolesRaw: 0,
@@ -236,18 +236,18 @@ import Testing
         ]
     )
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let entry = try #require(plan.entries.first { $0.usr == layer.usr })
-    #expect(entry.replacements.count == 2)
+    let entry = try #require(plan.renames.first { $0.usr == layer.usr })
+    #expect(entry.edits.count == 2)
     #expect(
-        entry.replacements.contains {
+        entry.edits.contains {
             $0.length == 0 && $0.oldName.isEmpty && $0.newName == " \(entry.newName)"
         })
-    #expect(plan.parameterSyntaxFacts.nestedLocalFunctionParameters == 1)
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.parameterSyntaxReport.nestedLocalFunctionParameters == 1)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("configure(layer \(entry.newName): Int)"))
     #expect(patched.contains("{ \(entry.newName) }"))
@@ -323,25 +323,25 @@ import Testing
         ]
     )
 
-    var planner = RenamePlanner(analyzer: SafetyAnalyzer(sourceRoot: directory))
+    var planner = RenamePlanner(analyzer: RenameEligibilityAnalyzer(sourceRoot: directory))
     let plan = planner.makePlan(snapshot: snapshot, sourceCache: cache)
-    let entry = try #require(plan.entries.first { $0.usr == session.usr })
-    #expect(entry.replacements.count == 2)
+    let entry = try #require(plan.renames.first { $0.usr == session.usr })
+    #expect(entry.edits.count == 2)
     #expect(
-        entry.replacements.contains {
+        entry.edits.contains {
             $0.length == 0 && $0.oldName.isEmpty && $0.newName == " \(entry.newName)"
         })
-    #expect(plan.parameterExternalLabelComponentFacts.deniedAtomicComponents == 1)
+    #expect(plan.externalLabelReport.blockedFamilyCount == 1)
     #expect(
-        plan.parameterExternalLabelComponentFacts.blockerComponents == [
+        plan.externalLabelReport.familyCountsByBlocker == [
             "incompleteInheritedConstructorCoverage": 1
         ])
-    #expect(plan.parameterExternalLabelRenameOutcome.candidateAtomicComponents == 0)
-    #expect(plan.parameterLocalBindingOutcome.candidates == 1)
-    #expect(plan.parameterLocalBindingOutcome.renamed == 1)
-    #expect(plan.conflicts.isEmpty)
+    #expect(plan.externalLabelRenameReport.candidateFamilyCount == 0)
+    #expect(plan.localBindingRenameReport.candidateCount == 1)
+    #expect(plan.localBindingRenameReport.renamedCount == 1)
+    #expect(plan.editConflicts.isEmpty)
 
-    try SourcePatcher().apply(plan.replacements)
+    try SourcePatcher().apply(plan.edits)
     let patched = try String(contentsOf: file, encoding: .utf8)
     #expect(patched.contains("convenience init(session \(entry.newName): Int)"))
     #expect(patched.contains("self.init(session: \(entry.newName), url: \"\")"))

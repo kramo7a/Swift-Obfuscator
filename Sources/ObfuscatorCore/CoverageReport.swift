@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-public enum CoverageDenialCategory: String, Codable, CaseIterable, Sendable {
+public enum CoverageRejectionCategory: String, Codable, CaseIterable, Sendable {
     case syntheticAccessor
     case parameter
     case enumCase
@@ -13,10 +13,10 @@ public enum CoverageDenialCategory: String, Codable, CaseIterable, Sendable {
     case serializationKeyContract
     case propertyWrapperContract
     case protocolRequirementWitness
-    case overrideBaseComponent
+    case overrideBaseFamily = "overrideBaseComponent"
     case nonPlainIdentifier
     case genericParameter
-    case tupleTypealias
+    case tupleTypeAlias = "tupleTypealias"
     case identifierTokenUnavailable
     case ambiguousSourceTokens
     case sourceValidation
@@ -40,7 +40,15 @@ public struct CoverageCohortMember: Codable, Equatable, Sendable {
     public let originalName: String
     public let kind: String
     public let baselineStatus: CoverageCohortBaselineStatus
-    public let baselineDenialCategories: [CoverageDenialCategory]
+    public let baselineRejectionCategories: [CoverageRejectionCategory]
+
+    private enum CodingKeys: String, CodingKey {
+        case usr
+        case originalName
+        case kind
+        case baselineStatus
+        case baselineRejectionCategories = "baselineDenialCategories"
+    }
 }
 
 public struct CoverageCohort: Codable, Equatable, Sendable {
@@ -67,7 +75,8 @@ public struct CoverageCohort: Codable, Equatable, Sendable {
             throw CoverageReportError.cohortAlreadyExists(url.path)
         }
         try validate()
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(self).write(to: url, options: .atomic)
@@ -78,7 +87,8 @@ public struct CoverageCohort: Codable, Equatable, Sendable {
             throw CoverageReportError.unsupportedCohortFormat(formatVersion)
         }
         guard denominator == members.count else {
-            throw CoverageReportError.invalidCohortCount(expected: denominator, actual: members.count)
+            throw CoverageReportError.invalidCohortCount(
+                expected: denominator, actual: members.count)
         }
         let uniqueUSRs = Set(members.map(\.usr))
         guard uniqueUSRs.count == members.count else {
@@ -90,7 +100,8 @@ public struct CoverageCohort: Codable, Equatable, Sendable {
         }
         let actualDigest = Self.digest(of: members)
         guard actualDigest == membersSHA256 else {
-            throw CoverageReportError.invalidCohortDigest(expected: membersSHA256, actual: actualDigest)
+            throw CoverageReportError.invalidCohortDigest(
+                expected: membersSHA256, actual: actualDigest)
         }
     }
 
@@ -104,7 +115,7 @@ public struct CoverageCohort: Codable, Equatable, Sendable {
 
 public enum CoverageMemberStatus: String, Codable, Sendable {
     case renamed
-    case denied
+    case rejected = "denied"
     case missingFromIndex
     case unclassified
 }
@@ -115,21 +126,40 @@ public struct CoverageMemberResult: Codable, Equatable, Sendable {
     public let kind: String
     public let status: CoverageMemberStatus
     public let newName: String?
-    public let denialCategories: [CoverageDenialCategory]
-    public let denialReasons: [String]
+    public let rejectionCategories: [CoverageRejectionCategory]
+    public let rejectionReasons: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case usr
+        case originalName
+        case kind
+        case status
+        case newName
+        case rejectionCategories = "denialCategories"
+        case rejectionReasons = "denialReasons"
+    }
 }
 
 public struct CoverageKindSummary: Codable, Equatable, Sendable {
     public let kind: String
     public let denominator: Int
     public let renamed: Int
-    public let denied: Int
+    public let rejected: Int
     public let missingOrUnclassified: Int
     public let coveragePercent: Double
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case denominator
+        case renamed
+        case rejected = "denied"
+        case missingOrUnclassified
+        case coveragePercent
+    }
 }
 
-public struct CoverageDenialSummary: Codable, Equatable, Sendable {
-    public let category: CoverageDenialCategory
+public struct CoverageRejectionSummary: Codable, Equatable, Sendable {
+    public let category: CoverageRejectionCategory
     public let members: Int
 }
 
@@ -152,7 +182,7 @@ public struct CoverageReport: Codable, Equatable, Sendable {
     public let cohortMembersSHA256: String
     public let denominator: Int
     public let renamed: Int
-    public let denied: Int
+    public let rejected: Int
     public let missingFromIndex: Int
     public let unclassified: Int
     public let coveragePercent: Double
@@ -160,15 +190,38 @@ public struct CoverageReport: Codable, Equatable, Sendable {
     public let indexedOccurrences: Int
     public let plannedSymbols: Int
     public let plannedReplacements: Int
-    public let conflicts: Int
+    public let editConflicts: Int
     public let bySymbolKind: [CoverageKindSummary]
-    public let primaryDenialReasons: [CoverageDenialSummary]
-    public let allDenialReasons: [CoverageDenialSummary]
+    public let primaryRejectionReasons: [CoverageRejectionSummary]
+    public let allRejectionReasons: [CoverageRejectionSummary]
     public let syntheticAccessors: SyntheticAccessorSummary
     public let members: [CoverageMemberResult]
 
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion
+        case cohortIdentifier
+        case cohortMembersSHA256
+        case denominator
+        case renamed
+        case rejected = "denied"
+        case missingFromIndex
+        case unclassified
+        case coveragePercent
+        case indexedSymbols
+        case indexedOccurrences
+        case plannedSymbols
+        case plannedReplacements
+        case editConflicts = "conflicts"
+        case bySymbolKind
+        case primaryRejectionReasons = "primaryDenialReasons"
+        case allRejectionReasons = "allDenialReasons"
+        case syntheticAccessors
+        case members
+    }
+
     public func save(to url: URL, fileManager: FileManager = .default) throws {
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(self).write(to: url, options: .atomic)
@@ -205,7 +258,7 @@ public enum CoverageReportError: LocalizedError {
 }
 
 public enum CoverageAnalyzer {
-    public static let sourceSurfaceKinds = SafetyAnalyzer.defaultAllowedKinds.union(
+    public static let sourceSurfaceKinds = RenameEligibilityAnalyzer.defaultAllowedKinds.union(
         IndexSymbolKind.rawValues(.parameter, .enumConstant)
     )
 
@@ -216,46 +269,50 @@ public enum CoverageAnalyzer {
         plan: RenamePlan,
         selectedSourceFiles: [String]? = nil
     ) throws -> CoverageCohort {
-        let plannedByUSR = Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.usr, $0) })
-        let deniedByUSR = Dictionary(uniqueKeysWithValues: plan.denied.map { ($0.usr, $0) })
+        let plannedByUSR = Dictionary(uniqueKeysWithValues: plan.renames.map { ($0.usr, $0) })
+        let rejectionsByUSR = Dictionary(uniqueKeysWithValues: plan.rejections.map { ($0.usr, $0) })
         let selectedSourceFiles = Set(
             (selectedSourceFiles ?? snapshot.sourceFiles).map(SourcePathNormalizer.canonicalPath)
         )
         var members: [CoverageCohortMember] = []
 
-        for group in snapshot.groupsByUSR {
+        for group in snapshot.occurrenceGroups {
             guard sourceSurfaceKinds.contains(group.symbol.kind),
-                  !isSyntheticAccessor(group),
-                  hasExplicitDeclaration(group, in: selectedSourceFiles) else {
+                !isSyntheticAccessor(group),
+                hasExplicitDeclaration(group, in: selectedSourceFiles)
+            else {
                 continue
             }
 
             if let entry = plannedByUSR[group.usr] {
-                members.append(CoverageCohortMember(
-                    usr: group.usr,
-                    originalName: entry.oldName,
-                    kind: entry.kind,
-                    baselineStatus: .renamed,
-                    baselineDenialCategories: []
-                ))
+                members.append(
+                    CoverageCohortMember(
+                        usr: group.usr,
+                        originalName: entry.oldName,
+                        kind: entry.kind,
+                        baselineStatus: .renamed,
+                        baselineRejectionCategories: []
+                    ))
                 continue
             }
 
-            let decision = deniedByUSR[group.usr]
-            let categories = decision.map { denialCategories(for: $0, group: group) } ?? []
+            let decision = rejectionsByUSR[group.usr]
+            let categories = decision.map { rejectionCategories(for: $0, group: group) } ?? []
 
-            members.append(CoverageCohortMember(
-                usr: group.usr,
-                originalName: decision?.oldName ?? group.symbol.name,
-                kind: group.symbol.kind,
-                baselineStatus: .notRenamed,
-                baselineDenialCategories: sortedCategories(categories)
-            ))
+            members.append(
+                CoverageCohortMember(
+                    usr: group.usr,
+                    originalName: decision?.originalName ?? group.symbol.name,
+                    kind: group.symbol.kind,
+                    baselineStatus: .notRenamed,
+                    baselineRejectionCategories: sortedCategories(categories)
+                ))
         }
 
         members.sort { $0.usr < $1.usr }
         if let expectedCount, members.count != expectedCount {
-            throw CoverageReportError.generatedCohortCountMismatch(expected: expectedCount, actual: members.count)
+            throw CoverageReportError.generatedCohortCountMismatch(
+                expected: expectedCount, actual: members.count)
         }
 
         return CoverageCohort(
@@ -272,7 +329,7 @@ public enum CoverageAnalyzer {
     }
 
     private static func hasExplicitDeclaration(
-        _ group: USROccurrenceGroup,
+        _ group: IndexSnapshot.OccurrenceGroup,
         in selectedSourceFiles: Set<String>
     ) -> Bool {
         group.occurrences.contains { occurrence in
@@ -289,79 +346,86 @@ public enum CoverageAnalyzer {
         plan: RenamePlan
     ) throws -> CoverageReport {
         try cohort.validate()
-        let plannedByUSR = Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.usr, $0) })
-        let deniedByUSR = Dictionary(uniqueKeysWithValues: plan.denied.map { ($0.usr, $0) })
-        let groups = snapshot.groupsByUSR
+        let plannedByUSR = Dictionary(uniqueKeysWithValues: plan.renames.map { ($0.usr, $0) })
+        let rejectionsByUSR = Dictionary(uniqueKeysWithValues: plan.rejections.map { ($0.usr, $0) })
+        let groups = snapshot.occurrenceGroups
         let groupsByUSR = Dictionary(uniqueKeysWithValues: groups.map { ($0.usr, $0) })
         var results: [CoverageMemberResult] = []
 
         for member in cohort.members {
             if let entry = plannedByUSR[member.usr] {
-                results.append(CoverageMemberResult(
-                    usr: member.usr,
-                    originalName: member.originalName,
-                    kind: member.kind,
-                    status: .renamed,
-                    newName: entry.newName,
-                    denialCategories: [],
-                    denialReasons: []
-                ))
-            } else if let decision = deniedByUSR[member.usr] {
-                let categories = denialCategories(for: decision, group: groupsByUSR[member.usr])
-                results.append(CoverageMemberResult(
-                    usr: member.usr,
-                    originalName: member.originalName,
-                    kind: member.kind,
-                    status: .denied,
-                    newName: nil,
-                    denialCategories: sortedCategories(categories),
-                    denialReasons: decision.reasons
-                ))
+                results.append(
+                    CoverageMemberResult(
+                        usr: member.usr,
+                        originalName: member.originalName,
+                        kind: member.kind,
+                        status: .renamed,
+                        newName: entry.newName,
+                        rejectionCategories: [],
+                        rejectionReasons: []
+                    ))
+            } else if let decision = rejectionsByUSR[member.usr] {
+                let categories = rejectionCategories(for: decision, group: groupsByUSR[member.usr])
+                results.append(
+                    CoverageMemberResult(
+                        usr: member.usr,
+                        originalName: member.originalName,
+                        kind: member.kind,
+                        status: .rejected,
+                        newName: nil,
+                        rejectionCategories: sortedCategories(categories),
+                        rejectionReasons: decision.reasons
+                    ))
             } else if groupsByUSR[member.usr] == nil {
-                results.append(CoverageMemberResult(
-                    usr: member.usr,
-                    originalName: member.originalName,
-                    kind: member.kind,
-                    status: .missingFromIndex,
-                    newName: nil,
-                    denialCategories: [.missingFromIndex],
-                    denialReasons: ["cohort USR missing from current index"]
-                ))
+                results.append(
+                    CoverageMemberResult(
+                        usr: member.usr,
+                        originalName: member.originalName,
+                        kind: member.kind,
+                        status: .missingFromIndex,
+                        newName: nil,
+                        rejectionCategories: [.missingFromIndex],
+                        rejectionReasons: ["cohort USR missing from current index"]
+                    ))
             } else {
-                results.append(CoverageMemberResult(
-                    usr: member.usr,
-                    originalName: member.originalName,
-                    kind: member.kind,
-                    status: .unclassified,
-                    newName: nil,
-                    denialCategories: [.unclassified],
-                    denialReasons: ["cohort USR is neither planned nor represented in denied decisions"]
-                ))
+                results.append(
+                    CoverageMemberResult(
+                        usr: member.usr,
+                        originalName: member.originalName,
+                        kind: member.kind,
+                        status: .unclassified,
+                        newName: nil,
+                        rejectionCategories: [.unclassified],
+                        rejectionReasons: [
+                            "cohort USR is neither planned nor represented in denied decisions"
+                        ]
+                    ))
             }
         }
 
         let renamed = results.count { $0.status == .renamed }
-        let denied = results.count { $0.status == .denied }
+        let rejected = results.count { $0.status == .rejected }
         let missing = results.count { $0.status == .missingFromIndex }
         let unclassified = results.count { $0.status == .unclassified }
         let byKind = Dictionary(grouping: results, by: \.kind).map { kind, members in
             let kindRenamed = members.count { $0.status == .renamed }
-            let kindDenied = members.count { $0.status == .denied }
-            let kindMissing = members.count - kindRenamed - kindDenied
+            let kindRejected = members.count { $0.status == .rejected }
+            let kindMissing = members.count - kindRenamed - kindRejected
             return CoverageKindSummary(
                 kind: kind,
                 denominator: members.count,
                 renamed: kindRenamed,
-                denied: kindDenied,
+                rejected: kindRejected,
                 missingOrUnclassified: kindMissing,
                 coveragePercent: percent(kindRenamed, of: members.count)
             )
         }.sorted { $0.kind < $1.kind }
 
-        var allCategoryCounts: [CoverageDenialCategory: Int] = [:]
-        var primaryCategoryCounts: [CoverageDenialCategory: Int] = [:]
+        var allCategoryCounts: [CoverageRejectionCategory: Int] = [:]
+        var primaryCategoryCounts: [CoverageRejectionCategory: Int] = [:]
         for result in results where result.status != .renamed {
-            let categories = result.denialCategories.isEmpty ? [.other] : result.denialCategories
+            let categories =
+                result.rejectionCategories.isEmpty ? [.other] : result.rejectionCategories
             for category in categories {
                 allCategoryCounts[category, default: 0] += 1
             }
@@ -374,58 +438,61 @@ public enum CoverageAnalyzer {
             cohortMembersSHA256: cohort.membersSHA256,
             denominator: cohort.denominator,
             renamed: renamed,
-            denied: denied,
+            rejected: rejected,
             missingFromIndex: missing,
             unclassified: unclassified,
             coveragePercent: percent(renamed, of: cohort.denominator),
             indexedSymbols: snapshot.symbols.count,
             indexedOccurrences: snapshot.occurrences.count,
-            plannedSymbols: plan.entries.count,
-            plannedReplacements: plan.replacements.count,
-            conflicts: plan.conflicts.count,
+            plannedSymbols: plan.renames.count,
+            plannedReplacements: plan.edits.count,
+            editConflicts: plan.editConflicts.count,
             bySymbolKind: byKind,
-            primaryDenialReasons: summaries(from: primaryCategoryCounts),
-            allDenialReasons: summaries(from: allCategoryCounts),
+            primaryRejectionReasons: summaries(from: primaryCategoryCounts),
+            allRejectionReasons: summaries(from: allCategoryCounts),
             syntheticAccessors: syntheticAccessorSummary(groups: groups, plan: plan),
             members: results
         )
     }
 
-    public static func accessorParentUSRs(for group: USROccurrenceGroup) -> Set<String> {
-        Set(group.occurrences.flatMap(\.relations).compactMap { relation in
-            relation.hasRole(.accessorOf) ? relation.usr : nil
-        })
+    public static func accessorParentUSRs(for group: IndexSnapshot.OccurrenceGroup) -> Set<String> {
+        Set(
+            group.occurrences.flatMap(\.relations).compactMap { relation in
+                relation.hasRole(.accessorOf) ? relation.usr : nil
+            })
     }
 
-    public static func isSyntheticAccessor(_ group: USROccurrenceGroup) -> Bool {
+    public static func isSyntheticAccessor(_ group: IndexSnapshot.OccurrenceGroup) -> Bool {
         IndexSymbolName.isSyntheticAccessor(group.symbol.name)
     }
 
-    public static func denialCategories(
-        for decision: SafetyDecision,
-        group: USROccurrenceGroup? = nil
-    ) -> Set<CoverageDenialCategory> {
+    public static func rejectionCategories(
+        for decision: RenameEligibility,
+        group: IndexSnapshot.OccurrenceGroup? = nil
+    ) -> Set<CoverageRejectionCategory> {
         if let group, isSyntheticAccessor(group) {
             return [.syntheticAccessor]
         }
 
-        var categories: Set<CoverageDenialCategory> = []
-        if decision.kind == IndexSymbolKind.parameter.rawValue {
+        var categories: Set<CoverageRejectionCategory> = []
+        if decision.symbolKind == IndexSymbolKind.parameter.rawValue {
             categories.insert(.parameter)
         }
-        if decision.kind == IndexSymbolKind.enumConstant.rawValue {
+        if decision.symbolKind == IndexSymbolKind.enumConstant.rawValue {
             categories.insert(.enumCase)
         }
 
         for reason in decision.reasons {
             if reason.contains("unsupported symbol kind") {
                 categories.insert(
-                    decision.kind == IndexSymbolKind.enumConstant.rawValue ? .enumCase : .unsupportedSymbolKind
+                    decision.symbolKind == IndexSymbolKind.enumConstant.rawValue
+                        ? .enumCase : .unsupportedSymbolKind
                 )
             }
             if reason.contains("Objective-C-compatible USR")
                 || reason.contains("runtime-reflected or externally linked declaration")
-                || reason.contains("Interface Builder resource requires stable class name") {
+                || reason.contains("Interface Builder resource requires stable class name")
+            {
                 categories.insert(.objectiveCRuntimeContract)
             }
             if reason.contains("no declaration or definition occurrence") {
@@ -437,10 +504,13 @@ public enum CoverageAnalyzer {
                 || reason.contains("extensions on external Swift or Objective-C owners")
                 || reason.contains("language-required declaration name")
                 || reason == "empty USR"
-                || reason == "no occurrences" {
+                || reason == "no occurrences"
+            {
                 categories.insert(.externalLanguageContract)
             }
-            if reason.contains("stored property declarations require memberwise initializer label support") {
+            if reason.contains(
+                "stored property declarations require memberwise initializer label support")
+            {
                 categories.insert(.storedProperty)
             }
             if reason.contains("serialized stored property requires explicit key preservation") {
@@ -453,11 +523,11 @@ public enum CoverageAnalyzer {
                 categories.insert(.protocolRequirementWitness)
             }
             if reason.contains("override relations require coordinated renaming") {
-                categories.insert(.overrideBaseComponent)
+                categories.insert(.overrideBaseFamily)
             }
             if reason.contains("unsafe relation") {
                 if groupHasOverrideOrBaseRelation(group) {
-                    categories.insert(.overrideBaseComponent)
+                    categories.insert(.overrideBaseFamily)
                 } else {
                     categories.insert(.externalLanguageContract)
                 }
@@ -469,12 +539,14 @@ public enum CoverageAnalyzer {
                 categories.insert(.genericParameter)
             }
             if reason.contains("tuple typealias constructor occurrences are incomplete") {
-                categories.insert(.tupleTypealias)
+                categories.insert(.tupleTypeAlias)
             }
             if reason.contains("identifier token unavailable") {
                 categories.insert(.identifierTokenUnavailable)
             }
-            if reason.contains("occurrences resolve to multiple source tokens") || reason.contains("token mismatch") {
+            if reason.contains("occurrences resolve to multiple source tokens")
+                || reason.contains("token mismatch")
+            {
                 categories.insert(.ambiguousSourceTokens)
             }
             if reason.contains("source file unavailable") || reason == "no source replacements" {
@@ -487,7 +559,9 @@ public enum CoverageAnalyzer {
         return categories
     }
 
-    private static func groupHasOverrideOrBaseRelation(_ group: USROccurrenceGroup?) -> Bool {
+    private static func groupHasOverrideOrBaseRelation(_ group: IndexSnapshot.OccurrenceGroup?)
+        -> Bool
+    {
         guard let group else {
             return false
         }
@@ -496,8 +570,10 @@ public enum CoverageAnalyzer {
         }
     }
 
-    private static func syntheticAccessorSummary(groups: [USROccurrenceGroup], plan: RenamePlan) -> SyntheticAccessorSummary {
-        let plannedUSRs = Set(plan.entries.map(\.usr))
+    private static func syntheticAccessorSummary(
+        groups: [IndexSnapshot.OccurrenceGroup], plan: RenamePlan
+    ) -> SyntheticAccessorSummary {
+        let plannedUSRs = Set(plan.renames.map(\.usr))
         let indexedUSRs = Set(groups.map(\.usr))
         var total = 0
         var getters = 0
@@ -546,8 +622,10 @@ public enum CoverageAnalyzer {
         )
     }
 
-    private static func primaryCategory(in categories: [CoverageDenialCategory]) -> CoverageDenialCategory {
-        let priority: [CoverageDenialCategory] = [
+    private static func primaryCategory(in categories: [CoverageRejectionCategory])
+        -> CoverageRejectionCategory
+    {
+        let priority: [CoverageRejectionCategory] = [
             .missingFromIndex,
             .unclassified,
             .syntheticAccessor,
@@ -556,31 +634,33 @@ public enum CoverageAnalyzer {
             .serializationKeyContract,
             .propertyWrapperContract,
             .protocolRequirementWitness,
-            .overrideBaseComponent,
+            .overrideBaseFamily,
             .ambiguousSourceTokens,
             .nonPlainIdentifier,
             .identifierTokenUnavailable,
             .genericParameter,
-            .tupleTypealias,
+            .tupleTypeAlias,
             .enumCase,
             .unsupportedSymbolKind,
             .objectiveCRuntimeContract,
             .noLocalDeclaration,
             .externalLanguageContract,
             .sourceValidation,
-            .other
+            .other,
         ]
         return priority.first(where: { categories.contains($0) }) ?? .other
     }
 
-    private static func sortedCategories(_ categories: Set<CoverageDenialCategory>) -> [CoverageDenialCategory] {
+    private static func sortedCategories(_ categories: Set<CoverageRejectionCategory>)
+        -> [CoverageRejectionCategory]
+    {
         categories.sorted { $0.rawValue < $1.rawValue }
     }
 
     private static func summaries(
-        from counts: [CoverageDenialCategory: Int]
-    ) -> [CoverageDenialSummary] {
-        counts.map { CoverageDenialSummary(category: $0.key, members: $0.value) }
+        from counts: [CoverageRejectionCategory: Int]
+    ) -> [CoverageRejectionSummary] {
+        counts.map { CoverageRejectionSummary(category: $0.key, members: $0.value) }
             .sorted { lhs, rhs in
                 lhs.members == rhs.members
                     ? lhs.category.rawValue < rhs.category.rawValue
@@ -596,8 +676,8 @@ public enum CoverageAnalyzer {
     }
 }
 
-private extension SafetyDecision {
-    func hasReason(startingWith prefix: String) -> Bool {
+extension RenameEligibility {
+    fileprivate func hasReason(startingWith prefix: String) -> Bool {
         reasons.contains { $0.hasPrefix(prefix) }
     }
 }

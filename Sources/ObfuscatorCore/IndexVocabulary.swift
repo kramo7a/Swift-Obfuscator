@@ -2,7 +2,7 @@ import Foundation
 
 /// Stable names emitted by IndexStoreDB for Swift declaration kinds.
 ///
-/// `SymbolRecord` keeps the original string so snapshots remain forward-compatible
+/// `IndexSnapshot.Symbol` keeps the original string so snapshots remain forward-compatible
 /// with symbol kinds introduced by newer toolchains. Core code should use these
 /// cases instead of repeating the wire-format strings.
 enum IndexSymbolKind: String, Sendable {
@@ -85,19 +85,19 @@ enum IndexSymbolName {
     }
 }
 
-extension SymbolRecord {
+extension IndexSnapshot.Symbol {
     func isKind(_ expectedKind: IndexSymbolKind) -> Bool {
         kind == expectedKind.rawValue
     }
 }
 
-extension OccurrenceRecord {
+extension IndexSnapshot.Occurrence {
     func hasRole(_ role: IndexRole) -> Bool {
         roles.contains(role.rawValue)
     }
 }
 
-extension RelationRecord {
+extension IndexSnapshot.Relation {
     func hasRole(_ role: IndexRole) -> Bool {
         roles.contains(role.rawValue)
     }

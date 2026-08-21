@@ -90,8 +90,8 @@ func testSymbol(
     _ kind: IndexSymbolKind = .parameter,
     language: String = "swift",
     propertiesRaw: UInt64 = 0
-) -> SymbolRecord {
-    SymbolRecord(
+) -> IndexSnapshot.Symbol {
+    IndexSnapshot.Symbol(
         usr: usr,
         name: name,
         kind: kind.rawValue,
@@ -101,8 +101,8 @@ func testSymbol(
     )
 }
 
-func testRelation(_ symbol: SymbolRecord, _ roles: [IndexRole]) -> RelationRecord {
-    RelationRecord(
+func testRelation(_ symbol: IndexSnapshot.Symbol, _ roles: [IndexRole]) -> IndexSnapshot.Relation {
+    IndexSnapshot.Relation(
         usr: symbol.usr,
         name: symbol.name,
         rolesRaw: 0,
@@ -110,33 +110,33 @@ func testRelation(_ symbol: SymbolRecord, _ roles: [IndexRole]) -> RelationRecor
     )
 }
 
-func testRelation(_ symbol: SymbolRecord, _ role: IndexRole) -> RelationRecord {
+func testRelation(_ symbol: IndexSnapshot.Symbol, _ role: IndexRole) -> IndexSnapshot.Relation {
     testRelation(symbol, [role])
 }
 
-func testRelation(_ symbol: SymbolRecord, role: IndexRole) -> RelationRecord {
+func testRelation(_ symbol: IndexSnapshot.Symbol, role: IndexRole) -> IndexSnapshot.Relation {
     testRelation(symbol, role)
 }
 
-func childOf(_ owner: SymbolRecord) -> RelationRecord {
+func childOf(_ owner: IndexSnapshot.Symbol) -> IndexSnapshot.Relation {
     testRelation(owner, .childOf)
 }
 
-func baseOf(_ owner: SymbolRecord) -> RelationRecord {
+func baseOf(_ owner: IndexSnapshot.Symbol) -> IndexSnapshot.Relation {
     testRelation(owner, .baseOf)
 }
 
 func testOccurrence(
-    _ symbol: SymbolRecord,
+    _ symbol: IndexSnapshot.Symbol,
     path: String,
     line: Int,
     token: String,
     roles: [IndexRole],
-    relations: [RelationRecord] = []
-) -> OccurrenceRecord {
+    relations: [IndexSnapshot.Relation] = []
+) -> IndexSnapshot.Occurrence {
     let sourceLine = fixtureLine(at: path, line: line)
     let rawRoles = roles.map(\.rawValue)
-    return OccurrenceRecord(
+    return IndexSnapshot.Occurrence(
         symbol: symbol,
         path: path,
         line: line,

@@ -2,10 +2,10 @@ import Foundation
 
 struct ParameterOrdinalMatchParameter {
     let parameterUSR: String
-    let externalLabel: ParameterExternalLabel
+    let externalLabel: ExternalLabel
     let hasDefaultValue: Bool
     let isVariadic: Bool
-    let trailingClosureCompatibility: ParameterTrailingClosureCompatibility
+    let trailingClosureCompatibility: ParameterSyntax.TrailingClosureSupport
 }
 
 enum ParameterOrdinalParametersResult {
@@ -21,47 +21,53 @@ enum ParameterOrdinalAssignmentResult {
 
 enum ParameterArgumentOrdinalMatcher {
     static func parameters(
-        component: ParameterRenameComponent,
-        parameterRolesByUSR: [String: ParameterDeclarationSyntaxRoles]
+        signature: CallableSignature,
+        parametersByUSR: [String: ParameterSyntax.Parameter]
     ) -> ParameterOrdinalParametersResult {
-        guard component.isStructurallyComplete else {
+        guard signature.isStructurallyComplete else {
             return .failure(
-                "parameter component is structurally incomplete: "
-                    + component.structuralReasons.joined(separator: "; ")
+                "parameter signature is structurally incomplete: "
+                    + signature.structuralReasons.joined(separator: "; ")
             )
         }
-        let members = component.members.sorted { $0.ordinal < $1.ordinal }
-        guard members.map(\.ordinal) == Array(members.indices) else {
+        let signatureParameters = signature.parameters.sorted { $0.ordinal < $1.ordinal }
+        guard signatureParameters.map(\.ordinal) == Array(signatureParameters.indices) else {
             return .failure("parameter ordinals are not contiguous")
         }
         var parameters: [ParameterOrdinalMatchParameter] = []
-        for member in members {
-            guard let syntaxRole = parameterRolesByUSR[member.parameterUSR] else {
+        for signatureParameter in signatureParameters {
+            guard let syntaxRole = parametersByUSR[signatureParameter.parameterUSR] else {
                 return .failure(
-                    "parameter declaration syntax roles unavailable for \(member.parameterUSR)"
+                    "parameter declaration syntax roles unavailable for \(signatureParameter.parameterUSR)"
                 )
             }
-            guard labelsAgree(indexed: member.externalLabel, syntax: syntaxRole.externalLabel) else {
+            guard
+                labelsAgree(
+                    indexed: signatureParameter.externalLabel,
+                    syntax: syntaxRole.externalLabel
+                )
+            else {
                 return .failure(
                     "indexed and compiler-syntax external labels disagree for "
-                        + member.parameterUSR
+                        + signatureParameter.parameterUSR
                 )
             }
-            parameters.append(ParameterOrdinalMatchParameter(
-                parameterUSR: member.parameterUSR,
-                externalLabel: member.externalLabel,
-                hasDefaultValue: syntaxRole.hasDefaultValue,
-                isVariadic: syntaxRole.isVariadic,
-                trailingClosureCompatibility: syntaxRole.trailingClosureCompatibility
-            ))
+            parameters.append(
+                ParameterOrdinalMatchParameter(
+                    parameterUSR: signatureParameter.parameterUSR,
+                    externalLabel: signatureParameter.externalLabel,
+                    hasDefaultValue: syntaxRole.hasDefaultValue,
+                    isVariadic: syntaxRole.isVariadic,
+                    trailingClosureCompatibility: syntaxRole.trailingClosureCompatibility
+                ))
         }
         return .success(parameters)
     }
 
     static func assignment(
-        arguments: [ParameterCallArgumentSyntaxRole],
+        arguments: [CallSiteSyntax.Argument],
         parameters: [ParameterOrdinalMatchParameter],
-        allowsOmittedNamedLabels: Bool = false
+        canOmitNamedLabels: Bool = false
     ) -> ParameterOrdinalAssignmentResult {
         var solutions: [[Int]] = []
         var current: [Int] = []
@@ -103,12 +109,14 @@ enum ParameterArgumentOrdinalMatcher {
                         break
                     }
                 }
-                guard argument(
-                    arguments[argumentIndex],
-                    matches: parameters[ordinal],
-                    repeatsVariadic: repeatsVariadic,
-                    allowsOmittedNamedLabels: allowsOmittedNamedLabels
-                ) else {
+                guard
+                    argument(
+                        arguments[argumentIndex],
+                        matches: parameters[ordinal],
+                        repeatsVariadic: repeatsVariadic,
+                        canOmitNamedLabels: canOmitNamedLabels
+                    )
+                else {
                     continue
                 }
                 current.append(ordinal)
@@ -132,7 +140,7 @@ enum ParameterArgumentOrdinalMatcher {
     }
 
     static func fullNameOrdinals(
-        argumentTokens: [SourceTokenRange],
+        argumentTokens: [SourceToken],
         parameters: [ParameterOrdinalMatchParameter]
     ) -> [Int]? {
         guard argumentTokens.count == parameters.count else {
@@ -156,8 +164,8 @@ enum ParameterArgumentOrdinalMatcher {
     }
 
     private static func labelsAgree(
-        indexed: ParameterExternalLabel,
-        syntax: ParameterExternalLabelSyntaxRole
+        indexed: ExternalLabel,
+        syntax: ParameterSyntax.LabelRole
     ) -> Bool {
         switch (indexed, syntax) {
         case (.named(let indexedName), .named(let token)):
@@ -170,10 +178,10 @@ enum ParameterArgumentOrdinalMatcher {
     }
 
     private static func argument(
-        _ argument: ParameterCallArgumentSyntaxRole,
+        _ argument: CallSiteSyntax.Argument,
         matches parameter: ParameterOrdinalMatchParameter,
         repeatsVariadic: Bool,
-        allowsOmittedNamedLabels: Bool
+        canOmitNamedLabels: Bool
     ) -> Bool {
         if repeatsVariadic {
             guard parameter.isVariadic else {
@@ -190,21 +198,22 @@ enum ParameterArgumentOrdinalMatcher {
         }
 
         switch argument {
-        case .parenthesized(label: let label):
+        case .parenthesized(let label):
             switch parameter.externalLabel {
             case .omitted:
                 return label == nil
             case .named(let name):
-                return label == nil && allowsOmittedNamedLabels
+                return label == nil && canOmitNamedLabels
                     || label?.name == name
             case .unavailable:
                 return false
             }
         case .firstTrailingClosure:
             return parameter.trailingClosureCompatibility != .definitelyNonCallable
-        case .additionalTrailingClosure(label: let label):
+        case .additionalTrailingClosure(let label):
             if parameter.trailingClosureCompatibility != .definitelyNonCallable,
-               case .named(let name) = parameter.externalLabel {
+                case .named(let name) = parameter.externalLabel
+            {
                 return label.name == name
             }
             return false
@@ -212,14 +221,14 @@ enum ParameterArgumentOrdinalMatcher {
     }
 }
 
-extension ParameterCallArgumentSyntaxRole {
-    var labelToken: SourceTokenRange? {
+extension CallSiteSyntax.Argument {
+    var labelToken: SourceToken? {
         switch self {
-        case .parenthesized(label: let label):
+        case .parenthesized(let label):
             return label
         case .firstTrailingClosure:
             return nil
-        case .additionalTrailingClosure(label: let label):
+        case .additionalTrailingClosure(let label):
             return label
         }
     }

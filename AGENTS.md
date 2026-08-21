@@ -13,7 +13,7 @@ Use these from the repository root:
 ```sh
 swift build
 swift test
-swift test --filter nameGeneratorProducesStableNames
+swift test --filter obfuscatedNameGeneratorProducesStableNames
 swift run swift-obfuscator --help
 ```
 
@@ -22,13 +22,13 @@ Tests use Swift Testing (`@Test` and `#expect`), not XCTest. Full test runs can 
 ## Layout
 
 - `Sources/SwiftObfuscator/main.swift`: CLI parsing, run summary JSON, logging, and command orchestration.
-- `Sources/ObfuscatorCore/ProjectBuilder.swift`: `xcodebuild` invocation and index-store location.
-- `Sources/ObfuscatorCore/IndexReader.swift`: IndexStoreDB snapshot extraction and source file discovery.
-- `Sources/ObfuscatorCore/IndexedSemanticFacts.swift`: compiler-index-derived ownership, extension, protocol, and runtime-dispatch facts.
-- `Sources/ObfuscatorCore/ParameterRenameComponent.swift`: indexed callable/parameter ownership, ordering, external-label, local-binding, and call-anchor facts.
-- `Sources/ObfuscatorCore/ParameterSyntaxFacts.swift`: SwiftParser-backed exact parameter declaration roles and byte ranges for facts that IndexStoreDB does not expose.
-- `Sources/ObfuscatorCore/ParameterCallSiteSyntaxFacts.swift`: IndexStore-call-anchored SwiftParser ranges for argument labels and call syntax shapes.
-- `Sources/ObfuscatorCore/SafetyAnalyzer.swift`: deny-by-default rename eligibility checks.
+- `Sources/ObfuscatorCore/XcodeIndexBuilder.swift`: `xcodebuild` invocation and index-store location.
+- `Sources/ObfuscatorCore/IndexSnapshotReader.swift`: IndexStoreDB snapshot extraction and source file discovery.
+- `Sources/ObfuscatorCore/SemanticIndex.swift`: compiler-index-derived ownership, extension, protocol, and runtime-dispatch metadata.
+- `Sources/ObfuscatorCore/CallableSignature.swift`: indexed callable/parameter ownership, ordering, external-label, local-binding, and call-anchor data.
+- `Sources/ObfuscatorCore/ParameterSyntax.swift`: SwiftParser-backed exact parameter declaration roles and byte ranges for data that IndexStoreDB does not expose.
+- `Sources/ObfuscatorCore/CallSiteSyntax.swift`: IndexStore-call-anchored SwiftParser ranges for argument labels and call syntax shapes.
+- `Sources/ObfuscatorCore/RenameEligibilityAnalyzer.swift`: deny-by-default rename eligibility checks.
 - `Sources/ObfuscatorCore/RenamePlanner.swift`: stable name assignment and replacement planning.
 - `Sources/ObfuscatorCore/SourcePatcher.swift`: validation and source rewriting/copying.
 - `Fixtures/TinySwiftProject`: small integration fixture.
@@ -48,7 +48,7 @@ By default, generated artifacts are written under `<project>/.obfuscator`, inclu
 
 ## Safety Invariants
 
-Keep rename logic conservative. `SafetyAnalyzer` intentionally denies unsupported kinds, system or implicit occurrences, occurrences outside selected roots, unsafe relations, non-plain/backticked identifiers, and externally visible/runtime-reflected declarations such as `public`, `open`, `@objc`, `@IB*`, `dynamic`, and `override`.
+Keep rename logic conservative. `RenameEligibilityAnalyzer` intentionally denies unsupported kinds, system or implicit occurrences, occurrences outside selected roots, unsafe relations, non-plain/backticked identifiers, and externally visible/runtime-reflected declarations such as `public`, `open`, `@objc`, `@IB*`, `dynamic`, and `override`.
 
 Do not re-enable `parameter` renames without a regression test proving external argument labels stay valid. A known failure mode is a verify-build error like:
 
@@ -170,12 +170,12 @@ cases from coverage.
 
 Safety decisions must stay project-agnostic. Do not add hardcoded allow/deny lists of concrete SDK, framework, or target-project type names such as `String`, `Array`, `UXColor`, or app-specific symbols. If a rule needs to distinguish local code from external code, derive that from IndexStore/source semantics for the current target, such as local declarations, symbol providers, relations, roles, or selected source roots.
 
-Never reconstruct semantic declaration context by scanning Swift braces or parsing declaration headers in `SafetyAnalyzer`. Ownership, protocol requirements, extension targets, override/base relationships, and runtime-dispatch ancestry must come from IndexStoreDB symbol kinds, properties, roles, relations, USR provenance, and declarations inside the selected source roots. Source text is limited to validating exact identifier tokens and byte ranges, plus narrowly documented lexical facts that IndexStoreDB does not expose; every such fallback requires a focused regression test.
+Never reconstruct semantic declaration context by scanning Swift braces or parsing declaration headers in `RenameEligibilityAnalyzer`. Ownership, protocol requirements, extension targets, override/base relationships, and runtime-dispatch ancestry must come from IndexStoreDB symbol kinds, properties, roles, relations, USR provenance, and declarations inside the selected source roots. Source text is limited to validating exact identifier tokens and byte ranges, plus narrowly documented lexical data that IndexStoreDB does not expose; every such fallback requires a focused regression test.
 
 ## Working Conventions
 
 - Prefer existing pipeline stages over adding broad abstractions.
 - Keep CLI concerns in `Sources/SwiftObfuscator/main.swift`; keep semantic planning and patching in `ObfuscatorCore`.
-- Preserve stable mappings by USR through `MappingStore`.
+- Preserve stable mappings by USR through `RenameMappingStore`.
 - Avoid committing generated `.obfuscator`, DerivedData, IndexDatabase, or copied obfuscated output.
 - When validating real project changes, run a dry-run first; use `apply --verify-build` only when source mutation is intended.
